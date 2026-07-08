@@ -16,6 +16,8 @@ First public-ready release.
   (size caps, allow_pickle=False, partition validation).
 - Per-user calibration cache (platformdirs) with atomic writes.
 - Test suite (175 tests), Apache-2.0 licensing with IBM attributions.
+- Companion paper: "I-QMapper: Error-Aware Layout Optimization and
+  Device Diagnostics for NISQ Hardware" (arXiv:2606.27508).
 
 ### Security
 - Path-traversal-safe file resolution (commonpath containment); HTML

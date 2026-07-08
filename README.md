@@ -9,6 +9,11 @@ error heatmaps, lets you assign and style qubit roles, ranks qubits and gates by
 fidelity, tracks calibration history with delta views, and exports layouts to JSON,
 Qiskit code, PNG, and time-lapse GIF/MP4.
 
+QPU Mapper is presented in the paper *I-QMapper: Error-Aware Layout
+Optimization and Device Diagnostics for NISQ Hardware* (Bazayeva &
+Merz, [arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). The
+repository tracks development beyond the arXiv version.
+
 > Today it ships with first-class **IBM Quantum** support (heavy-hex Heron /
 > Nighthawk). The backend layer is deliberately small and pluggable — see
 > [Extending to other vendors](#extending-to-other-vendors).
@@ -250,5 +255,6 @@ and the layout-quality estimator implements a cost function in the style of
 due to Motta *et al.*, *Chem. Sci.* **14**, 11213–11227 (2023),
 [doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
 
-If you use QPU Mapper in your research, please cite it — see
+If you use QPU Mapper in your research, please cite the I-QMapper
+paper ([arXiv:2606.27508](https://arxiv.org/abs/2606.27508)) — see
 [CITATION.cff](CITATION.cff).

@@ -1,11 +1,22 @@
 cff-version: 1.2.0
-message: "If you use QPU Mapper in your research, please cite it as below."
+message: "If you use QPU Mapper in your research, please cite the I-QMapper paper (see preferred-citation)."
 title: "QPU Mapper"
 authors:
   - family-names: "Bazayeva"
     given-names: "Milana"
-version: 0.3.0
+version: 0.1.0
 license: Apache-2.0
+preferred-citation:
+  type: article
+  title: "I-QMapper: Error-Aware Layout Optimization and Device Diagnostics for NISQ Hardware"
+  authors:
+    - family-names: "Bazayeva"
+      given-names: "Milana"
+    - family-names: "Merz"
+      given-names: "Kenneth"
+  year: 2026
+  doi: "10.48550/arXiv.2606.27508"
+  url: "https://arxiv.org/abs/2606.27508"
 abstract: >-
   Interactive, noise-aware visualization and layout selection for
   quantum-circuit ansaetze (LUCJ and general) on superconducting QPU

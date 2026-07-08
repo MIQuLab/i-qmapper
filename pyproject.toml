@@ -46,6 +46,7 @@ dev = ["pytest>=7", "pytest-cov"]
 Homepage = "https://github.com/mbazayeva/qpu_mapper"
 Issues = "https://github.com/mbazayeva/qpu_mapper/issues"
 Changelog = "https://github.com/mbazayeva/qpu_mapper/blob/main/CHANGELOG.md"
+Paper = "https://arxiv.org/abs/2606.27508"
 
 [tool.setuptools.packages.find]
 where = ["."]
