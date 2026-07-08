@@ -401,7 +401,7 @@ def get_all_zigzag_layouts(
 
     # Each VF2 mapping should cover every slot 0..(2*norb + num_ab - 1)
     # exactly once. A partial mapping would leave `None` entries in the
-    # layout list; downstream code (e.g. `layout[edge[0]]` at riga 230,
+    # layout list; downstream code (e.g. `layout[edge[0]]` in lightweight_layout_error_scoring,
     # scoring, the swap heuristic in `_deduplicate_layouts`) treats None
     # as a physical qubit index and crashes with TypeError. Validate
     # completeness up-front and skip any malformed mapping with a debug
