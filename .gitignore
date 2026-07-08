@@ -1,0 +1,19 @@
+# OS / editor
+.DS_Store
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+# qpu_mapper runtime data (never commit)
+.qpu_calibration_cache/
+.qpu_mapper_sessions/
+qpu_mapper/.qpu_calibration_cache/
+qpu_mapper/.qpu_mapper_sessions/
