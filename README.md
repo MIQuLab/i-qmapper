@@ -1,76 +1,137 @@
 # QPU Mapper
 
-**Interactive visualization and layout selection for quantum-circuit ansätze on real QPU topologies.**
+**Interactive, noise-aware qubit layout selection for IBM Quantum hardware — see your device, understand its errors, and place your circuit where it will actually run well.**
 
-QPU Mapper is a Jupyter/ipywidgets tool for placing and evaluating qubit layouts
-(LUCJ ansätze and general circuits) on superconducting QPU topologies — driven by
-**real device calibration data**. It renders the chip as an interactive graph with
-error heatmaps, lets you assign and style qubit roles, ranks qubits and gates by
-fidelity, tracks calibration history with delta views, and exports layouts to JSON,
-Qiskit code, PNG, and time-lapse GIF/MP4.
+[![tests](https://github.com/mbazayeva/qpu_mapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/qpu_mapper/actions/workflows/tests.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
 
-QPU Mapper is presented in the paper *I-QMapper: Error-Aware Layout
-Optimization and Device Diagnostics for NISQ Hardware* (Bazayeva &
-Merz, [arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). The
-repository tracks development beyond the arXiv version.
+QPU Mapper is presented in the paper *I-QMapper: Error-Aware Layout Optimization and
+Device Diagnostics for NISQ Hardware* (Bazayeva & Merz,
+[arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). The repository tracks
+development beyond the arXiv version.
 
-> Today it ships with first-class **IBM Quantum** support (heavy-hex Heron /
-> Nighthawk). The backend layer is deliberately small and pluggable — see
-> [Extending to other vendors](#extending-to-other-vendors).
+![QPU Mapper — auto-placed LUCJ layout with role legend on an IBM Heron device](docs/img/hero.png)
 
-<!-- TODO: add a short demo GIF here -->
-<!-- ![QPU Mapper demo](docs/demo.gif) -->
+**Contents:**
+[Why](#why) ·
+[Features](#features) ·
+[Requirements](#requirements) ·
+[Installation](#installation) ·
+[Set up your IBM Quantum account](#set-up-your-ibm-quantum-account) ·
+[Quickstart](#quickstart) ·
+[Tutorial](TUTORIAL.md) ·
+[How it works](#how-it-works) ·
+[Extending to other vendors](#extending-to-other-vendors) ·
+[Project layout](#project-layout) ·
+[Limitations](#limitations--caveats) ·
+[License & Citing](#license-credits--citing)
 
 ---
 
+## Why
+
+On NISQ hardware, *where* you place a circuit matters as much as *what* you run:
+gate errors, readout errors, and coherence times vary across the chip and **drift
+over time**. Today you either eyeball calibration tables by hand or trust an
+automated layout pipeline you can't see into. QPU Mapper closes that gap: an
+interactive Jupyter tool where the device, its calibration data, its history, and
+your layout live in one view — so every placement decision is **visible,
+inspectable, and reproducible**.
+
 ## Features
 
-- **Live calibration data** from IBM Quantum, with an on-disk JSON cache (atomic writes, per-backend).
-- **Interactive chip view** (Plotly): error heatmaps with multiple colour scales, per-qubit/per-edge values on hover.
-- **Layout design**: assign qubits to LUCJ roles (α / β / ancilla) or general roles; per-role colours, outlines, and styling; isolate/focus modes.
-- **Auto-LUCJ placement** on heavy-hex chips (zig-zag layout + VF2 isomorph search + a mapomatic-style layout scorer with T1/T2 coherence penalties).
-- **Rankings**: qubits and gates sorted by error, with search/filter; circuit-fidelity estimate.
-- **Calibration history & delta**: fetch past snapshots, compare two dates, animate drift over time.
-- **Exports**: layout JSON, Qiskit `transpile()` code, high-res PNG, and time-lapse GIF/MP4. Layout **import** from `.json` / `.npy` / `.qpy` / `.qasm`.
-- **Sessions**: save/restore the full layout + styling to a `.qpusession.json` file.
+- 🗺️ **Live error heatmaps** on the real device topology — readout, CZ error,
+  coherence, and more, straight from current calibration data.
+- 🕰️ **Time travel** — intraday snapshots, multi-day history, and **delta views**
+  that show what drifted since yesterday (or since any reference you pick).
+- 📈 **Stability Check** — don't just pick the best qubits *today*; see which
+  qubits *stay* good across a 7/14/30-day window.
+- 🎯 **Two operating modes** — a general-purpose mode for arbitrary circuits, and
+  a dedicated mode for the **LUCJ ansatz** (quantum chemistry), with one-click
+  auto-placement on heavy-hex topologies.
+- 🏆 **Layout scoring & ranking (LQS)** — an error-aware quality score to compare
+  candidate layouts before spending QPU time.
+- 📦 **Import & export** — import layouts from JSON / `.npy` / QPY, or extract
+  the qubit set from an OpenQASM circuit (QASM itself carries no physical
+  layout); export publication-ready PNGs, time-lapse GIF/MP4 of calibration
+  history, full session save/restore, and generated Qiskit code for your chosen
+  layout.
+- 🔒 **Local-first** — your IBM Quantum credentials never leave your machine; the
+  tool talks to IBM through your own locally saved `QiskitRuntimeService` account.
 
 ## Requirements
 
-- **Python 3.9+**, running inside **Jupyter Notebook** or **JupyterLab** (it's an ipywidgets app).
-- Core: `ipywidgets`, `plotly`, `numpy`, `rustworkx`, `ipython`
-- IBM live data: `qiskit`, `qiskit-ibm-runtime`
-- PNG export: `kaleido` (Plotly's static-image engine)
-- Time-lapse GIF/MP4 (optional): `imageio`, `imageio-ffmpeg`
+- Python **3.10+**
+- An [IBM Quantum](https://quantum.ibm.com) account with a saved
+  `QiskitRuntimeService` credential (see
+  [Set up your IBM Quantum account](#set-up-your-ibm-quantum-account))
+- JupyterLab or Jupyter Notebook
 
 ## Installation
 
 ```bash
-# clone
-git clone https://github.com/mbazayeva/qpu_mapper.git
-cd qpu_mapper
-
-# core (IBM live data included via qiskit-ibm-runtime)
+# core
 pip install -e .
 
-# core + PNG export
+# core + PNG export (adds kaleido)
 pip install -e ".[png]"
 
-# core + PNG + time-lapse GIF/MP4
+# core + PNG + time-lapse GIF/MP4 (adds imageio, imageio-ffmpeg)
 pip install -e ".[png,timelapse]"
+
+# development (test suite)
+pip install -e ".[dev]"
 ```
 
-To use live IBM data you must have IBM Quantum credentials saved **once**, outside
-the tool (the tool never reads or stores your token):
+## Set up your IBM Quantum account
+
+QPU Mapper uses the credentials you save locally with `qiskit-ibm-runtime` —
+it never asks for, stores, or transmits your token itself. One-time setup:
 
 ```python
 from qiskit_ibm_runtime import QiskitRuntimeService
+
 QiskitRuntimeService.save_account(
     channel='ibm_quantum_platform',
     token='YOUR_TOKEN',
     instance='YOUR_CRN',
+    set_as_default=True,    # make this your default credential
     overwrite=True,
 )
 ```
+
+Find your token and instance CRN on the
+[IBM Quantum Platform](https://quantum.ibm.com) dashboard.
+
+**Multiple accounts / instances.** You can save one credential as your
+**default** and give the others a `name=` — for example a premium instance as
+the default, and another instance (e.g. a local QPU) you switch to on demand:
+
+```python
+# premium instance — saved as the default (used when no name is selected)
+QiskitRuntimeService.save_account(
+    channel='ibm_quantum_platform',
+    token='YOUR_TOKEN',
+    instance='PREMIUM_CRN',
+    set_as_default=True,
+    overwrite=True,
+)
+
+# another instance (e.g. a local QPU) — saved under a name, picked explicitly
+QiskitRuntimeService.save_account(
+    channel='ibm_quantum_platform',
+    token='YOUR_TOKEN',
+    instance='OTHER_CRN',
+    name='my_backend',
+    overwrite=True,
+)
+```
+
+In QPU Mapper's **account selector**, the default credential is used unless
+you pick a named one — switch between them anytime without re-entering
+anything.
 
 ## Quickstart
 
@@ -81,180 +142,116 @@ from qpu_mapper import run
 run()
 ```
 
-This opens the sidebar UI. Pick **IBM Quantum**, load your account, choose a backend,
-select the ansatz, and click **Connect & Launch**. From there you can place qubits,
-switch between design and error-heatmap views, inspect rankings and history, and
-export.
+This opens the sidebar UI. Pick **IBM Quantum**, choose your saved account, pick
+a backend, select the ansatz mode, and click **Connect & Launch**. From there
+you can place qubits by hand, auto-place a LUCJ layout, compare candidates by
+score, inspect calibration history, and export everything you see.
 
----
+**New here? Follow the step-by-step [Tutorial](TUTORIAL.md).**
+
+| ![Live error heatmap](docs/img/heatmap.png) | ![Delta view — calibration drift](docs/img/delta-view.png) |
+|:--:|:--:|
+| *Live error heatmap* | *Delta view: what drifted since the reference* |
+| ![Stability check](docs/img/stability-report.png) | ![The app](docs/img/app-view.png) |
+| *Stability check over a 14-day window* | *The full editor: layout, scoring, controls* |
 
 ## How it works
 
-The pipeline is: **connect → fetch calibration → (optionally) generate a layout →
-store in `SessionState` → render → edit → export.**
+<details>
+<summary><b>Architecture in one paragraph</b> — click to expand</summary>
+<br>
 
-| Layer | Files |
+The Python kernel is the auth and data layer: calibration data is fetched through
+your locally saved IBM account, cached per-user on disk, and rendered with Plotly
+inside ipywidgets panels. Every analysis (scoring, stability, delta) runs on the
+cached snapshots — so browsing history and comparing layouts costs no QPU time
+and no extra API calls. For a module-by-module tour, see
+[CODE_OVERVIEW.md](CODE_OVERVIEW.md).
+
+**Where your data lives:**
+
+| What | Where |
 |---|---|
-| Entry / routing | `__init__.py` (`run()`), `connection.py` (auth UI), `mapper.py` (vendor routing) |
-| State (single source of truth) | `state.py` (`SessionState`) |
-| Backend / data & algorithms | `data.py` (calibration + cache + device graph), `auto_lucj.py` (LUCJ + scoring), `stability.py`, `constants.py` (coords / colours) |
-| Rendering | `plot.py` (`refresh_plot` interactive ↔ `build_static_figure` export) |
-| Export | `export/` (analysis, codegen, autodetect, layout_io, scoring, session, data) |
-| UI | `ui/builder.py` (`MapperUIBuilder`) + `ui_*.py` panels + `ui/widgets_ref.py` |
+| Calibration cache | macOS `~/Library/Caches/qpu_mapper` · Linux `~/.cache/qpu_mapper` (or `$XDG_CACHE_HOME/qpu_mapper`) · Windows `%LOCALAPPDATA%\qpu_mapper\Cache` |
+| Cache override | Set the `QPU_MAPPER_CACHE_DIR` environment variable to relocate it |
+| Sessions & style presets | `.qpu_mapper_sessions/` inside the directory your notebook runs from |
 
-A fuller architecture map for reviewers lives in [`CODE_OVERVIEW.md`](CODE_OVERVIEW.md).
+The cache is safe to delete at any time — the tool recreates it and refetches
+on demand. Your IBM credentials are **not** stored by QPU Mapper at all; they
+live in your own `qiskit-ibm-runtime` account store.
 
----
+</details>
 
 ## Extending to other vendors
 
-The tool talks to a backend through a **small, explicit data contract**. Adding a
-new vendor (Rigetti, IonQ, a real Google/Cirq backend, an internal simulator, …)
-means satisfying that contract and wiring it through a handful of integration points.
+<details>
+<summary><b>How the vendor dispatch works</b> — click to expand</summary>
+<br>
 
-### What the tool needs from any backend
+Backend loading goes through an explicit dispatch table
+(`_VENDOR_LOADERS` in `qpu_mapper/connection.py`). Adding a provider means
+implementing one loader with the same signature and registering it — the UI,
+scoring, and visualization layers are vendor-agnostic. IBM Quantum is the
+provider shipped today.
 
-1. **Topology**
-   - **Qubit coordinates** — `(row, col)` positions used to lay out the chip graph.
-   - **Coupling edges** — a list of `(u, v)` pairs of **qubit indices**.
-2. **Calibration**
-   - **Per-qubit properties** — at minimum `readout_error`; optionally `t1`, `t2`, and the other entries in `QUBIT_PROP_OPTIONS`.
-   - **Per-edge properties** — a 2-qubit gate error keyed `cz_error` (one value per edge), plus any others in `GATE_PROP_OPTIONS`.
-
-These populate `state.active_coords`, `state.edges_list`,
-`state.qubit_props_data`, and `state.gate_props_data` — everything downstream
-(rendering, rankings, fidelity) reads from those.
-
-### The integration points
-
-| File | What to add |
-|---|---|
-| `connection.py` | Add the vendor to the `dd_vendor` dropdown; add a branch in the **Load Account** handler (authenticate / instantiate the backend) and in the **Connect** handler (launch via `on_connect_callback`). |
-| `mapper.py` | Coordinate resolution. IBM backends go through `resolve_coords()`. A custom backend can instead carry `.coords` on the object — add an `elif backend is not None and hasattr(backend, 'coords')` branch. |
-| `data.py` | `generate_device_data()` dispatches by vendor — add a `_generate_<vendor>(state)` that fills `state.qubit_props_data` / `state.gate_props_data` / coords / edges. A Qiskit-compatible backend can reuse `_generate_ibm()` directly. |
-| `constants.py` | If your chip has a fixed topology, add a `<chip>_coords()` function and wire it into `resolve_coords()`'s family / qubit-count dispatch. |
-
-### Recipe A — a Qiskit-compatible vendor (easiest)
-
-If your backend is a Qiskit `BackendV2` exposing `.coupling_map.get_edges()` and
-`.properties()`, you mostly **reuse the IBM path**:
-
-1. Add the dropdown option and a connection branch that instantiates your backend.
-2. If the chip topology isn't already known to `resolve_coords()`, add a
-   `<chip>_coords()` to `constants.py` and a matching branch (keyed on
-   `processor_type` family or qubit count).
-3. `_generate_ibm()` and `resolve_coords()` then work as-is, since they read the
-   standard Qiskit interfaces.
-
-### Recipe B — a custom (non-Qiskit) backend
-
-Model it on the lightweight "backend object carries its own data" pattern. Provide
-a class with the contract below:
-
-```python
-import numpy as np
-
-class MyVendorBackend:
-    name = "mychip_v1"
-
-    def __init__(self):
-        # Topology
-        self._coords = [(r, c) for r in range(rows) for c in range(cols)]  # (row, col)
-        self._edges  = [(0, 1), (1, 2), ...]                              # (u, v) index pairs
-        n = len(self._coords)
-        # Calibration (orders of magnitude matter; arrays must match sizes)
-        self.readout_errors = np.full(n, 0.01)                # len == n_qubits
-        self.gate_errors    = np.full(len(self._edges), 0.005)  # len == n_edges (2q error)
-        self.t1_us = np.full(n, 100.0)   # optional
-        self.t2_us = np.full(n, 80.0)    # optional
-
-    @property
-    def coords(self): return self._coords
-    @property
-    def edges(self):  return self._edges
-```
-
-Then wire it:
-
-```python
-# data.py — add the dispatch + generator
-def _generate_<vendor>(state):
-    b = state.active_backend
-    n = len(b.coords)
-    state.qubit_props_data = {
-        'readout_error': b.readout_errors,
-        't1': getattr(b, 't1_us', np.zeros(n)),
-        't2': getattr(b, 't2_us', np.zeros(n)),
-    }
-    state.gate_props_data = {'cz_error': b.gate_errors}
-```
-
-`mapper.py`'s `hasattr(backend, 'coords')` branch picks up the coordinates, and
-`connection.py` instantiates the backend and launches it via `on_connect_callback`.
-
-> If you also want LUCJ/Qiskit-style consumers, expose a `coupling_map` object with
-> a `.get_edges()` method returning `(u, v)` tuples (a thin wrapper is enough).
-
-### Things to know
-
-- **LUCJ auto-placement is heavy-hex / IBM-specific** (`auto_lucj.py`). Other
-  topologies still get manual placement, error heatmaps, rankings, and exports —
-  just not the automatic LUCJ layout.
-- **Calibration history & delta** assume a queryable per-timestamp calibration
-  source (modelled on IBM's). A custom vendor without that gets a single static
-  snapshot unless you implement history fetching for it.
-- **Edge convention**: `edges_list` holds **qubit-index** pairs; `plot.py` is the
-  authoritative reference for the semantics.
-
----
+</details>
 
 ## Project layout
 
+<details>
+<summary><b>Repository structure</b> — click to expand</summary>
+<br>
+
 ```
 qpu_mapper/
-├── __init__.py            # run() entry point
-├── connection.py          # auth / vendor-selection UI
-├── mapper.py              # vendor routing → builds the app
-├── state.py              # SessionState (single source of truth)
-├── data.py               # calibration fetch + cache + device graph
-├── auto_lucj.py          # LUCJ layout + VF2 + scoring
-├── stability.py          # calibration-stability analysis
-├── constants.py          # coordinates, colour scales, formatting
-├── plot.py               # interactive + static Plotly rendering
-├── export/               # analysis, codegen, autodetect, layout_io, scoring, session, data
-├── ui/                   # builder.py (MapperUIBuilder) + widgets_ref.py
-└── ui_*.py               # per-panel UI modules
+├── connection.py     # account loading, vendor dispatch, backend selection
+├── data.py           # calibration fetch + per-user cache
+├── plot.py           # device graph & heatmap rendering
+├── auto_lucj.py      # LUCJ auto-placement + layout error scoring
+├── stability.py      # multi-day stability analysis
+├── state.py          # session state, undo/redo, (de)serialization
+├── export/           # scoring (LQS), layout I/O, codegen, PNG/analysis export
+└── ui/               # ipywidgets panels (builder, time, history, analysis, …)
+tests/                # 183 tests, offline, no QPU required
 ```
+
+For a guided tour of the modules and data flow, see
+[CODE_OVERVIEW.md](CODE_OVERVIEW.md).
+
+</details>
 
 ## Limitations & caveats
 
-- The **circuit-fidelity estimate assumes independent errors** (no crosstalk, no
-  scheduling effects). It is an *upper-bound style* indicator for comparing
-  layouts, not a hardware fidelity prediction.
-- **`.qpy` import** deserializes a Qiskit binary format; only import `.qpy` files
-  you trust (treat like opening any untrusted binary). `.json` / `.npy` / `.qasm`
-  imports are parsed safely.
-- LUCJ auto-placement targets IBM heavy-hex topologies (see above).
+<details>
+<summary><b>What this tool is not</b> — click to expand</summary>
+<br>
 
-## Roadmap
+- Calibration data is as fresh as IBM's calibration cycle; the tool shows you
+  *reported* device quality, which is a strong prior — not a guarantee — of run
+  quality.
+- The LQS score is a first-order heuristic for *relative* layout comparison, not
+  an absolute fidelity prediction.
+- OpenQASM files carry no physical layout: the QASM importer extracts the qubit
+  indices used by the circuit as a starting layout, nothing more.
+- Heavy-hex auto-placement currently targets IBM Heron/Nighthawk-class devices.
 
-Planned work includes a routing/SWAP-overhead preview, a
-circuit-on-topology overlay, a crosstalk model, and additional ansätze.
+</details>
 
 ## License, Credits & Citing
 
-QPU Mapper is released under the [Apache License 2.0](LICENSE) (see also [NOTICE](NOTICE)).
+QPU Mapper is released under the [Apache License 2.0](LICENSE) (see also
+[NOTICE](NOTICE)).
 
-Parts of this project build on IBM open-source work: the auto-LUCJ layout
-scorer was adapted from IBM code now incorporated in
-[ffsim](https://github.com/qiskit-community/ffsim)
-(Sung *et al.*, [arXiv:2605.03123](https://arxiv.org/abs/2605.03123)),
-and the layout-quality estimator implements a cost function in the style of
+Parts of this project build on IBM open-source work: the auto-LUCJ layout scorer
+was adapted from IBM code now incorporated in
+[ffsim](https://github.com/qiskit-community/ffsim) (Sung *et al.*,
+[arXiv:2605.03123](https://arxiv.org/abs/2605.03123)), and the layout-quality
+estimator implements a cost function in the style of
 [mapomatic](https://github.com/qiskit-community/mapomatic)
-(Nation & Treinish, *PRX Quantum* **4**, 010327, 2023). The LUCJ ansatz is
-due to Motta *et al.*, *Chem. Sci.* **14**, 11213–11227 (2023),
+(Nation & Treinish, *PRX Quantum* **4**, 010327, 2023). The LUCJ ansatz is due to
+Motta *et al.*, *Chem. Sci.* **14**, 11213–11227 (2023),
 [doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
 
-If you use QPU Mapper in your research, please cite the I-QMapper
-paper ([arXiv:2606.27508](https://arxiv.org/abs/2606.27508)) — see
+If you use QPU Mapper in your research, please cite the I-QMapper paper
+([arXiv:2606.27508](https://arxiv.org/abs/2606.27508)) — see
 [CITATION.cff](CITATION.cff).
