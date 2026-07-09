@@ -124,9 +124,7 @@ From the **Export** tab:
 - **Layout JSON** — export your layouts (including LUCJ role partitions) and
   re-import them later or on another backend.
 - **Import** — accepts layout `.json`, `.npy` (a plain array of qubit
-  indices), and QPY circuits; OpenQASM files are also accepted, with a caveat:
-  QASM carries no physical layout, so the importer extracts the qubit indices
-  used by the circuit as a starting point.
+  indices), and QPY circuits.
 - **PNG** — publication-ready snapshot of the current view, with legend and
   colorbars (requires the `[png]` extra).
 - **Time-lapse** — after fetching history (intraday or multi-day), export an

@@ -30,7 +30,7 @@ Design rules that hold across the codebase:
   widgets to it. Background work is marshaled back to the main loop before any
   widget is touched (see `async_util.py`).
 - **Untrusted input is hardened.** Every import path (JSON / `.npy` / QPY /
-  QASM / sessions) enforces size caps, validates shapes, and fails with a clear
+  sessions) enforces size caps, validates shapes, and fails with a clear
   message instead of crashing (`allow_pickle=False` on `.npy`, qubit IDs
   filtered against the device, malformed payloads fall back safely).
 
@@ -55,7 +55,7 @@ Design rules that hold across the codebase:
 | Module | Role |
 |---|---|
 | `scoring.py` | `estimate_circuit_fidelity` — the Layout-Quality Score (LQS): product-form fidelity estimate from readout and two-qubit gate errors. Cost function in the style of [mapomatic](https://github.com/qiskit-community/mapomatic) (Nation & Treinish, PRX Quantum 4, 010327, 2023). |
-| `layout_io.py` | Layout import from `.json` / `.npy` / `.qpy` / `.qasm` (QASM carries no physical layout — the importer extracts the circuit's qubit indices), with size caps and hardened parsing; layout export to JSON. |
+| `layout_io.py` | Layout import from `.json` / `.npy` / `.qpy`, with size caps and hardened parsing; layout export to JSON. |
 | `codegen.py` | Generates ready-to-run Qiskit code for the chosen layout. |
 | `autodetect.py` | Heuristics that classify uploaded files and detect layout shapes. |
 | `session.py` | Session and style-preset save/load (size-capped, versioned). |

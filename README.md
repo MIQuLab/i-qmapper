@@ -53,9 +53,8 @@ inspectable, and reproducible**.
   auto-placement on heavy-hex topologies.
 - 🏆 **Layout scoring & ranking (LQS)** — an error-aware quality score to compare
   candidate layouts before spending QPU time.
-- 📦 **Import & export** — import layouts from JSON / `.npy` / QPY, or extract
-  the qubit set from an OpenQASM circuit (QASM itself carries no physical
-  layout); export publication-ready PNGs, time-lapse GIF/MP4 of calibration
+- 📦 **Import & export** — import layouts from JSON / `.npy` / QPY; export
+  publication-ready PNGs, time-lapse GIF/MP4 of calibration
   history, full session save/restore, and generated Qiskit code for your chosen
   layout.
 - 🔒 **Local-first** — your IBM Quantum credentials never leave your machine; the
@@ -231,8 +230,6 @@ For a guided tour of the modules and data flow, see
   quality.
 - The LQS score is a first-order heuristic for *relative* layout comparison, not
   an absolute fidelity prediction.
-- OpenQASM files carry no physical layout: the QASM importer extracts the qubit
-  indices used by the circuit as a starting layout, nothing more.
 - Heavy-hex auto-placement currently targets IBM Heron/Nighthawk-class devices.
 
 </details>
