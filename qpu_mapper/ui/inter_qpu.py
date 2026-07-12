@@ -25,10 +25,11 @@ is now scoped inside `setup_inter_qpu`; ui.py only sees the layout
 containers it has to mutate.
 
 Public API:
-  setup_inter_qpu(ctx) -> None
+  setup_inter_qpu(ctx) -> refresh_qpu1_label callable
 
-The function returns nothing — it wires observers and lives by side
-effects on the widgets passed in.
+The function wires observers by side effect on the widgets passed in, and
+returns the `refresh_qpu1_label` hook so `ui.backend_switch` can refresh
+the QPU-1 switcher label after a backend switch.
 """
 import logging
 
@@ -217,6 +218,35 @@ def setup_inter_qpu(ctx):
                     _visit(c)
         _visit(root)
 
+    # ── QPU-1 toggle-label refresh ──────────────────────────────
+    def refresh_qpu1_label():
+        """Rebuild the QPU-1 switcher label from the CURRENT backend name.
+
+        The QPU-1/QPU-2 ToggleButtons label for option[0] is built once,
+        inside `_on_connect_qpu2`, from `state.active_backend_name` at that
+        moment. A later backend switch (`ui.backend_switch`) changes the
+        name but has no reference to this closure, so the tab keeps the
+        stale name. `ui.backend_switch` calls this hook after every switch.
+
+        No-op when the inter-QPU switcher was never built (`_qpu_toggle[0]`
+        is None) or is not the expected two-option strip. option[1] (the
+        QPU-2 entry) and the current `.value` are left untouched.
+        """
+        toggle = _qpu_toggle[0]
+        if toggle is None:
+            return
+        options = list(toggle.options)
+        if len(options) != 2:
+            return
+        # Reassigning .options resets .value to the first option (verified
+        # for ipywidgets ToggleButtons even when the old value survives), so
+        # capture and restore the user's current selection explicitly.
+        saved_value = toggle.value
+        new_label = f"📡 {state.active_backend_name or 'QPU 1'}"
+        options[0] = (new_label, options[0][1])
+        toggle.options = options
+        toggle.value = saved_value
+
     # ── Connect-QPU2 handler ────────────────────────────────────
     def _on_connect_qpu2(b):
         backend_name = dd_backend_qpu2.value
@@ -350,3 +380,7 @@ def setup_inter_qpu(ctx):
             )
 
     btn_connect_qpu2.on_click(_on_connect_qpu2)
+
+    # Expose the label-refresh hook so ui.backend_switch can call it after a
+    # backend switch (the switcher has no other handle on this closure).
+    return refresh_qpu1_label

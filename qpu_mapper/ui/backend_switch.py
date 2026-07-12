@@ -32,6 +32,7 @@ element list (`[False]`) used as a kernel-main-loop reentrancy guard,
 not a thread synchronisation primitive — `threading.Event`'s blocking
 semantics would be wrong here.
 """
+import contextlib
 import logging
 
 from ..html_safe import esc
@@ -126,6 +127,25 @@ def setup_backend_switch(ctx):
     load_device_graph = ctx.load_device_graph
     refresh = ctx.refresh
     get_export = ctx.get_export
+    # Optional: single-element cell holding ui.inter_qpu's refresh hook (or
+    # [None] until inter-QPU is wired). Absent entirely in callers/tests that
+    # don't build the inter-QPU panel — treat as "no hook".
+    refresh_qpu1_label_cell = getattr(ctx, 'refresh_qpu1_label', None)
+
+    def _refresh_qpu1_label():
+        """Best-effort refresh of the QPU-1 switcher label after a switch.
+
+        A label refresh must NEVER break a backend switch, so failures are
+        swallowed (logged at debug). No-op when the inter-QPU switcher was
+        never opened (hook is None).
+        """
+        hook = (refresh_qpu1_label_cell[0]
+                if refresh_qpu1_label_cell else None)
+        if hook is None:
+            return
+        with contextlib.suppress(Exception):
+            _log.debug("Refreshing QPU-1 toggle label after backend switch")
+            hook()
 
     def _on_backend_switch(change):
         new_name = change['new']
@@ -203,6 +223,10 @@ def setup_backend_switch(ctx):
             state.props_warning = props_warn
             state.active_coords = new_coords
 
+            # Backend name changed — refresh the inter-QPU switcher's QPU-1
+            # label so it doesn't keep showing the previous backend.
+            _refresh_qpu1_label()
+
             lbl_switch_status.value = (
                 f"<div style='font-size:15px;color:#2471a3;"
                 f"background:#eaf2f8;padding:4px 8px;border-radius:4px;"
@@ -275,6 +299,9 @@ def setup_backend_switch(ctx):
                 (state.active_backend, state.active_backend_name,
                  state.active_chip, state.initial_props,
                  state.props_warning, state.active_coords) = _prev_refs
+                # State rolled back to the old backend name — refresh the
+                # switcher label to match, undoing any success-path relabel.
+                _refresh_qpu1_label()
             hint = _classify_switch_error(e, new_name)
             lbl_switch_status.value = (
                 f"<div style='font-size:15px;color:#e74c3c;"

@@ -248,6 +248,11 @@ class MapperUIBuilder:
         # reloads mid-switch, and ui.backend_switch mutates the SAME list
         # via switching_backend[0] = True/False. The list shape IS the
         # cross-module API — do not "fix" it to a bool.
+        # Shared single-element cell holding ui.inter_qpu's refresh hook.
+        # setup_inter_qpu runs LATER (after assembly), so we pass the cell
+        # now and it is populated below — backend_switch reads cell[0] at
+        # call time to relabel the QPU-1 switcher after a backend switch.
+        self._refresh_qpu1_label = [None]
         from .backend_switch import setup_backend_switch
         setup_backend_switch(_NS(
             state=state,
@@ -260,6 +265,7 @@ class MapperUIBuilder:
             load_device_graph=self._load_device_graph,
             refresh=self._refresh, get_export=self._get_export,
             out=self.out,
+            refresh_qpu1_label=self._refresh_qpu1_label,
         ))
 
         # ── Inter-QPU mode (toggle + connect QPU2) ───────────────────
@@ -488,7 +494,7 @@ class MapperUIBuilder:
         # longer mounted in the sidebar.
         if not is_secondary:
             from .inter_qpu import setup_inter_qpu
-            setup_inter_qpu(_NS(
+            self._refresh_qpu1_label[0] = setup_inter_qpu(_NS(
                 data_mod=data_mod, state=state,
                 chk_inter_qpu=self.chk_inter_qpu,
                 dd_backend_qpu2=self.dd_backend_qpu2,
