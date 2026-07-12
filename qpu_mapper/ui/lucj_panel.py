@@ -257,9 +257,25 @@ def setup_lucj_callbacks(ctx):
         min_val = lucj_min_ancilla.value
         min_bridges = None if (min_val is None or min_val <= 0) else min_val
 
-        res = sweep_ancilla_layouts(
-            norb, state.active_backend, state.initial_props,
-            min_bridges=min_bridges)
+        # V2: opt-in stability filter (drop-in superset of the plain sweep).
+        history = getattr(state, 'cal_history', None)
+        if _stability_filter_active() and history:
+            from ..stability_filter import sweep_with_stability
+            res = sweep_with_stability(
+                norb, state.active_backend, state.initial_props, history,
+                window_days=rb_stability_window.value,
+                threshold=ft_stability_threshold.value,
+                min_bridges=min_bridges)
+            _render_stability_banner(res.get('stability'), norb)
+        else:
+            res = sweep_ancilla_layouts(
+                norb, state.active_backend, state.initial_props,
+                min_bridges=min_bridges)
+            if _stability_filter_active():
+                # Checkbox on but no history dict → skipped note.
+                _render_stability_banner(None, norb)
+            else:
+                lbl_lucj_stability.value = ""
 
         strata = res['strata']
         # Flatten k descending, entries in stratum order; the dropdown value
@@ -357,6 +373,144 @@ def setup_lucj_callbacks(ctx):
     scan_marshal = ctx.scan_marshal
     inter_qpu_handoff = ctx.inter_qpu_handoff  # shared cell → stage hook
 
+    # ── Stability filter (V1/V2/V3) ──────────────────────────────
+    chk_stability_filter = ctx.chk_stability_filter
+    rb_stability_window = ctx.rb_stability_window
+    ft_stability_threshold = ctx.ft_stability_threshold
+    stability_ctrl_box = ctx.stability_ctrl_box
+    lbl_lucj_stability = ctx.lbl_lucj_stability
+    chk_scan_stability = ctx.chk_scan_stability
+
+    def _on_stability_toggle(change=None):
+        # Reveal the window/threshold row only when the filter is on.
+        stability_ctrl_box.layout.display = (
+            'block' if chk_stability_filter.value else 'none')
+        if not chk_stability_filter.value:
+            lbl_lucj_stability.value = ""
+    chk_stability_filter.observe(_on_stability_toggle, names='value')
+    _on_stability_toggle()
+
+    def _stability_filter_active():
+        return bool(chk_stability_filter.value
+                    and not chk_stability_filter.disabled)
+
+    def _render_stability_banner(stab, norb):
+        """Render res['stability'] (V2): filtered / relaxed / unavailable."""
+        if stab is None or not stab.get('available', False):
+            lbl_lucj_stability.value = (
+                "<div style='font-size:13px;color:#888;margin:3px 0;'>"
+                "🛡 no history in range — filter skipped</div>")
+            return
+        if stab.get('relaxed'):
+            lbl_lucj_stability.value = (
+                f"<div style='font-size:13px;color:#e67e22;background:#fef9e7;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
+                f"margin:3px 0;'>🛡 filter too strict for norb="
+                f"{esc(str(norb))} — re-admitted "
+                f"{esc(str(stab.get('n_readmitted')))} of "
+                f"{esc(str(stab.get('n_excluded_initial')))} "
+                f"(most-volatile still excluded)</div>")
+        else:
+            n = len(stab.get('excluded_final', []))
+            lbl_lucj_stability.value = (
+                f"<div style='font-size:13px;color:#1e8449;background:#eafaf1;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+                f"margin:3px 0;'>🛡 filtered {esc(str(n))} volatile qubits "
+                f"(window {esc(str(stab.get('window_days')))}d)</div>")
+
+    def _cached_history_for(backend_name):
+        """Assemble a per-backend history dict from the DISK CACHE ONLY (no
+        remote fetch). Empty when the backend has no cached snapshots."""
+        from .. import data
+        try:
+            known = data.list_known_calibrations(backend_name)
+        except Exception:
+            return {}
+        hist = {}
+        for entry in known or []:
+            ts = entry.get('last_update')
+            if not ts:
+                continue
+            cached = data._load_calibration(backend_name, ts)
+            if cached:
+                hist[ts] = {'qubit_props': cached[0], 'gate_props': cached[1]}
+        return hist
+
+    def _stability_badge(r):
+        stab = r.get('stability')
+        if not stab:
+            return ""
+        if not stab.get('available', False):
+            return ("<span style='color:#999;'>stability: n/a "
+                    "(no cached history)</span>")
+        n = len(stab.get('excluded_final', []))
+        extra = " (relaxed)" if stab.get('relaxed') else ""
+        return (f"<span style='color:#1e8449;'>🛡 −{esc(str(n))} "
+                f"qubits{extra}</span>")
+
+    def _scan_filtered(eligible, norb, get_backend, get_props, min_bridges):
+        """Handler-side per-target scan with cached-history stability filter.
+
+        qpu_scan.scan_qpus hardcodes the unfiltered sweep and exposes no
+        exclusion/sweep-fn hook, so the filtered scan can't route through it
+        without editing the frozen engine. This mirrors its contract
+        (per-backend isolation, progress_cb, best_lqs sort) and adds a
+        per-result 'stability' block. Cached history ONLY — no remote fetch.
+        """
+        from ..ancilla_sweep import sweep_ancilla_layouts
+        from ..stability_filter import sweep_with_stability
+        window = rb_stability_window.value
+        threshold = ft_stability_threshold.value
+        results = []
+        n_scanned = n_failed = n_skipped = 0
+        for t in eligible:
+            name = t.get('name') if isinstance(t, dict) else t
+            family = t.get('family') if isinstance(t, dict) else None
+            _on_scan_progress(name, 'start', '')
+            try:
+                backend = get_backend(name)
+                props = get_props(backend)
+                hist = _cached_history_for(name)
+                if hist:
+                    res = sweep_with_stability(
+                        norb, backend, props, hist, window_days=window,
+                        threshold=threshold, min_bridges=min_bridges, top_n=3)
+                    stab = res.get('stability', {'available': False})
+                else:
+                    res = sweep_ancilla_layouts(
+                        norb, backend, props, min_bridges=min_bridges, top_n=3)
+                    stab = {'available': False, 'reason': 'no cached history'}
+            except Exception as exc:
+                n_failed += 1
+                results.append({'name': name, 'family': family, 'sweep': None,
+                                'best_lqs': None, 'best_k': None,
+                                'error': str(exc),
+                                'stability': {'available': False}})
+                _on_scan_progress(name, 'error', str(exc))
+                continue
+            best_lqs, best_k = None, None
+            for k, entries in res['strata'].items():
+                for e in entries:
+                    if best_lqs is None or e['product_score'] > best_lqs:
+                        best_lqs, best_k = e['product_score'], k
+            if best_lqs is None:
+                n_skipped += 1
+                results.append({'name': name, 'family': family, 'sweep': res,
+                                'best_lqs': None, 'best_k': None,
+                                'error': None, 'stability': stab})
+                _on_scan_progress(name, 'skipped', 'no candidates')
+                continue
+            n_scanned += 1
+            results.append({'name': name, 'family': family, 'sweep': res,
+                            'best_lqs': best_lqs, 'best_k': best_k,
+                            'error': None, 'stability': stab})
+            _on_scan_progress(name, 'ok', f'best LQS {best_lqs * 100:.1f}%')
+        ranked = [r for r in results if r['best_lqs'] is not None]
+        rest = [r for r in results if r['best_lqs'] is None]
+        ranked.sort(key=lambda r: r['best_lqs'], reverse=True)
+        return {'results': ranked + rest, 'n_scanned': n_scanned,
+                'n_failed': n_failed, 'n_skipped': n_skipped}
+
     _scan = {'progress': {}, 'order': []}
     _STATUS_ICON = {'start': '⏳', 'ok': '✓', 'skipped': '·', 'error': '✗'}
 
@@ -419,17 +573,19 @@ def setup_lucj_callbacks(ctx):
                 "<th style='padding:3px 8px;'>family</th>"
                 "<th style='padding:3px 8px;'>best LQS</th>"
                 "<th style='padding:3px 8px;'>k</th>"
-                "<th style='padding:3px 8px;'>cands</th></tr>")
+                "<th style='padding:3px 8px;'>cands</th>"
+                "<th style='padding:3px 8px;'>stability</th></tr>")
         body = []
         for r in results:
             name = esc(str(r['name']))
             fam = esc(str(r['family'] or '?'))
+            badge = _stability_badge(r)
             if r['error']:
                 body.append(
                     f"<tr style='color:#999;background:#f7f7f7;'>"
                     f"<td style='padding:3px 8px;'>{name}</td>"
                     f"<td style='padding:3px 8px;'>{fam}</td>"
-                    f"<td colspan='3' style='padding:3px 8px;'>✗ "
+                    f"<td colspan='4' style='padding:3px 8px;'>✗ "
                     f"{esc(str(r['error']))}</td></tr>")
             elif r['best_lqs'] is None:
                 body.append(
@@ -437,7 +593,9 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;'>{name}</td>"
                     f"<td style='padding:3px 8px;'>{fam}</td>"
                     f"<td colspan='3' style='padding:3px 8px;'>no candidates"
-                    f"</td></tr>")
+                    f"</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{badge}</td></tr>")
             else:
                 lqs = esc(f"{r['best_lqs'] * 100.0:.1f}%")
                 ncand = sum(len(v) for v in r['sweep']['strata'].values())
@@ -448,7 +606,9 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{esc(str(r['best_k']))}</td>"
                     f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{esc(str(ncand))}</td></tr>")
+                    f"{esc(str(ncand))}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{badge}</td></tr>")
         children = [HTML(head + "".join(body) + "</table>")]
 
         # Per-QPU stratified dropdowns (same label format as single-circuit).
@@ -540,8 +700,13 @@ def setup_lucj_callbacks(ctx):
         btn_scan_qpus.description = '⏳ Scanning...'
         get_backend = state.active_service.backend
         get_props = make_scan_get_props(state)
+        use_scan_filter = (_stability_filter_active()
+                           and chk_scan_stability.value)
 
         def _work():
+            if use_scan_filter:
+                return _scan_filtered(eligible, norb, get_backend, get_props,
+                                      min_bridges)
             return scan_qpus(eligible, norb, get_backend, get_props,
                              min_bridges=min_bridges, top_n=3,
                              progress_cb=_on_scan_progress)

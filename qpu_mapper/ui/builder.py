@@ -16,7 +16,8 @@ from types import SimpleNamespace as _NS
 import numpy as np
 from ipywidgets import (
     Output, VBox, HBox, RadioButtons, Label, ColorPicker,
-    IntSlider, FloatSlider, BoundedIntText, Button, Layout, Checkbox, Tab, HTML, Dropdown,
+    IntSlider, FloatSlider, BoundedIntText, BoundedFloatText, Button, Layout,
+    Checkbox, Tab, HTML, Dropdown,
     Textarea, Text, ToggleButtons, Accordion, DatePicker, FileUpload,
     IntProgress,
 )
@@ -328,8 +329,16 @@ class MapperUIBuilder:
             scan_spawn_bg=default_spawn_bg,
             scan_marshal=marshal_to_main,
             inter_qpu_handoff=self._inter_qpu_handoff,
+            # Stability filter (V1/V2/V3).
+            chk_stability_filter=self.chk_stability_filter,
+            rb_stability_window=self.rb_stability_window_auto,
+            ft_stability_threshold=self.ft_stability_threshold,
+            stability_ctrl_box=self.stability_ctrl_box,
+            lbl_lucj_stability=self.lbl_lucj_stability,
+            chk_scan_stability=self.chk_scan_stability,
         )
         setup_lucj_callbacks(_lucj_ctx)
+        self._refresh_stability_filter_availability()
 
         # ── PNG save popup ───────────────────────────────────────────
         # ui.png_export builds the popup + sliders + checkbox and wires
@@ -1224,6 +1233,34 @@ class MapperUIBuilder:
         # Sweep truncation banner (VF2 cap hit); empty/hidden otherwise.
         self.lbl_lucj_trunc = HTML("")
 
+        # ── Stability filter (opt-in) ────────────────────────────
+        self.chk_stability_filter = Checkbox(
+            value=False, description='🛡 Stability filter', layout=W,
+            tooltip='Exclude volatile qubits (from calibration history) '
+                    'before the sweep')
+        self.rb_stability_window_auto = RadioButtons(
+            options=[('7 days', 7), ('14 days', 14), ('30 days', 30)],
+            value=14, description='Window:', layout=W,
+            style={'description_width': '70px'})
+        self.ft_stability_threshold = BoundedFloatText(
+            value=0.5, min=0.0, max=100.0, step=0.1,
+            description='Threshold:', layout=Layout(width='230px'),
+            style={'description_width': '90px'},
+            tooltip='Volatility score = max/median − 1; higher threshold = '
+                    'more tolerant (fewer qubits excluded)')
+        # Window + threshold row, revealed only when the filter is on.
+        self.stability_ctrl_box = VBox(
+            [self.rb_stability_window_auto, self.ft_stability_threshold])
+        self.stability_ctrl_box.layout.display = 'none'
+        self.lbl_lucj_stability = HTML("")
+        # Scan sub-option: filter each scanned backend with CACHED history only.
+        self.chk_scan_stability = Checkbox(
+            value=False,
+            description='apply stability filter (cached history only)',
+            layout=W,
+            tooltip='Filter each scanned backend using its CACHED history '
+                    'only — no remote history fetch in this version')
+
         # ── Multi-QPU scan cluster ───────────────────────────────
         self.btn_scan_qpus = Button(
             description='🌐 Scan all QPUs', button_style='info', layout=W,
@@ -1608,6 +1645,22 @@ class MapperUIBuilder:
             self.btn_load_style,
         ])
 
+    def _refresh_stability_filter_availability(self):
+        """Enable the 🛡 Stability filter only when calibration history is
+        loaded; otherwise disable it with a hint. Re-evaluated each time the
+        Auto view is (re)built, so it flips on after history is fetched."""
+        state = self.state
+        available = bool(getattr(state, 'cal_history', None)
+                         and getattr(state, 'cal_history_dates', None))
+        self.chk_stability_filter.disabled = not available
+        if available:
+            self.chk_stability_filter.tooltip = (
+                'Exclude volatile qubits (from calibration history) before '
+                'the sweep')
+        else:
+            self.chk_stability_filter.tooltip = (
+                'Fetch calibration history first (Stability Check / Multi-day)')
+
     def _build_auto_lucj_view(self):
         """Build the 'Auto' nav tab view (LUCJ chemistry mode).
 
@@ -1621,6 +1674,7 @@ class MapperUIBuilder:
         ``lucj_multi_ancillas`` to override it per sub-circuit (blank
         falls back to the dropdown).
         """
+        self._refresh_stability_filter_availability()
         return VBox([
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:4px 0;'>"
                  "🤖 Auto-LUCJ Layout Engine</div>"),
@@ -1631,6 +1685,9 @@ class MapperUIBuilder:
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
             self.lucj_chk_score,
+            self.chk_stability_filter,
+            self.stability_ctrl_box,
+            self.lbl_lucj_stability,
             self.btn_lucj_run,
             self.lbl_lucj_trunc,
             self.lbl_lucj_status,
@@ -1639,6 +1696,7 @@ class MapperUIBuilder:
                  "🌐 Scan All QPUs</div>"),
             self.btn_scan_qpus,
             self.chk_scan_other_families,
+            self.chk_scan_stability,
             self.lbl_scan_progress,
             self.scan_results_box,
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"

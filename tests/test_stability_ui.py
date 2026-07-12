@@ -1,0 +1,194 @@
+"""Headless tests for the stability-filter UI (Component 4b).
+
+Offline: the data layer is stubbed and the stability/sweep engines are
+monkeypatched with canned dicts. The background spawn + progress marshal
+are injected synchronously.
+"""
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+
+def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
+    n = 8
+    return (list(range(n)), [0.0] * n, [(i, i + 1) for i in range(n - 1)],
+            [str(i) for i in range(n)],
+            np.array([0.01 * (i + 1) for i in range(n)]),
+            np.array([0.001 * (i + 1) for i in range(n - 1)]))
+
+
+def _sync_spawn(fn, on_done=None, on_error=None):
+    try:
+        r = fn()
+    except Exception as e:            # pragma: no cover
+        if on_error:
+            on_error(e)
+        return None
+    if on_done:
+        on_done(r)
+    return None
+
+
+def _entry(prod=0.4, k=1):
+    return {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+            'ancillas': list(range(4, 4 + k)),
+            'bridge_slots': tuple(range(0, 4 * k, 4)),
+            'product_score': prod, 'additive_score': 0.5,
+            'rank_in_stratum': 1, 'source': 'derived'}
+
+
+def _canned_res(stability):
+    return {'strata': {1: [_entry()]}, 'k_max_effective': 1, 'min_bridges': 1,
+            'vf2_truncated': False, 'n_raw_embeddings': 5,
+            'n_candidates_scored': 5, 'excluded_qubits': [1, 2, 3],
+            'stability': stability}
+
+
+def _build(monkeypatch, *, history=False, spawn=_sync_spawn,
+           marshal=lambda cb: cb()):
+    import qpu_mapper.async_util as au
+    monkeypatch.setattr(au, 'default_spawn_bg', spawn)
+    monkeypatch.setattr(au, 'marshal_to_main', marshal)
+    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+
+    from qpu_mapper.state import SessionState
+    from qpu_mapper.ui.builder import MapperUIBuilder
+
+    state = SessionState()
+    state.active_backend = object()
+    state.active_backend_name = "stub"
+    state.active_chip = "stub_chip"
+    state.active_service = SimpleNamespace(backend=lambda n: object())
+    state.available_backends = ["ibm_a", "ibm_b"]
+    state.props_warning = None
+    state.initial_props = object()
+    state.active_ansatz = "lucj"
+    state.active_vendor = "IBM"
+    state.active_coords = []
+    state.custom_colors = []
+    if history:
+        state.cal_history_dates = ['2026-07-01', '2026-07-02']
+        state.cal_history = {
+            d: {'qubit_props': {'readout_error': [0.01] * 8}, 'gate_props': {}}
+            for d in state.cal_history_dates}
+    else:
+        state.cal_history_dates = ["_seed_"]   # skip bg auto-load; no dict
+        state.cal_history = {}
+
+    b = MapperUIBuilder(state)
+    b.build()
+    return b
+
+
+# ── t1: availability gating ─────────────────────────────────────────────────
+
+def test_checkbox_disabled_without_history(monkeypatch):
+    b = _build(monkeypatch, history=False)
+    assert b.chk_stability_filter.disabled is True
+    assert 'Fetch calibration history' in b.chk_stability_filter.tooltip
+
+
+def test_checkbox_enabled_with_history(monkeypatch):
+    b = _build(monkeypatch, history=True)
+    assert b.chk_stability_filter.disabled is False
+    assert b.chk_stability_filter.tooltip                      # non-empty
+
+
+# ── t2: filter ON routes to sweep_with_stability with the controls' args ────
+
+def test_filter_on_calls_sweep_with_stability(monkeypatch):
+    b = _build(monkeypatch, history=True)
+
+    calls = {}
+    def fake_sws(norb, backend, props, hist, **kw):
+        calls['kw'] = kw
+        return _canned_res({'available': True, 'relaxed': False,
+                            'excluded_final': [1, 2, 3],
+                            'window_days': kw.get('window_days')})
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability", fake_sws)
+    plain = []
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: plain.append(1) or _canned_res(None))
+
+    b.chk_stability_filter.value = True
+    b.rb_stability_window_auto.value = 7
+    b.ft_stability_threshold.value = 1.5
+    b.btn_lucj_run.click()
+
+    assert calls['kw']['window_days'] == 7
+    assert calls['kw']['threshold'] == 1.5
+    assert plain == []                                         # plain NOT called
+
+
+# ── t3: the three banner states ─────────────────────────────────────────────
+
+def test_banner_states(monkeypatch):
+    b = _build(monkeypatch, history=True)
+    holder = {}
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+                        lambda *a, **k: _canned_res(holder['stab']))
+    b.chk_stability_filter.value = True
+
+    holder['stab'] = {'available': True, 'relaxed': False,
+                      'excluded_final': [1, 2, 3, 4], 'window_days': 14}
+    b.btn_lucj_run.click()
+    assert 'filtered 4 volatile qubits' in b.lbl_lucj_stability.value
+    assert 'window 14d' in b.lbl_lucj_stability.value
+
+    holder['stab'] = {'available': True, 'relaxed': True,
+                      'n_readmitted': 2, 'n_excluded_initial': 6}
+    b.btn_lucj_run.click()
+    assert 'too strict' in b.lbl_lucj_stability.value
+    assert 're-admitted 2 of 6' in b.lbl_lucj_stability.value
+
+    holder['stab'] = {'available': False}
+    b.btn_lucj_run.click()
+    assert 'filter skipped' in b.lbl_lucj_stability.value
+
+
+# ── t4: scan rows carry stability badges ────────────────────────────────────
+
+def test_scan_stability_badges(monkeypatch):
+    b = _build(monkeypatch, history=True)
+
+    import qpu_mapper.qpu_scan as qs
+    monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
+        {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
+
+    def fake_scan(*a, **k):
+        return {'results': [
+            {'name': 'ibm_a', 'family': 'Heron', 'sweep': _canned_res(None),
+             'best_lqs': 0.5, 'best_k': 1, 'error': None,
+             'stability': {'available': True, 'relaxed': False,
+                           'excluded_final': [3, 4], 'window_days': 14}},
+            {'name': 'ibm_b', 'family': 'Heron', 'sweep': _canned_res(None),
+             'best_lqs': 0.4, 'best_k': 1, 'error': None,
+             'stability': {'available': False, 'reason': 'no cached history'}},
+        ], 'n_scanned': 2, 'n_failed': 0, 'n_skipped': 0}
+    monkeypatch.setattr(qs, 'scan_qpus', fake_scan)
+
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert '🛡 −2 qubits' in table                             # cached → filtered
+    assert 'n/a (no cached history)' in table                  # fresh → n/a
+
+
+# ── t5: filter OFF keeps the plain sweep path ───────────────────────────────
+
+def test_filter_off_uses_plain_sweep(monkeypatch):
+    b = _build(monkeypatch, history=True)
+
+    plain = []
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: plain.append(1) or _canned_res(None))
+    sws = []
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+                        lambda *a, **k: sws.append(1) or _canned_res({'available': True}))
+
+    assert b.chk_stability_filter.value is False               # default OFF
+    b.btn_lucj_run.click()
+    assert plain == [1]                                        # plain sweep used
+    assert sws == []                                          # filter engine untouched
+    assert b.lbl_lucj_stability.value == ""                    # no banner
