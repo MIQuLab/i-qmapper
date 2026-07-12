@@ -78,6 +78,7 @@ from .auto_lucj import (
     _get_two_q_gate_name,
     _make_backend_cmap_pygraph,
     _MAX_RAW_VF2_MAPPINGS,
+    _remove_nodes_from_graph,
     create_lucj_zigzag_layout,
 )
 
@@ -116,7 +117,7 @@ def _safe_gate_error(props, gate_name, u, v):
 
 def sweep_ancilla_layouts(norb, backend, props, *,
                           min_bridges=None, top_n=3,
-                          mapping_cap=None) -> dict:
+                          mapping_cap=None, exclude_qubits=None) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -133,6 +134,10 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         top_n: Max candidates returned per ancilla count.
         mapping_cap: Override the VF2 mapping cap (default
             ``auto_lucj._MAX_RAW_VF2_MAPPINGS``). Mainly for tests.
+        exclude_qubits: optional set of physical qubit ids to remove from the
+            coupling graph BEFORE template creation (a hard search-space
+            filter, e.g. volatile qubits from stability analysis). ``None`` or
+            empty → byte-for-byte identical to the unfiltered sweep.
 
     Returns {
       'strata': {k: [entry, ...]},        # k descending; len<=top_n each
@@ -141,6 +146,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
       'vf2_truncated': bool,              # 2000-cap hit (surface in UI!)
       'n_raw_embeddings': int,            # complete VF2 mappings used
       'n_candidates_scored': int,         # total variants scored (pre-dedupe)
+      'excluded_qubits': [...],           # sorted list actually pruned (empty
+                                          #   when exclude_qubits is None)
     }
     entry = {
       'layout': [...],                    # chain qubits (alpha+beta)
@@ -154,12 +161,29 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     }
     """
     # ---- 1. Build the backend graph and the k_max template ----------------
-    backend_graph = _make_backend_cmap_pygraph(backend=backend)
+    # `full_graph` keeps physical-qubit ids as node INDICES (props precompute
+    # relies on that). When excluding, we prune a SEPARATE `search_graph`:
+    # _remove_nodes_from_graph reindexes, so we tag physical ids into node
+    # data first and recover them via `_key_to_phys` when reading VF2 keys.
+    full_graph = _make_backend_cmap_pygraph(backend=backend)
+    excluded_sorted = sorted(int(q) for q in exclude_qubits) if exclude_qubits else []
+    if excluded_sorted:
+        for i in full_graph.node_indices():
+            full_graph[i] = i
+        search_graph = _remove_nodes_from_graph(full_graph, set(excluded_sorted))
+
+        def _key_to_phys(k):
+            return search_graph[k]
+    else:
+        search_graph = full_graph
+
+        def _key_to_phys(k):
+            return k
 
     k_max = (norb + 3) // 4  # ceil(norb / 4): the geometric bridge ceiling
     template, k_max_effective = create_lucj_zigzag_layout(
         num_orbitals=norb,
-        backend_coupling_graph=backend_graph,
+        backend_coupling_graph=search_graph,
         requested_bridges=k_max,
     )
     if k_max_effective < 1:
@@ -180,7 +204,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
 
     # ---- 3. Collect VF2 embeddings, detect truncation ---------------------
     cap = mapping_cap if mapping_cap is not None else _MAX_RAW_VF2_MAPPINGS
-    mappings = _collect_vf2_mappings(backend_graph, template, cap=cap)
+    mappings = _collect_vf2_mappings(search_graph, template, cap=cap)
     # The helper only *logs* truncation; detect it by the cap being reached.
     vf2_truncated = len(mappings) >= cap
     if vf2_truncated:
@@ -192,7 +216,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     for mapping in mappings:
         layout = [None] * expected_size
         for key, value in mapping.items():
-            layout[value] = key
+            layout[value] = _key_to_phys(key)
         if any(v is None for v in layout):
             _log.debug("Ancilla sweep: skipping incomplete VF2 mapping")
             continue
@@ -209,7 +233,10 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     if gate_name is None:
         raise RuntimeError("Could not determine the backend 2Q gate name.")
 
-    node_indices = list(backend_graph.node_indices())
+    # Precompute over the FULL graph (indices == physical ids). Excluded
+    # qubits/edges may be present here but never appear in any layout, so
+    # their entries are harmless.
+    node_indices = list(full_graph.node_indices())
     max_id = max(node_indices)
     # readout array indexed by physical qubit id; penalty for anything absent.
     readout = np.full(max_id + 1, _UNCALIBRATED_PENALTY, dtype=float)
@@ -217,7 +244,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         readout[q] = _safe_readout(props, q)
     # physical-edge -> gate error, keyed by frozenset so direction is moot.
     edge_err = {}
-    for u, v in backend_graph.edge_list():
+    for u, v in full_graph.edge_list():
         edge_err[frozenset((u, v))] = _safe_gate_error(props, gate_name, u, v)
 
     def _edge_e(a, b):
@@ -321,4 +348,5 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         'vf2_truncated': vf2_truncated,
         'n_raw_embeddings': n_raw_embeddings,
         'n_candidates_scored': n_candidates_scored,
+        'excluded_qubits': excluded_sorted,
     }
