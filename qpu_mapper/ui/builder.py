@@ -295,6 +295,11 @@ class MapperUIBuilder:
 
         # ── Auto-LUCJ callbacks (extracted to ui.lucj_panel.py) ──────
         from .lucj_panel import setup_lucj_callbacks
+        from ..async_util import default_spawn_bg, marshal_to_main
+        # Shared cell: ui.inter_qpu populates [0] with its handoff hook
+        # (reveal QPU-2 + prefill dropdown + stage candidate). Same
+        # deferred-wiring pattern as the QPU-1 title-refresh cell.
+        self._inter_qpu_handoff = [None]
         _lucj_ctx = _NS(
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
@@ -315,6 +320,14 @@ class MapperUIBuilder:
             lucj_multi_dropdowns=self._lucj_multi_dropdowns,
             refresh=self._refresh, get_export=self._get_export, update_view=lambda: self._update_view(),
             chk_line_only=self.chk_line_only,
+            # Multi-QPU scan (B2/B3/B4).
+            btn_scan_qpus=self.btn_scan_qpus,
+            chk_scan_other_families=self.chk_scan_other_families,
+            lbl_scan_progress=self.lbl_scan_progress,
+            scan_results_box=self.scan_results_box,
+            scan_spawn_bg=default_spawn_bg,
+            scan_marshal=marshal_to_main,
+            inter_qpu_handoff=self._inter_qpu_handoff,
         )
         setup_lucj_callbacks(_lucj_ctx)
 
@@ -511,6 +524,7 @@ class MapperUIBuilder:
                 qpu2_sidebar_box=_qpu2_sidebar_box,
                 qpu2_fig_box=_qpu2_fig_box,
                 full_ui=full_ui,
+                handoff_cell=self._inter_qpu_handoff,
             ))
 
         return full_ui, self.fig
@@ -1210,6 +1224,18 @@ class MapperUIBuilder:
         # Sweep truncation banner (VF2 cap hit); empty/hidden otherwise.
         self.lbl_lucj_trunc = HTML("")
 
+        # ── Multi-QPU scan cluster ───────────────────────────────
+        self.btn_scan_qpus = Button(
+            description='🌐 Scan all QPUs', button_style='info', layout=W,
+            tooltip='Run the ancilla sweep on every compatible account '
+                    'backend (same norb / min-ancillas as above)')
+        self.chk_scan_other_families = Checkbox(
+            value=False, description='include other families', layout=W,
+            tooltip='Scan every topology family, not just the current one '
+                    '(cross-family zigzag comparison is apples-to-oranges)')
+        self.lbl_scan_progress = HTML("")
+        self.scan_results_box = VBox([])
+
         # ── Inspect Layouts cluster ──────────────────────────────
         self.dd_lucj_layout = Dropdown(
             options=[], description='Layout:', layout=W,
@@ -1608,6 +1634,13 @@ class MapperUIBuilder:
             self.btn_lucj_run,
             self.lbl_lucj_trunc,
             self.lbl_lucj_status,
+            HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
+                 "🌐 Scan All QPUs</div>"),
+            self.btn_scan_qpus,
+            self.chk_scan_other_families,
+            self.lbl_scan_progress,
+            self.scan_results_box,
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
                  "📋 Inspect Layouts</div>"),
             self.dd_lucj_layout,

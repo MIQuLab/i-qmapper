@@ -4,6 +4,7 @@ ui.lucj_panel.py — LUCJ layout generation callbacks.
 Extracted from ui.py for maintainability. All functions receive
 a `ctx` SimpleNamespace with shared UI state and widgets.
 """
+import contextlib
 import logging
 
 from ipywidgets import Dropdown, HTML
@@ -12,6 +13,28 @@ from ..constants import hex_to_rgba
 from ..html_safe import esc
 
 _log = logging.getLogger(__name__)
+
+
+def _format_best_per_k(strata):
+    """"6→24.1% · 5→24.6% · 4→25.0% · 3→25.3%" — the LQS gradient across
+    strata (best product_score per k, k descending). Shows the trade-off
+    instead of a single size-biased "winner"."""
+    parts = []
+    for k in sorted(strata.keys(), reverse=True):
+        entries = strata[k]
+        if entries:
+            parts.append(f"{k}→{entries[0]['product_score'] * 100.0:.1f}%")
+    return ' · '.join(parts)
+
+
+def _format_sweep_status(res):
+    """One-line sweep summary (M2): 'Sweep: k=6..3 · 214 embeddings ·
+    best per k: ...'. All interpolations esc()'d."""
+    k_range = f"{res['k_max_effective']}..{res['min_bridges']}"
+    emb = f"{res['n_raw_embeddings']:,}"
+    per_k = _format_best_per_k(res.get('strata', {}))
+    return (f"Sweep: k={esc(k_range)} · {esc(emb)} embeddings · "
+            f"best per k: {esc(per_k)}")
 
 
 def setup_lucj_callbacks(ctx):
@@ -265,21 +288,13 @@ def setup_lucj_callbacks(ctx):
         else:
             lbl_lucj_trunc.value = ""
 
-        # One-line summary (U6). product_score is comparable across strata,
-        # so the global best is a plain max over the flat list.
-        best = max(flat, key=lambda e: e['product_score']) if flat else None
-        if best is not None:
-            best_lqs = f"{best['product_score'] * 100.0:.1f}%"
-            best_k = len(best['ancillas'])
-            k_range = f"{res['k_max_effective']}..{res['min_bridges']}"
-            emb = f"{res['n_raw_embeddings']:,}"
-            cand = f"{res['n_candidates_scored']:,}"
+        # One-line summary (M2): per-stratum LQS gradient, NOT a single
+        # size-biased "best LQS" (product_score always favours fewer bridges).
+        if flat:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-                f"margin:3px 0;'>✅ Sweep: k={esc(k_range)} · "
-                f"{esc(emb)} embeddings · {esc(cand)} candidates · "
-                f"best LQS {esc(best_lqs)} (k={esc(str(best_k))})</div>")
+                f"margin:3px 0;'>✅ {_format_sweep_status(res)}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
@@ -320,6 +335,219 @@ def setup_lucj_callbacks(ctx):
             btn_lucj_run.description = '🤖 Generate LUCJ Layout'
 
     btn_lucj_run.on_click(_on_lucj_generate)
+
+    # ── M1: sweep mode always scores → grey out the score checkbox ────
+    def _on_ancilla_mode_change(change=None):
+        # 'Auto' (-1) == sweep mode; the engine always computes LQS there,
+        # so the legacy "Score layouts" toggle is meaningless.
+        sweep_mode = (lucj_ancilla_dd.value is not None
+                      and lucj_ancilla_dd.value < 0)
+        lucj_chk_score.disabled = sweep_mode
+        lucj_chk_score.tooltip = ('Sweep always scores' if sweep_mode
+                                  else 'Score layouts (pick lowest error)')
+    lucj_ancilla_dd.observe(_on_ancilla_mode_change, names='value')
+    _on_ancilla_mode_change()  # set initial state (default -1 → disabled)
+
+    # ── B2/B3/B4: Multi-QPU scan ─────────────────────────────────
+    btn_scan_qpus = ctx.btn_scan_qpus
+    chk_scan_other_families = ctx.chk_scan_other_families
+    lbl_scan_progress = ctx.lbl_scan_progress
+    scan_results_box = ctx.scan_results_box
+    scan_spawn_bg = ctx.scan_spawn_bg
+    scan_marshal = ctx.scan_marshal
+    inter_qpu_handoff = ctx.inter_qpu_handoff  # shared cell → stage hook
+
+    _scan = {'progress': {}, 'order': []}
+    _STATUS_ICON = {'start': '⏳', 'ok': '✓', 'skipped': '·', 'error': '✗'}
+
+    def _render_progress_line():
+        chips = []
+        for name in _scan['order']:
+            st, detail = _scan['progress'].get(name, ('', ''))
+            txt = f"{esc(str(name))} {_STATUS_ICON.get(st, '')}"
+            if st == 'error' and detail:
+                txt += f" {esc(str(detail))}"
+            chips.append(txt)
+        lbl_scan_progress.value = (
+            ("<div style='font-size:13px;color:#555;margin:3px 0;'>"
+             + " · ".join(chips) + "</div>") if chips else "")
+
+    def _on_scan_progress(name, status, detail=''):
+        # Called from the WORKER thread — NEVER touch widgets here. Marshal
+        # the widget mutation onto the main loop.
+        def _apply():
+            if name not in _scan['progress']:
+                _scan['order'].append(name)
+            _scan['progress'][name] = (status, detail)
+            _render_progress_line()
+        scan_marshal(_apply)
+
+    def _entry_label(entry):
+        k = len(entry['ancillas'])
+        return (f"k={k} · #{entry['rank_in_stratum']} · "
+                f"LQS {entry['product_score'] * 100.0:.1f}%")
+
+    def _render_targets(targets):
+        rows = []
+        for t in targets:
+            if t['eligible']:
+                rows.append(f"<span style='color:#1e8449;'>"
+                            f"{esc(str(t['name']))} ✓</span>")
+            else:
+                rows.append(f"<span style='color:#999;'>{esc(str(t['name']))} "
+                            f"— {esc(str(t['reason']))}</span>")
+        scan_results_box.children = [HTML(
+            "<div style='font-size:13px;margin:3px 0;'><b>Targets:</b><br>"
+            + "<br>".join(rows) + "</div>")]
+
+    def _stage_handoff(backend_name, candidate):
+        hook = inter_qpu_handoff[0] if inter_qpu_handoff else None
+        if hook is None:
+            lbl_scan_progress.value = (
+                "<div style='color:#e67e22;font-size:13px;'>Inter-QPU panel "
+                "unavailable — cannot open a remote candidate.</div>")
+            return
+        # A handoff must never break the scan UI.
+        with contextlib.suppress(Exception):
+            hook(backend_name, candidate)
+
+    def _render_results(scan_result):
+        results = scan_result['results']
+        head = ("<table style='font-size:13px;border-collapse:collapse;'>"
+                "<tr style='background:#eaf2f8;'>"
+                "<th style='padding:3px 8px;text-align:left;'>QPU</th>"
+                "<th style='padding:3px 8px;'>family</th>"
+                "<th style='padding:3px 8px;'>best LQS</th>"
+                "<th style='padding:3px 8px;'>k</th>"
+                "<th style='padding:3px 8px;'>cands</th></tr>")
+        body = []
+        for r in results:
+            name = esc(str(r['name']))
+            fam = esc(str(r['family'] or '?'))
+            if r['error']:
+                body.append(
+                    f"<tr style='color:#999;background:#f7f7f7;'>"
+                    f"<td style='padding:3px 8px;'>{name}</td>"
+                    f"<td style='padding:3px 8px;'>{fam}</td>"
+                    f"<td colspan='3' style='padding:3px 8px;'>✗ "
+                    f"{esc(str(r['error']))}</td></tr>")
+            elif r['best_lqs'] is None:
+                body.append(
+                    f"<tr style='color:#999;'>"
+                    f"<td style='padding:3px 8px;'>{name}</td>"
+                    f"<td style='padding:3px 8px;'>{fam}</td>"
+                    f"<td colspan='3' style='padding:3px 8px;'>no candidates"
+                    f"</td></tr>")
+            else:
+                lqs = esc(f"{r['best_lqs'] * 100.0:.1f}%")
+                ncand = sum(len(v) for v in r['sweep']['strata'].values())
+                body.append(
+                    f"<tr><td style='padding:3px 8px;'>{name}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>{fam}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>{lqs}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{esc(str(r['best_k']))}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{esc(str(ncand))}</td></tr>")
+        children = [HTML(head + "".join(body) + "</table>")]
+
+        # Per-QPU stratified dropdowns (same label format as single-circuit).
+        for r in results:
+            sweep = r.get('sweep')
+            if not sweep:
+                continue
+            strata = sweep['strata']
+            flat, dd_opts = [], []
+            for k in sorted(strata.keys(), reverse=True):
+                for entry in strata[k]:
+                    dd_opts.append((_entry_label(entry), len(flat)))
+                    flat.append(entry)
+            if not dd_opts:
+                continue
+            children.append(HTML(
+                f"<div style='font-weight:bold;margin:6px 0 2px;font-size:13px;'>"
+                f"{esc(str(r['name']))} — {_format_best_per_k(strata)}</div>"))
+            dd = Dropdown(options=dd_opts, value=None, description='Layout:',
+                          layout=W, style={'description_width': '50px'})
+            det = HTML("")
+
+            def _make_cb(qpu_name, flatlist, detail_lbl):
+                def _cb(change):
+                    idx = change['new']
+                    if idx is None or idx >= len(flatlist):
+                        return
+                    entry = flatlist[idx]
+                    detail_lbl.value = (
+                        f"<div style='font-size:13px;background:#f8f9fa;"
+                        f"padding:4px 6px;border-radius:3px;margin:2px 0;'>"
+                        f"α: {esc(', '.join(str(q) for q in entry['alpha']))}<br>"
+                        f"β: {esc(', '.join(str(q) for q in entry['beta']))}<br>"
+                        f"ancillas: "
+                        f"{esc(', '.join(str(q) for q in entry['ancillas']))}"
+                        f"</div>")
+                    # Drive the inter-QPU panel — NEVER touch C1 / current layout.
+                    _stage_handoff(qpu_name, entry)
+                return _cb
+            dd.observe(_make_cb(r['name'], flat, det), names='value')
+            children.extend([dd, det])
+
+        scan_results_box.children = children
+
+    def _on_scan_done(scan_result):
+        _render_results(scan_result)
+        btn_scan_qpus.disabled = False
+        btn_scan_qpus.description = '🌐 Scan all QPUs'
+
+    def _on_scan_error(err):
+        lbl_scan_progress.value = (
+            f"<div style='color:#e74c3c;font-size:13px;'>❌ Scan failed: "
+            f"{esc(str(err))}</div>")
+        btn_scan_qpus.disabled = False
+        btn_scan_qpus.description = '🌐 Scan all QPUs'
+
+    def _on_scan_click(b):
+        if state.active_backend is None or state.active_service is None:
+            lbl_scan_progress.value = (
+                "<span style='color:#e74c3c;font-size:13px;'>❌ Connect a "
+                "backend first.</span>")
+            return
+        from ..qpu_scan import list_scan_targets, scan_qpus, _detect_family
+        from ..props_shim import make_scan_get_props
+
+        norb = lucj_norb_slider.value
+        min_val = lucj_min_ancilla.value
+        min_bridges = None if (min_val is None or min_val <= 0) else min_val
+        try:
+            family = _detect_family(state.active_backend)
+        except Exception:
+            family = None
+
+        targets = list_scan_targets(
+            state, norb, same_family_as=family,
+            include_other_families=chk_scan_other_families.value)
+        _render_targets(targets)                # immediate feedback
+
+        eligible = [t for t in targets if t['eligible']]
+        if not eligible:
+            lbl_scan_progress.value = (
+                "<div style='color:#e67e22;font-size:13px;'>No eligible "
+                "backends for this norb / family scope.</div>")
+            return
+
+        _scan['progress'].clear()
+        _scan['order'].clear()
+        btn_scan_qpus.disabled = True
+        btn_scan_qpus.description = '⏳ Scanning...'
+        get_backend = state.active_service.backend
+        get_props = make_scan_get_props(state)
+
+        def _work():
+            return scan_qpus(eligible, norb, get_backend, get_props,
+                             min_bridges=min_bridges, top_n=3,
+                             progress_cb=_on_scan_progress)
+        scan_spawn_bg(_work, on_done=_on_scan_done, on_error=_on_scan_error)
+
+    btn_scan_qpus.on_click(_on_scan_click)
 
     # ── Multi-circuit LUCJ generate ──────────────────────────────
     def _on_lucj_multi(b):

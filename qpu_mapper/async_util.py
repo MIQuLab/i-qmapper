@@ -60,6 +60,21 @@ def _resolve_main_loop_scheduler():
     return lambda cb: cb()
 
 
+def marshal_to_main(cb):
+    """Schedule a zero-arg callback ``cb`` onto the kernel main loop.
+
+    The incremental-update counterpart to :func:`default_spawn_bg` (which
+    only marshals completion). Use it to push progress updates from a worker
+    thread to widgets without ever touching them off-thread. Reuses the same
+    cached scheduler. Safe to call from any thread; on a kernel with no event
+    loop it falls back to running ``cb`` inline.
+    """
+    global _MAIN_LOOP_SCHEDULER
+    if _MAIN_LOOP_SCHEDULER is None:
+        _MAIN_LOOP_SCHEDULER = _resolve_main_loop_scheduler()
+    _MAIN_LOOP_SCHEDULER(cb)
+
+
 def default_spawn_bg(fn, on_done=None, on_error=None):
     """Run `fn()` in a daemon thread and marshal the completion callback
     (`on_done` or `on_error`) onto the main event loop.

@@ -31,10 +31,12 @@ The function wires observers by side effect on the widgets passed in, and
 returns the `refresh_qpu1_label` hook so `ui.backend_switch` can refresh
 the QPU-1 switcher label after a backend switch.
 """
+import contextlib
 import logging
 
 from ipywidgets import VBox, HTML, ToggleButtons
 
+from ..constants import hex_to_rgba
 from ..html_safe import esc
 from ..state import SessionState
 
@@ -93,6 +95,7 @@ def setup_inter_qpu(ctx):
     _dispose2 = [None]            # callable that unobserves all QPU 2 widgets
     _pre_inter_fig_size = [None, None]  # (width, height) before toggling on
     _qpu_toggle = [None]          # ToggleButtons for QPU1/QPU2 sidebar swap
+    _pending_handoff = [None]     # (backend_name, candidate) staged from a scan pick
     _qpu2_content_box = [None]    # Container holding the QPU2 sidebar
 
     # ── Toggle handler ──────────────────────────────────────────
@@ -247,6 +250,47 @@ def setup_inter_qpu(ctx):
         toggle.options = options
         toggle.value = saved_value
 
+    # ── B5: remote-candidate handoff (scan → inter-QPU) ─────────
+    handoff_cell = getattr(ctx, 'handoff_cell', None)
+
+    def _apply_candidate_to_state(s2, candidate):
+        """Pre-load a scan-selected candidate onto QPU-2's layout state so
+        the secondary map renders it from its first paint. Called BEFORE
+        build_mapper_ui(s2), so no qubit-id filtering is possible yet — the
+        candidate's qubits are valid ids for that backend by construction."""
+        d = s2.layouts_data[0]
+        d['alpha'] = []; d['beta'] = []; d['other'] = []
+        d['qubits'] = []; d['ancilla'] = []; d['styles'] = {}
+        defs = d['defaults']
+        line = defs['line']
+        fills = {'alpha': hex_to_rgba(defs['fill'], 1.0),
+                 'beta': hex_to_rgba(defs['fill_beta'], 1.0),
+                 'ancilla': hex_to_rgba(defs['fill_anc'], 1.0)}
+        d['alpha'] = [str(q) for q in candidate['alpha']]
+        d['beta'] = [str(q) for q in candidate['beta']]
+        d['ancilla'] = [str(q) for q in candidate.get('ancillas', [])]
+        for role in ('alpha', 'beta', 'ancilla'):
+            for q in d[role]:
+                d['styles'][q] = {'fill': fills[role], 'line': line,
+                                  'width': 2, 'text_color': '#000000'}
+
+    def stage_remote_candidate(backend_name, candidate):
+        """Scan-side entry point: reveal the inter-QPU panel, prefill the
+        QPU-2 backend dropdown, and stage the candidate so it renders as
+        soon as the (user-clicked) connect completes."""
+        if not chk_inter_qpu.value:
+            chk_inter_qpu.value = True          # fires _on_toggle_inter_qpu
+        with contextlib.suppress(Exception):
+            dd_backend_qpu2.value = backend_name
+        _pending_handoff[0] = (backend_name, candidate)
+        lbl_qpu2_status.value = (
+            f"<span style='font-size:14px;color:#e67e22;'>Staged "
+            f"<b>{esc(str(backend_name))}</b> — click <b>Connect QPU 2</b> "
+            f"to view this candidate on its chip.</span>")
+
+    if handoff_cell is not None:
+        handoff_cell[0] = stage_remote_candidate
+
     # ── Connect-QPU2 handler ────────────────────────────────────
     def _on_connect_qpu2(b):
         backend_name = dd_backend_qpu2.value
@@ -292,6 +336,14 @@ def setup_inter_qpu(ctx):
             s2.initial_props = props
             s2.props_warning = props_warn
             s2.active_coords = new_coords
+
+            # B5: if this connect was staged from a scan pick for this
+            # backend, pre-load the chosen candidate so QPU-2 paints it.
+            pend = _pending_handoff[0]
+            if pend is not None and pend[0] == backend_name:
+                with contextlib.suppress(Exception):
+                    _apply_candidate_to_state(s2, pend[1])
+                _pending_handoff[0] = None
 
             # Build the FULL secondary UI — feature-parity with QPU 1.
             # build_mapper_ui internally calls _load_device_graph which
