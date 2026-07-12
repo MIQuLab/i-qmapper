@@ -17,3 +17,4 @@ htmlcov/
 .qpu_mapper_sessions/
 qpu_mapper/.qpu_calibration_cache/
 qpu_mapper/.qpu_mapper_sessions/
+.scratch/
