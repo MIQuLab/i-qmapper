@@ -298,8 +298,10 @@ class MapperUIBuilder:
         _lucj_ctx = _NS(
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
+            lucj_min_ancilla=self.lucj_min_ancilla,
             lucj_chk_score=self.lucj_chk_score, btn_lucj_run=self.btn_lucj_run,
-            lbl_lucj_status=self.lbl_lucj_status, dd_lucj_layout=self.dd_lucj_layout,
+            lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
+            dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
             lucj_multi_ancillas=self.lucj_multi_ancillas,
@@ -1178,12 +1180,25 @@ class MapperUIBuilder:
             description='Num Orbitals:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
+        # 'Auto' runs the stratified ancilla sweep (default). Picking an
+        # explicit 0..5 runs the legacy single-count search unchanged.
         self.lucj_ancilla_dd = Dropdown(
-            options=[('Auto (max ancillas)', -1), ('0 (no ancillas)', 0),
+            options=[('Auto (sweep all counts)', -1), ('0 (no ancillas)', 0),
                      ('1 ancilla', 1), ('2 ancillas', 2), ('3 ancillas', 3),
                      ('4 ancillas', 4), ('5 ancillas', 5)],
             value=-1, description='Ancilla:', layout=W,
-            style={'description_width': 'initial'})
+            style={'description_width': 'initial'},
+            tooltip='Fix the ancilla count (legacy single search); '
+                    'Auto runs the stratified sweep')
+        # Sweep-only floor. 0 = auto → engine default min(3, k_max). Only
+        # consulted when the Ancilla dropdown is on 'Auto'.
+        self.lucj_min_ancilla = BoundedIntText(
+            value=0, min=0, max=20,
+            description='Min ancillas:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='Sweep all counts from max down to this floor '
+                    '(0 = auto)')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
@@ -1192,6 +1207,8 @@ class MapperUIBuilder:
             description='🤖 Generate LUCJ Layout',
             button_style='success', layout=W)
         self.lbl_lucj_status = HTML("")
+        # Sweep truncation banner (VF2 cap hit); empty/hidden otherwise.
+        self.lbl_lucj_trunc = HTML("")
 
         # ── Inspect Layouts cluster ──────────────────────────────
         self.dd_lucj_layout = Dropdown(
@@ -1586,8 +1603,10 @@ class MapperUIBuilder:
                  "🔬 Single Circuit</div>"),
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
+            self.lucj_min_ancilla,
             self.lucj_chk_score,
             self.btn_lucj_run,
+            self.lbl_lucj_trunc,
             self.lbl_lucj_status,
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
                  "📋 Inspect Layouts</div>"),

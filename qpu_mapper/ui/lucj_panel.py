@@ -24,9 +24,11 @@ def setup_lucj_callbacks(ctx):
 
     lucj_norb_slider = ctx.lucj_norb_slider
     lucj_ancilla_dd = ctx.lucj_ancilla_dd
+    lucj_min_ancilla = ctx.lucj_min_ancilla
     lucj_chk_score = ctx.lucj_chk_score
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
+    lbl_lucj_trunc = ctx.lbl_lucj_trunc
     dd_lucj_layout = ctx.dd_lucj_layout
     lbl_lucj_detail = ctx.lbl_lucj_detail
 
@@ -102,6 +104,18 @@ def setup_lucj_callbacks(ctx):
         for q in d['beta']:
             d['styles'][q] = {'fill': beta_fill,
                               'line': _line, 'width': _width, 'text_color': _text}
+        # Sweep candidates carry their kept bridges in entry['ancillas'];
+        # place them as the ancilla role (green) so a derived k<k_max
+        # candidate renders with exactly its own ancilla count. Legacy
+        # single-k entries have no 'ancillas' key -> no ancillas placed
+        # (unchanged behaviour).
+        anc_color = d['defaults']['fill_anc']
+        anc_fill = 'none' if line_only else hex_to_rgba(anc_color, 1.0)
+        d['ancilla'] = [str(q) for q in entry.get('ancillas', [])
+                        if str(q) in state.qubit_ids]
+        for q in d['ancilla']:
+            d['styles'][q] = {'fill': anc_fill,
+                              'line': _line, 'width': _width, 'text_color': _text}
         _refresh()
         _get_export()
 
@@ -112,15 +126,165 @@ def setup_lucj_callbacks(ctx):
             return
         entry = _lucj_all_layouts[idx]
         _apply_lucj_layout(entry)
-        sc = f"{entry['score']:.4f}" if entry['score'] is not None else "N/A"
-        lbl_lucj_detail.value = (
-            f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
-            f"border-radius:4px;border:1px solid #dee2e6;margin:3px 0;'>"
-            f"<b>#{entry['rank']}</b> (err={sc})<br>"
-            f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
-            f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
-        )
+        if 'product_score' in entry:
+            # Sweep candidate: multiplicative LQS is the headline; the
+            # additive sum (size-biased across k) goes in the detail only.
+            k = len(entry['ancillas'])
+            lqs = entry['product_score'] * 100.0
+            header = (f"<b>k={k} · #{entry['rank_in_stratum']}</b> "
+                      f"· LQS {lqs:.1f}% "
+                      f"<span style='color:#888;'>(add {entry['additive_score']:.4f}, "
+                      f"{esc(str(entry.get('source', '')))})</span>")
+            anc = ', '.join(str(q) for q in entry['ancillas'])
+            lbl_lucj_detail.value = (
+                f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
+                f"border-radius:4px;border:1px solid #dee2e6;margin:3px 0;'>"
+                f"{header}<br>"
+                f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
+                f"β: {', '.join(str(q) for q in entry['beta'])}<br>"
+                f"ancillas: {anc}</div>"
+            )
+        else:
+            sc = f"{entry['score']:.4f}" if entry['score'] is not None else "N/A"
+            lbl_lucj_detail.value = (
+                f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
+                f"border-radius:4px;border:1px solid #dee2e6;margin:3px 0;'>"
+                f"<b>#{entry['rank']}</b> (err={sc})<br>"
+                f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
+                f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
+            )
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
+
+    # ── Dropdown re-seed helper (observer-safe) ──────────────────
+    def _seed_layout_dropdown(entries, dd_opts):
+        """Store `entries` as the flat candidate list and re-seed
+        dd_lucj_layout without firing the select observer, then apply the
+        first entry. Shared by the legacy and sweep paths."""
+        _lucj_all_layouts.clear()
+        _lucj_all_layouts.extend(entries)
+        # Suppress observer firing while re-seeding: otherwise setting
+        # value=0 fires _on_lucj_layout_select → apply, then we apply again
+        # below — double push_undo + redundant refresh. Same unobserve →
+        # set → observe dance as _reoptimize_downstream.
+        dd_lucj_layout.unobserve(_on_lucj_layout_select, names='value')
+        dd_lucj_layout.options = dd_opts
+        dd_lucj_layout.value = 0 if dd_opts else None
+        dd_lucj_layout.disabled = not dd_opts
+        dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
+        if entries:
+            _apply_lucj_layout(entries[0])
+
+    # ── Legacy single-count search ───────────────────────────────
+    def _generate_legacy(norb, requested_ancillas):
+        from ..auto_lucj import get_all_zigzag_layouts
+
+        all_layouts, num_ab = get_all_zigzag_layouts(
+            num_orbitals=norb,
+            backend=state.active_backend,
+            score=lucj_chk_score.value,
+            props=state.initial_props,
+            requested_bridges=requested_ancillas,
+        )
+
+        # Surface the geometric-cap clamp: auto_lucj logs a stderr
+        # warning when the requested bridges exceed ceil(norb/4), but
+        # Jupyter hides stderr — without this the user saw
+        # "ancillas=1" with no hint that their "5" was clamped.
+        ancilla_note = ""
+        if (requested_ancillas is not None
+                and requested_ancillas >= 0
+                and requested_ancillas != num_ab):
+            ancilla_note = (
+                f"<br>⚠️ You requested <b>{requested_ancillas}</b> "
+                f"ancilla(s) but the zigzag geometry only allows "
+                f"<b>{num_ab}</b> for norb={norb} (max one bridge "
+                f"every 4 orbitals)."
+            )
+
+        dd_opts = []
+        for entry in all_layouts:
+            sc = f"err={entry['score']:.4f}" if entry['score'] is not None else "?"
+            dd_opts.append((
+                f"#{entry['rank']} ({sc}) α:[{entry['alpha'][0]}..{entry['alpha'][-1]}]",
+                entry['rank'] - 1,
+            ))
+        _seed_layout_dropdown(all_layouts, dd_opts)
+
+        best = all_layouts[0]
+        if best['score'] is None and lucj_chk_score.value:
+            lbl_lucj_status.value = (
+                f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;padding:4px 8px;"
+                f"border-radius:4px;border:1px solid #fdebd0;margin:3px 0;'>"
+                f"⚠️ Scoring unavailable (no calibration data). "
+                f"<b>{len(all_layouts)}</b> layouts found (unsorted). "
+                f"ancillas={num_ab}{ancilla_note}</div>")
+        else:
+            sc = f"{best['score']:.4f}" if best['score'] is not None else "N/A"
+            lbl_lucj_status.value = (
+                f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;padding:4px 8px;"
+                f"border-radius:4px;border:1px solid #abebc6;margin:3px 0;'>"
+                f"✅ <b>{len(all_layouts)}</b> layouts found (norb={norb}, "
+                f"ancillas={num_ab}). Best: err={sc}{ancilla_note}</div>")
+
+    # ── Stratified ancilla sweep (new default) ───────────────────
+    def _generate_sweep(norb):
+        from ..ancilla_sweep import sweep_ancilla_layouts
+
+        # 0 (or blank) → engine default min(3, k_max); else the user floor.
+        min_val = lucj_min_ancilla.value
+        min_bridges = None if (min_val is None or min_val <= 0) else min_val
+
+        res = sweep_ancilla_layouts(
+            norb, state.active_backend, state.initial_props,
+            min_bridges=min_bridges)
+
+        strata = res['strata']
+        # Flatten k descending, entries in stratum order; the dropdown value
+        # is the flat index. Label format is fixed: "k=4 · #1 · LQS 25.3%".
+        flat = []
+        dd_opts = []
+        for k in sorted(strata.keys(), reverse=True):
+            for entry in strata[k]:
+                lqs = entry['product_score'] * 100.0
+                dd_opts.append((
+                    f"k={k} · #{entry['rank_in_stratum']} · LQS {lqs:.1f}%",
+                    len(flat),
+                ))
+                flat.append(entry)
+
+        _seed_layout_dropdown(flat, dd_opts)
+
+        # Truncation banner (U5): visible only when the VF2 cap was hit.
+        if res['vf2_truncated']:
+            lbl_lucj_trunc.value = (
+                f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
+                f"margin:3px 0;'>⚠️ Enumeration capped at "
+                f"{esc(str(res['n_raw_embeddings']))} mappings — ranking may "
+                f"be non-exhaustive.</div>")
+        else:
+            lbl_lucj_trunc.value = ""
+
+        # One-line summary (U6). product_score is comparable across strata,
+        # so the global best is a plain max over the flat list.
+        best = max(flat, key=lambda e: e['product_score']) if flat else None
+        if best is not None:
+            best_lqs = f"{best['product_score'] * 100.0:.1f}%"
+            best_k = len(best['ancillas'])
+            k_range = f"{res['k_max_effective']}..{res['min_bridges']}"
+            emb = f"{res['n_raw_embeddings']:,}"
+            cand = f"{res['n_candidates_scored']:,}"
+            lbl_lucj_status.value = (
+                f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+                f"margin:3px 0;'>✅ Sweep: k={esc(k_range)} · "
+                f"{esc(emb)} embeddings · {esc(cand)} candidates · "
+                f"best LQS {esc(best_lqs)} (k={esc(str(best_k))})</div>")
+        else:
+            lbl_lucj_status.value = (
+                f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
+                f"margin:3px 0;'>⚠️ Sweep produced no candidates.</div>")
 
     # ── Single circuit LUCJ generate ─────────────────────────────
     def _on_lucj_generate(b):
@@ -137,72 +301,15 @@ def setup_lucj_callbacks(ctx):
         btn_lucj_run.disabled = True
         btn_lucj_run.description = '⏳ Generating...'
         lbl_lucj_status.value = ""
+        lbl_lucj_trunc.value = ""
         try:
-            from ..auto_lucj import get_all_zigzag_layouts
-
             requested_ancillas = lucj_ancilla_dd.value
-            all_layouts, num_ab = get_all_zigzag_layouts(
-                num_orbitals=norb,
-                backend=state.active_backend,
-                score=lucj_chk_score.value,
-                props=state.initial_props,
-                requested_bridges=requested_ancillas,
-            )
-
-            # Surface the geometric-cap clamp: auto_lucj logs a stderr
-            # warning when the requested bridges exceed ceil(norb/4), but
-            # Jupyter hides stderr — without this the user saw
-            # "ancillas=1" with no hint that their "5" was clamped.
-            ancilla_note = ""
-            if (requested_ancillas is not None
-                    and requested_ancillas >= 0
-                    and requested_ancillas != num_ab):
-                ancilla_note = (
-                    f"<br>⚠️ You requested <b>{requested_ancillas}</b> "
-                    f"ancilla(s) but the zigzag geometry only allows "
-                    f"<b>{num_ab}</b> for norb={norb} (max one bridge "
-                    f"every 4 orbitals)."
-                )
-
-            _lucj_all_layouts.clear()
-            _lucj_all_layouts.extend(all_layouts)
-
-            # Populate dropdown
-            dd_opts = []
-            for entry in all_layouts:
-                sc = f"err={entry['score']:.4f}" if entry['score'] is not None else "?"
-                dd_opts.append((
-                    f"#{entry['rank']} ({sc}) α:[{entry['alpha'][0]}..{entry['alpha'][-1]}]",
-                    entry['rank'] - 1,
-                ))
-            # Suppress observer firing while re-seeding: otherwise
-            # setting value=0 fires _on_lucj_layout_select → apply, then
-            # we apply again below — double push_undo + redundant refresh.
-            # Same unobserve → set → observe dance as _reoptimize_downstream.
-            dd_lucj_layout.unobserve(_on_lucj_layout_select, names='value')
-            dd_lucj_layout.options = dd_opts
-            dd_lucj_layout.value = 0
-            dd_lucj_layout.disabled = False
-            dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
-
-            best = all_layouts[0]
-            _apply_lucj_layout(best)
-
-            if best['score'] is None and lucj_chk_score.value:
-                lbl_lucj_status.value = (
-                    f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;padding:4px 8px;"
-                    f"border-radius:4px;border:1px solid #fdebd0;margin:3px 0;'>"
-                    f"⚠️ Scoring unavailable (no calibration data). "
-                    f"<b>{len(all_layouts)}</b> layouts found (unsorted). "
-                    f"ancillas={num_ab}{ancilla_note}</div>")
+            # Exact count picked (>= 0) → legacy single-count search,
+            # unchanged. 'Auto' (-1) → stratified sweep (new default).
+            if requested_ancillas is not None and requested_ancillas >= 0:
+                _generate_legacy(norb, requested_ancillas)
             else:
-                sc = f"{best['score']:.4f}" if best['score'] is not None else "N/A"
-                lbl_lucj_status.value = (
-                    f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;padding:4px 8px;"
-                    f"border-radius:4px;border:1px solid #abebc6;margin:3px 0;'>"
-                    f"✅ <b>{len(all_layouts)}</b> layouts found (norb={norb}, "
-                    f"ancillas={num_ab}). Best: err={sc}{ancilla_note}</div>")
-
+                _generate_sweep(norb)
         except Exception as e:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e74c3c;background:#fdedec;padding:6px 10px;"

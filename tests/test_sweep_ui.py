@@ -1,0 +1,182 @@
+"""Headless tests for the Auto-tab ancilla-sweep UI wiring (Component 1b+2).
+
+Builds the real MapperUIBuilder with the data layer stubbed (deterministic
+8-qubit line device, offline) and monkeypatches the engine entry points so
+NO real VF2 runs in the UI tests. Exercises: sweep-mode dropdown population +
+label format, legacy-mode routing, apply-on-select (chains + kept ancillas),
+the truncation banner, and engine-ValueError surfacing.
+"""
+import numpy as np
+import pytest
+
+
+def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
+    """Deterministic 8-qubit line device (enough qubits for a k=3 candidate)."""
+    n = 8
+    x = list(range(n))
+    y = [0.0] * n
+    edges = [(i, i + 1) for i in range(n - 1)]
+    qids = [str(i) for i in range(n)]
+    readout = np.array([0.01 * (i + 1) for i in range(n)])
+    gate = np.array([0.001 * (i + 1) for i in range(len(edges))])
+    return x, y, edges, qids, readout, gate
+
+
+@pytest.fixture
+def builder(monkeypatch):
+    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+    from qpu_mapper.state import SessionState
+    from qpu_mapper.ui.builder import MapperUIBuilder
+
+    state = SessionState()
+    state.active_backend = object()          # non-None, and NO .coords attr
+    state.active_backend_name = "stub"
+    state.active_chip = "stub_chip"
+    state.active_service = None
+    state.available_backends = []
+    state.props_warning = None
+    state.initial_props = object()           # opaque; engine is monkeypatched
+    state.active_ansatz = "lucj"
+    state.active_vendor = "IBM"
+    state.active_coords = []
+    state.custom_colors = []
+    state.cal_history_dates = ["_seed_"]     # skip the bg auto-load thread
+
+    b = MapperUIBuilder(state)
+    b.build()
+    return b
+
+
+def _labels(dd):
+    return [opt[0] if isinstance(opt, tuple) else opt for opt in dd.options]
+
+
+def _fake_sweep_result(vf2_truncated=False):
+    """Crafted stratified result: k_max=3, strata 3/2/1, one entry each.
+    product_score chosen so LQS renders as 20.0 / 30.0 / 40.0%."""
+    def entry(anc, prod, add, src):
+        return {
+            'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+            'ancillas': anc, 'bridge_slots': tuple(range(0, 4 * len(anc), 4)),
+            'product_score': prod, 'additive_score': add,
+            'rank_in_stratum': 1, 'source': src,
+        }
+    return {
+        'strata': {
+            3: [entry([4, 5, 6], 0.20, 1.0, 'vf2')],
+            2: [entry([4, 5], 0.30, 0.8, 'derived')],
+            1: [entry([4], 0.40, 0.5, 'derived')],
+        },
+        'k_max_effective': 3, 'min_bridges': 1,
+        'vf2_truncated': vf2_truncated,
+        'n_raw_embeddings': 214, 'n_candidates_scored': 1891,
+    }
+
+
+# ── t1: sweep mode default → stratified dropdown, exact label format ────────
+
+def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: (calls.append((a, k)) or _fake_sweep_result()))
+
+    b = builder
+    assert b.lucj_ancilla_dd.value == -1          # 'Auto' is the default
+    b.btn_lucj_run.click()
+
+    assert len(calls) == 1                          # sweep path taken
+    assert _labels(b.dd_lucj_layout) == [
+        "k=3 · #1 · LQS 20.0%",
+        "k=2 · #1 · LQS 30.0%",
+        "k=1 · #1 · LQS 40.0%",
+    ]
+    # k descending, values are flat indices.
+    assert [opt[1] for opt in b.dd_lucj_layout.options] == [0, 1, 2]
+
+
+# ── t2: legacy mode → single-search path, sweep NOT called ──────────────────
+
+def test_legacy_mode_skips_sweep(builder, monkeypatch):
+    sweep_calls, legacy_calls = [], []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: sweep_calls.append(1) or _fake_sweep_result())
+
+    def fake_legacy(*a, **k):
+        legacy_calls.append((a, k))
+        return ([{'alpha': [0, 1], 'beta': [2, 3], 'score': 0.05, 'rank': 1}], 2)
+    monkeypatch.setattr(
+        "qpu_mapper.auto_lucj.get_all_zigzag_layouts", fake_legacy)
+
+    b = builder
+    b.lucj_ancilla_dd.value = 2                     # exact count → legacy
+    b.btn_lucj_run.click()
+
+    assert sweep_calls == []                         # sweep NOT called
+    assert len(legacy_calls) == 1                    # legacy called
+    # requested_bridges passed through as the exact count.
+    assert legacy_calls[0][1]['requested_bridges'] == 2
+
+
+# ── t3: apply a k=2 derived entry → chains + its 2 ancillas placed ──────────
+
+def test_apply_derived_candidate_places_chains_and_ancillas(builder, monkeypatch):
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: _fake_sweep_result())
+
+    b = builder
+    b.btn_lucj_run.click()                           # applies flat[0] (k=3)
+
+    # Select the k=2 derived entry (flat index 1).
+    b.dd_lucj_layout.value = 1
+
+    d = b.state.layouts_data[0]
+    assert d['alpha'] == ['0', '1']
+    assert d['beta'] == ['2', '3']
+    assert d['ancilla'] == ['4', '5']                # exactly its 2 kept bridges
+    # Consistent role lengths (the metadata downstream derives from).
+    assert (len(d['alpha']), len(d['beta']), len(d['ancilla'])) == (2, 2, 2)
+    assert d['other'] == [] and d['qubits'] == []
+    # Every placed qubit is styled.
+    for q in ['0', '1', '2', '3', '4', '5']:
+        assert q in d['styles']
+
+
+# ── t4: truncation banner visibility ────────────────────────────────────────
+
+def test_truncation_banner(builder, monkeypatch):
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: _fake_sweep_result(vf2_truncated=True))
+    b = builder
+    b.btn_lucj_run.click()
+    assert "capped at 214 mappings" in b.lbl_lucj_trunc.value
+    assert b.lbl_lucj_trunc.value != ""
+
+    # False → hidden (empty).
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: _fake_sweep_result(vf2_truncated=False))
+    b.btn_lucj_run.click()
+    assert b.lbl_lucj_trunc.value == ""
+
+
+# ── t5: engine ValueError surfaces as a friendly status, no traceback ───────
+
+def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
+    def boom(*a, **k):
+        raise ValueError("min_bridges=99 out of range; must satisfy "
+                         "1 <= min_bridges <= k_max_effective (3).")
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", boom)
+
+    b = builder
+    b.lucj_min_ancilla.value = 99
+    b.btn_lucj_run.click()                           # must NOT raise
+
+    assert "Error" in b.lbl_lucj_status.value
+    assert "min_bridges=99 out of range" in b.lbl_lucj_status.value
+    # UI stays usable: the button is re-enabled after the failure.
+    assert b.btn_lucj_run.disabled is False
