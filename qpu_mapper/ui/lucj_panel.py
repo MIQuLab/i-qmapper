@@ -102,6 +102,7 @@ def setup_lucj_callbacks(ctx):
     lucj_norb_slider = ctx.lucj_norb_slider
     lucj_ancilla_dd = ctx.lucj_ancilla_dd
     lucj_min_ancilla = ctx.lucj_min_ancilla
+    lucj_top_n = ctx.lucj_top_n
     lucj_chk_score = ctx.lucj_chk_score
     chk_deep_search = ctx.chk_deep_search
     btn_lucj_run = ctx.btn_lucj_run
@@ -307,9 +308,10 @@ def setup_lucj_callbacks(ctx):
         two can never diverge again (the tonight bug)."""
         min_val = lucj_min_ancilla.value
         min_bridges = None if (min_val is None or min_val <= 0) else min_val
+        top_val = lucj_top_n.value
         return {
             'min_bridges': min_bridges,
-            'top_n': 3,
+            'top_n': top_val if (top_val and top_val >= 1) else 3,
             'hybrid': chk_deep_search.value,
         }
 
@@ -424,13 +426,21 @@ def setup_lucj_callbacks(ctx):
 
         _seed_layout_dropdown(flat, dd_opts)
 
-        # Truncation banner (U5): visible only when the VF2 cap was hit.
+        # Truncation banner (U5/K3): visible only when the VF2 cap was hit.
+        # Name the REAL cap (mapping_cap) and WHICH strata truncated — not
+        # k_max's n_raw_embeddings, which is an embedding count, not the cap.
         if res['vf2_truncated']:
+            trunc_ks = sorted((k for k, m in res.get('per_stratum', {}).items()
+                               if m.get('truncated')), reverse=True)
+            ks_txt = (', '.join(f"k={k}" for k in trunc_ks)
+                      if trunc_ks else "one or more strata")
+            cap = res.get('mapping_cap')
+            cap_txt = f"{cap:,}" if isinstance(cap, int) else "the"
             lbl_lucj_trunc.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
-                f"margin:3px 0;'>⚠️ Enumeration capped at "
-                f"{esc(str(res['n_raw_embeddings']))} mappings — ranking may "
+                f"margin:3px 0;'>⚠️ direct search truncated at "
+                f"{esc(cap_txt)} mappings for {esc(ks_txt)} — ranking may "
                 f"be non-exhaustive.</div>")
         else:
             lbl_lucj_trunc.value = ""

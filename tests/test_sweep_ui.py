@@ -73,6 +73,13 @@ def _fake_sweep_result(vf2_truncated=False):
         'k_max_effective': 3, 'min_bridges': 1,
         'vf2_truncated': vf2_truncated,
         'n_raw_embeddings': 214, 'n_candidates_scored': 1891,
+        # (K3) real engine metadata: which strata hit the cap, and the cap.
+        'per_stratum': {
+            3: {'n_direct': 5, 'n_derived': 0, 'truncated': vf2_truncated},
+            2: {'n_direct': 0, 'n_derived': 5, 'truncated': False},
+            1: {'n_direct': 0, 'n_derived': 5, 'truncated': False},
+        },
+        'mapping_cap': 2000,
     }
 
 
@@ -115,6 +122,42 @@ def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
     ]
     # k descending, values are flat indices.
     assert [opt[1] for opt in b.dd_lucj_layout.options] == [0, 1, 2]
+
+
+# ── K4: the "Show top" field controls entries-per-stratum in the dropdown ───
+
+def _fake_sweep_topn(*a, **k):
+    """Echo the requested top_n: k_max=3, each stratum gets top_n entries."""
+    n = k['top_n']
+
+    def entry(kk, rank):
+        anc = list(range(4, 4 + kk))
+        return {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+                'ancillas': anc, 'bridge_slots': tuple(range(0, 4 * kk, 4)),
+                'product_score': 0.3, 'additive_score': 0.5, 'lqs_circuit': 0.3,
+                'rank_in_stratum': rank, 'source': 'derived'}
+    return {
+        'strata': {kk: [entry(kk, r + 1) for r in range(n)]
+                   for kk in (3, 2, 1)},
+        'k_max_effective': 3, 'min_bridges': 1, 'vf2_truncated': False,
+        'n_raw_embeddings': 50, 'n_candidates_scored': 90,
+        'per_stratum': {kk: {'n_direct': 0, 'n_derived': n, 'truncated': False}
+                        for kk in (3, 2, 1)},
+        'mapping_cap': 2000,
+    }
+
+
+def test_top_n_field_controls_dropdown_entries(builder, monkeypatch):
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        _fake_sweep_topn)
+    b = builder
+    b.lucj_top_n.value = 7                            # Show top = 7
+    b.btn_lucj_run.click()
+
+    labels = _labels(b.dd_lucj_layout)
+    for kk in (3, 2, 1):
+        assert sum(lbl.startswith(f"k={kk} · ") for lbl in labels) == 7
+    assert len(labels) == 21                          # 3 strata × 7
 
 
 # ── t2: legacy mode → single-search path, sweep NOT called ──────────────────
@@ -174,7 +217,9 @@ def test_truncation_banner(builder, monkeypatch):
         lambda *a, **k: _fake_sweep_result(vf2_truncated=True))
     b = builder
     b.btn_lucj_run.click()
-    assert "capped at 214 mappings" in b.lbl_lucj_trunc.value
+    # (K3) names the REAL cap and the truncated stratum — not n_raw_embeddings.
+    assert "truncated at 2,000 mappings for k=3" in b.lbl_lucj_trunc.value
+    assert "214" not in b.lbl_lucj_trunc.value          # old embedding-count gone
     assert b.lbl_lucj_trunc.value != ""
 
     # False → hidden (empty).

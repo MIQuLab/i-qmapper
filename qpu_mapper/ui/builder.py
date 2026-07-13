@@ -304,7 +304,7 @@ class MapperUIBuilder:
         _lucj_ctx = _NS(
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
-            lucj_min_ancilla=self.lucj_min_ancilla,
+            lucj_min_ancilla=self.lucj_min_ancilla, lucj_top_n=self.lucj_top_n,
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
@@ -1224,6 +1224,14 @@ class MapperUIBuilder:
             style={'description_width': '110px'},
             tooltip='Sweep all counts from max down to this floor '
                     '(0 = auto)')
+        # (K4) How many candidates to keep/show per ancilla count. Wired to the
+        # sweep's top_n through _sweep_kwargs_from_ui, so the scan inherits it.
+        self.lucj_top_n = BoundedIntText(
+            value=3, min=1, max=25,
+            description='Show top:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='candidates shown per ancilla count')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
@@ -1698,6 +1706,7 @@ class MapperUIBuilder:
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
+            self.lucj_top_n,
             self.lucj_chk_score,
             self.chk_deep_search,
             self.chk_stability_filter,

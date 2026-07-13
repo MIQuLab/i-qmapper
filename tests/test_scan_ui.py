@@ -315,6 +315,7 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
 
     b.chk_deep_search.value = False                 # a non-default value
     b.lucj_min_ancilla.value = 2
+    b.lucj_top_n.value = 7                           # (K4) non-default top_n
 
     b.btn_lucj_run.click()                          # local sweep
     local_kw = calls[-1]
@@ -325,6 +326,8 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     keys = ('min_bridges', 'top_n', 'hybrid')
     assert {k: local_kw.get(k) for k in keys} == {k: scan_kw.get(k) for k in keys}
     assert scan_kw['hybrid'] is False               # honored, not the engine default
+    # (K4) the Show-top field reaches BOTH paths — parity by construction.
+    assert local_kw['top_n'] == 7 and scan_kw['top_n'] == 7
 
 
 # ── P2: active backend skipped-with-reference (never re-searched) ───────────
