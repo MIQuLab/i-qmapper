@@ -37,6 +37,33 @@ def _format_sweep_status(res):
             f"best per k: {esc(per_k)}")
 
 
+def _k_cap_phrase(norb, k_effective):
+    """(N1) 'k capped at E (requested R)' when the geometric request
+    ceil(norb/4) exceeds what actually fit; '' otherwise. Pure metadata —
+    replaces the operator's need to read the repeated stderr warning."""
+    request = (norb + 3) // 4
+    if k_effective is not None and k_effective < request:
+        return f"k capped at {k_effective} (requested {request})"
+    return ""
+
+
+class _ScanNoticeCapture(logging.Handler):
+    """(N2) Captures WARNING+ records off the 'qpu_mapper' logger during a
+    scan, tagging each with the current backend context. emit() never raises
+    out — a logging hiccup must not break the scan."""
+
+    def __init__(self, context_getter):
+        super().__init__(level=logging.WARNING)
+        self._context_getter = context_getter
+        self.records = []            # list of (backend_context, message)
+
+    def emit(self, record):
+        try:
+            self.records.append((self._context_getter(), record.getMessage()))
+        except Exception:
+            pass
+
+
 def setup_lucj_callbacks(ctx):
     """Wire all LUCJ-related callbacks. Called from ui.py after widget creation."""
 
@@ -307,10 +334,12 @@ def setup_lucj_callbacks(ctx):
         # One-line summary (M2): per-stratum LQS gradient, NOT a single
         # size-biased "best LQS" (product_score always favours fewer bridges).
         if flat:
+            cap = _k_cap_phrase(norb, res.get('k_max_effective'))
+            cap_txt = f" · {esc(cap)}" if cap else ""
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-                f"margin:3px 0;'>✅ {_format_sweep_status(res)}</div>")
+                f"margin:3px 0;'>✅ {_format_sweep_status(res)}{cap_txt}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
@@ -529,6 +558,10 @@ def setup_lucj_callbacks(ctx):
     def _on_scan_progress(name, status, detail=''):
         # Called from the WORKER thread — NEVER touch widgets here. Marshal
         # the widget mutation onto the main loop.
+        # Track the active backend SYNCHRONOUSLY (before marshaling) so log
+        # records emitted by the sweep that follows are attributed correctly.
+        if status == 'start':
+            _scan['current'] = name
         def _apply():
             if name not in _scan['progress']:
                 _scan['order'].append(name)
@@ -599,6 +632,10 @@ def setup_lucj_callbacks(ctx):
             else:
                 lqs = esc(f"{r['best_lqs'] * 100.0:.1f}%")
                 ncand = sum(len(v) for v in r['sweep']['strata'].values())
+                cap = _k_cap_phrase(_scan.get('norb', 0),
+                                    r['sweep'].get('k_max_effective'))
+                cap_html = (f"<br><span style='color:#e67e22;'>{esc(cap)}</span>"
+                            if cap else "")
                 body.append(
                     f"<tr><td style='padding:3px 8px;'>{name}</td>"
                     f"<td style='padding:3px 8px;text-align:center;'>{fam}</td>"
@@ -608,7 +645,7 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{esc(str(ncand))}</td>"
                     f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{badge}</td></tr>")
+                    f"{badge}{cap_html}</td></tr>")
         children = [HTML(head + "".join(body) + "</table>")]
 
         # Per-QPU stratified dropdowns (same label format as single-circuit).
@@ -653,8 +690,34 @@ def setup_lucj_callbacks(ctx):
 
         scan_results_box.children = children
 
-    def _on_scan_done(scan_result):
+    def _append_notices(notices):
+        # (N2) Collapsible "⚠ notices (N)" under the results table:
+        # deduplicated messages (message → ×count), grouped by backend
+        # context. Hidden when empty.
+        if not notices:
+            return
+        from collections import OrderedDict
+        groups = OrderedDict()
+        for ctx, msg in notices:
+            groups.setdefault(ctx, OrderedDict())
+            groups[ctx][msg] = groups[ctx].get(msg, 0) + 1
+        parts = []
+        for ctx, msgs in groups.items():
+            parts.append(f"<b>{esc(str(ctx))}</b>")
+            for msg, cnt in msgs.items():
+                suffix = f" ×{cnt}" if cnt > 1 else ""
+                parts.append(f"&nbsp;&nbsp;{esc(msg)}{esc(suffix)}")
+        html = (
+            f"<details style='margin:6px 0;font-size:12px;color:#666;'>"
+            f"<summary>⚠ notices ({len(notices)})</summary>"
+            f"<div style='padding:4px 8px;'>" + "<br>".join(parts) + "</div>"
+            f"</details>")
+        scan_results_box.children = list(scan_results_box.children) + [HTML(html)]
+
+    def _on_scan_done(payload):
+        scan_result, notices = payload
         _render_results(scan_result)
+        _append_notices(notices)
         btn_scan_qpus.disabled = False
         btn_scan_qpus.description = '🌐 Scan all QPUs'
 
@@ -696,6 +759,8 @@ def setup_lucj_callbacks(ctx):
 
         _scan['progress'].clear()
         _scan['order'].clear()
+        _scan['current'] = None
+        _scan['norb'] = norb
         btn_scan_qpus.disabled = True
         btn_scan_qpus.description = '⏳ Scanning...'
         get_backend = state.active_service.backend
@@ -704,12 +769,32 @@ def setup_lucj_callbacks(ctx):
                            and chk_scan_stability.value)
 
         def _work():
-            if use_scan_filter:
-                return _scan_filtered(eligible, norb, get_backend, get_props,
-                                      min_bridges)
-            return scan_qpus(eligible, norb, get_backend, get_props,
-                             min_bridges=min_bridges, top_n=3,
-                             progress_cb=_on_scan_progress)
+            # (N2/N3) Capture WARNING+ off 'qpu_mapper' for the scan's
+            # duration and stop them leaking under the cell (propagate=False).
+            # Attach in try, restore BOTH in finally (done + error paths).
+            logger = logging.getLogger('qpu_mapper')
+            orig_propagate = logger.propagate
+            handler = _ScanNoticeCapture(lambda: _scan.get('current') or 'general')
+            try:
+                logger.addHandler(handler)
+                logger.propagate = False
+            except Exception:
+                pass
+            try:
+                if use_scan_filter:
+                    result = _scan_filtered(eligible, norb, get_backend,
+                                            get_props, min_bridges)
+                else:
+                    result = scan_qpus(eligible, norb, get_backend, get_props,
+                                       min_bridges=min_bridges, top_n=3,
+                                       progress_cb=_on_scan_progress)
+                return (result, list(handler.records))
+            finally:
+                try:
+                    logger.removeHandler(handler)
+                    logger.propagate = orig_propagate
+                except Exception:
+                    pass
         scan_spawn_bg(_work, on_done=_on_scan_done, on_error=_on_scan_error)
 
     btn_scan_qpus.on_click(_on_scan_click)
