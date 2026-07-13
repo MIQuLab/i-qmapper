@@ -188,15 +188,18 @@ def test_bridge_slots_are_prefix(backend, props):
 # ── F2d: a derived k' entry == its parent embedding's first-k' bridges ──────
 
 def test_prefix_legacy_equivalence(backend, props):
-    """A derived k' candidate must be indistinguishable from the original
+    """A DERIVED k' candidate must be indistinguishable from the original
     code computing exactly-k' on the same embedding: its kept ancilla
     physical qubits equal the first k' ancillas of a k_max parent on the
-    same chain (ancillas are stored in bridge-slot order)."""
+    same chain (ancillas are stored in bridge-slot order). Direct 'vf2'
+    hybrid entries are genuinely new chains and are exempt."""
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
     kmax = res['k_max_effective']
     parents = res['strata'][kmax]                     # full-ancilla vf2 entries
     for k, entries in res['strata'].items():
         for e in entries:
+            if e['source'] != 'derived':              # skip direct-VF2 entries
+                continue
             chain = frozenset(e['alpha']) | frozenset(e['beta'])
             assert any(
                 (frozenset(p['alpha']) | frozenset(p['beta'])) == chain
@@ -341,6 +344,119 @@ def test_truncation(backend, props):
         for e in entries:
             assert set(e) == ENTRY_FIELDS
             assert len(e['ancillas']) == k
+
+
+# ── Hybrid mode (H1) ────────────────────────────────────────────────────────
+
+def _regression_backend():
+    """A graph where the k_max (2-bridge) template ONLY fits a bad-qubit
+    corridor, but the k'=1 template ALSO fits a clean region:
+
+      * BAD block (0..23): full ladder, bridges at every column → hosts k=2
+        (through qubit 3, which is deliberately terrible).
+      * GOOD block (24..40): two clean chains with a bridge at column 0 ONLY
+        → hosts k=1 but NOT k=2 (no bridge at slot 4).
+    """
+    edges = []
+    top, bot, brg = list(range(8)), list(range(8, 16)), list(range(16, 24))
+    for j in range(7):
+        edges += [(top[j], top[j + 1]), (bot[j], bot[j + 1])]
+    for j in range(8):
+        edges += [(top[j], brg[j]), (brg[j], bot[j])]
+    gtop, gbot = list(range(24, 32)), list(range(32, 40))
+    for j in range(7):
+        edges += [(gtop[j], gtop[j + 1]), (gbot[j], gbot[j + 1])]
+    edges += [(gtop[0], 40), (40, gbot[0])]          # single bridge at col 0
+    g = rustworkx.PyDiGraph()
+    for i in range(41):
+        g.add_node(i)
+    for u, v in edges:
+        g.add_edge(u, v, None)
+    return SimpleNamespace(coupling_map=SimpleNamespace(graph=g),
+                           operation_names=['cz', 'sx', 'rz', 'x'])
+
+
+class _RegressionProps:
+    def readout_error(self, q):
+        if q == 3:
+            return 0.5                                # THE bad qubit
+        return 0.001 if q >= 24 else 0.02
+    def gate_error(self, name, edge):
+        u, v = edge
+        if 3 in (u, v):
+            return 0.5
+        return 0.001 if (u >= 24 and v >= 24) else 0.02
+
+
+def test_hybrid_regression_direct_finds_clean_chain():
+    """THE live finding: the direct per-k VF2 recovers a clean k=1 chain the
+    derived stratum cannot contain by construction."""
+    backend, props = _regression_backend(), _RegressionProps()
+
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
+    assert res['k_max_effective'] == 2
+    # k=2 only fits the BAD corridor → its top includes qubit 3.
+    k2 = res['strata'][2][0]
+    assert 3 in (set(k2['alpha']) | set(k2['beta']))
+    # k=1 #1 AVOIDS qubit 3, lives in the GOOD region, via the DIRECT pass.
+    k1 = res['strata'][1][0]
+    used = set(k1['alpha']) | set(k1['beta']) | set(k1['ancillas'])
+    assert 3 not in used
+    assert used <= set(range(24, 41))
+    assert k1['source'] == 'vf2'
+
+    # hybrid=False: derivation-only → the SAME stratum is all 'derived' and
+    # includes the bad qubit.
+    res0 = sweep_ancilla_layouts(8, backend, props, min_bridges=1,
+                                 top_n=1000, hybrid=False)
+    k1_0 = res0['strata'][1][0]
+    assert 3 in (set(k1_0['alpha']) | set(k1_0['beta']))
+    assert all(e['source'] == 'derived' for e in res0['strata'][1])
+
+
+def test_hybrid_false_byte_compatible(backend, props):
+    """hybrid=False → derivation-only: every k'<k_max entry is 'derived',
+    no direct pass ran."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1,
+                                top_n=1000, hybrid=False)
+    kmax = res['k_max_effective']
+    assert all(e['source'] == 'vf2' for e in res['strata'][kmax])
+    for k, entries in res['strata'].items():
+        if k < kmax:
+            assert all(e['source'] == 'derived' for e in entries)
+            assert res['per_stratum'][k]['n_direct'] == 0
+
+
+def test_hybrid_dedupe_both_paths():
+    """A chain found BOTH derived and direct appears once (unique keys)."""
+    backend, props = _regression_backend(), _RegressionProps()
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
+    for entries in res['strata'].values():
+        keys = [(frozenset(e['alpha']) | frozenset(e['beta']),
+                 frozenset(e['ancillas'])) for e in entries]
+        assert len(keys) == len(set(keys))
+
+
+def test_hybrid_truncation_aggregates(backend, props):
+    """Per-stratum truncation flags feed the aggregate vf2_truncated."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, mapping_cap=1)
+    assert res['vf2_truncated'] is True
+    assert any(m['truncated'] for m in res['per_stratum'].values())
+    assert res['per_stratum'][1]['truncated'] is True   # k=1 direct pass capped
+
+
+def test_hybrid_composes_with_exclude(backend, props):
+    """Direct VF2 runs on the pruned graph — no excluded qubit in any entry."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1,
+                                top_n=1000, exclude_qubits={4, 5})
+    assert res['excluded_qubits'] == [4, 5]
+    saw_vf2 = False
+    for entries in res['strata'].values():
+        for e in entries:
+            used = set(e['alpha']) | set(e['beta']) | set(e['ancillas'])
+            assert used.isdisjoint({4, 5})
+            saw_vf2 = saw_vf2 or e['source'] == 'vf2'
+    assert saw_vf2
 
 
 # ── performance smoke (reported wall time) ──────────────────────────────────

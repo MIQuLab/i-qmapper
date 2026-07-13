@@ -48,7 +48,7 @@ def _build(monkeypatch):
     state.active_backend = object()
     state.active_backend_name = "stub"
     state.active_chip = "stub_chip"
-    state.active_service = SimpleNamespace(backend=lambda n: object())
+    state.active_service = SimpleNamespace(backend=lambda n: SimpleNamespace(name=n))
     state.available_backends = ["ibm_a"]
     state.props_warning = None
     state.initial_props = object()
@@ -69,6 +69,14 @@ def _patch_targets(monkeypatch, names=('ibm_a',)):
         for n in names])
 
 
+def _patch_engine(monkeypatch, sweep_fn):
+    """Drive _scan_backends: per-target sweep + a stub props factory."""
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", sweep_fn)
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: SimpleNamespace(
+                            vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
+
+
 def _all_html(box):
     from ipywidgets import HTML
     return " ".join(c.value for c in box.children if isinstance(c, HTML))
@@ -79,14 +87,7 @@ def _all_html(box):
 def test_k_capped_row_note(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
-
-    def scan_capped(*a, **k):
-        return {'results': [{'name': 'ibm_a', 'family': 'Heron',
-                             'sweep': _sweep(k_max_effective=2),
-                             'best_lqs': 0.5, 'best_k': 2, 'error': None}],
-                'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0}
-    monkeypatch.setattr(qs, 'scan_qpus', scan_capped)
+    _patch_engine(monkeypatch, lambda *a, **k: _sweep(k_max_effective=2))
 
     b.lucj_norb_slider.value = 12                 # request = ceil(12/4) = 3
     b.btn_scan_qpus.click()
@@ -96,14 +97,7 @@ def test_k_capped_row_note(monkeypatch):
 def test_k_not_capped_no_note(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
-
-    def scan_ok(*a, **k):
-        return {'results': [{'name': 'ibm_a', 'family': 'Heron',
-                             'sweep': _sweep(k_max_effective=3),
-                             'best_lqs': 0.5, 'best_k': 3, 'error': None}],
-                'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0}
-    monkeypatch.setattr(qs, 'scan_qpus', scan_ok)
+    _patch_engine(monkeypatch, lambda *a, **k: _sweep(k_max_effective=3))
 
     b.lucj_norb_slider.value = 12                 # request = 3, k_eff = 3 → equal
     b.btn_scan_qpus.click()
@@ -118,18 +112,13 @@ def test_notices_capture_and_dedup(monkeypatch):
     import qpu_mapper.qpu_scan as qs
     lg = logging.getLogger('qpu_mapper')
 
-    def scan_warns(targets, norb, gb, gp, **kw):
-        cb = kw['progress_cb']
-        cb('ibm_a', 'start', '')
+    def sweep_warns(norb, backend, props, **kw):
+        # Runs while _scan['current'] == 'ibm_a' (set by the 'start' event).
         lg.warning("stale cache housekeeping")
         lg.warning("stale cache housekeeping")
         lg.warning("other notice")
-        cb('ibm_a', 'ok', '')
-        return {'results': [{'name': 'ibm_a', 'family': 'Heron',
-                             'sweep': _sweep(), 'best_lqs': 0.5, 'best_k': 1,
-                             'error': None}],
-                'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0}
-    monkeypatch.setattr(qs, 'scan_qpus', scan_warns)
+        return _sweep()
+    _patch_engine(monkeypatch, sweep_warns)
 
     b.btn_scan_qpus.click()
     html = _all_html(b.scan_results_box)
@@ -145,22 +134,18 @@ def test_notices_capture_and_dedup(monkeypatch):
 def test_logger_restored_after_scan(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
     lg = logging.getLogger('qpu_mapper')
     h0, p0 = list(lg.handlers), lg.propagate
 
-    monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {
-        'results': [{'name': 'ibm_a', 'family': 'Heron', 'sweep': _sweep(),
-                     'best_lqs': 0.5, 'best_k': 1, 'error': None}],
-        'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0})
-    b.btn_scan_qpus.click()
+    _patch_engine(monkeypatch, lambda *a, **k: _sweep())
+    b.btn_scan_qpus.click()                        # normal path
     assert list(lg.handlers) == h0
     assert lg.propagate == p0
 
-    def boom(*a, **k):
-        raise RuntimeError("scan blew up")
-    monkeypatch.setattr(qs, 'scan_qpus', boom)
-    b.btn_scan_qpus.click()                        # error path
+    # A malformed sweep makes _work raise (best_lqs loop is outside the
+    # per-target isolation) → the on_error/finally path must still restore.
+    _patch_engine(monkeypatch, lambda *a, **k: {'strata': None})
+    b.btn_scan_qpus.click()
     assert list(lg.handlers) == h0                 # still restored
     assert lg.propagate == p0
 
@@ -170,10 +155,6 @@ def test_logger_restored_after_scan(monkeypatch):
 def test_no_notices_section_when_empty(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
-    monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {
-        'results': [{'name': 'ibm_a', 'family': 'Heron', 'sweep': _sweep(),
-                     'best_lqs': 0.5, 'best_k': 1, 'error': None}],
-        'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0})
+    _patch_engine(monkeypatch, lambda *a, **k: _sweep())
     b.btn_scan_qpus.click()
     assert '⚠ notices' not in _all_html(b.scan_results_box)

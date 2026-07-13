@@ -202,3 +202,33 @@ def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
     assert "min_bridges=99 out of range" in b.lbl_lucj_status.value
     # UI stays usable: the button is re-enabled after the failure.
     assert b.btn_lucj_run.disabled is False
+
+
+# ── H2: the deep-search checkbox wires hybrid= and the M2 mode label ────────
+
+def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda *a, **k: (calls.append(k) or _fake_sweep_result()))
+    b = builder
+    b.chk_deep_search.value = False
+    b.btn_lucj_run.click()
+    assert calls[-1]['hybrid'] is False
+    b.chk_deep_search.value = True
+    b.btn_lucj_run.click()
+    assert calls[-1]['hybrid'] is True
+
+
+def test_sweep_mode_label():
+    from qpu_mapper.ui.lucj_panel import _sweep_mode_label
+    hy = {'k_max_effective': 3,
+          'per_stratum': {3: {'n_direct': 5, 'n_derived': 0},
+                          2: {'n_direct': 2, 'n_derived': 3},
+                          1: {'n_direct': 0, 'n_derived': 4}}}
+    assert _sweep_mode_label(hy) == 'direct+derived'      # k=2 got direct hits
+    dv = {'k_max_effective': 3,
+          'per_stratum': {3: {'n_direct': 5, 'n_derived': 0},
+                          2: {'n_direct': 0, 'n_derived': 3},
+                          1: {'n_direct': 0, 'n_derived': 4}}}
+    assert _sweep_mode_label(dv) == 'derived-only'

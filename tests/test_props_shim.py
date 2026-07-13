@@ -79,30 +79,198 @@ def test_custom_gate_key():
     assert shim.gate_error('ecr', (0, 1)) == pytest.approx(0.005)
 
 
-# ── factory: cache-hit reconstruction (no live fetch) ───────────────────────
+# ── L1/t1/t3/t5: remote scoring is LIVE — never a cache read ────────────────
 
-def test_factory_cache_hit(monkeypatch):
-    qp, gp, edges = _fixtures()
+def _fake_remote_backend(name='ibm_remote', n=4):
+    edges = [(0, 1), (1, 2), (2, 3)]
 
-    # Fake backend: coupling map + num_qubits + a 2Q gate + a name.
-    backend = SimpleNamespace(
-        name='ibm_fake',
-        num_qubits=4,
+    class _Props:
+        def readout_error(self, q):
+            return 0.02
+        def gate_error(self, gate_name, edge):
+            return 0.003
+    return SimpleNamespace(
+        name=name, num_qubits=n,
         coupling_map=SimpleNamespace(get_edges=lambda: list(edges)),
         operation_names=['cz', 'sx', 'rz', 'x'],
-    )
+        properties=lambda: _Props())
+
+
+def test_remote_scoring_is_live_never_cache_read(monkeypatch):
+    from datetime import datetime
+    from qpu_mapper import data
+    reads, saves, fetched = [], [], []
+    monkeypatch.setattr(data, 'list_known_calibrations',
+                        lambda *a, **k: reads.append('list') or [])
+    monkeypatch.setattr(data, '_load_calibration',
+                        lambda *a, **k: reads.append('load') or None)
+    monkeypatch.setattr(data, '_save_calibration',
+                        lambda *a, **k: saves.append(a))
+    monkeypatch.setattr(data, '_extract_last_update',
+                        lambda props: '2026-07-12 09:00:00')
+
+    backend = _fake_remote_backend()
+    inner = backend.properties
+    backend.properties = lambda: fetched.append(1) or inner()
+
+    state = SimpleNamespace(active_backend_name='current_other')
+    props = make_scan_get_props(state, now=datetime(2026, 7, 12, 9, 30))(backend)
+
+    assert fetched == [1]                 # t1: LIVE fetch happened
+    assert reads == []                    # t1: ZERO cache-read for scoring
+    assert saves                          # t3: warming save still happened
+    assert props.vintage == 'live · 09:30'  # t5: live · <fetch time>
+    assert props.readout_error(0) == pytest.approx(0.02)
+
+
+# ── V1: active backend scored on LIVE state props (cache NOT consulted) ──────
+
+def test_active_backend_uses_state_props_not_cache(monkeypatch):
+    qp = {'readout_error': np.array([0.01, 0.02, 0.03, 0.04])}
+    gp = {'cz_error': np.array([0.001, 0.002, 0.003])}
+    edges = [(0, 1), (1, 2), (2, 3)]
+    backend = SimpleNamespace(
+        name='ibm_active', num_qubits=4,
+        coupling_map=SimpleNamespace(get_edges=lambda: list(edges)),
+        operation_names=['cz', 'sx', 'rz', 'x'],
+        properties=lambda: (_ for _ in ()).throw(
+            AssertionError("must not fetch live for active backend")))
 
     from qpu_mapper import data
+    cache_calls = []
     monkeypatch.setattr(data, 'list_known_calibrations',
-                        lambda name, day: [{'last_update': '2026-07-12 09:00:00'}])
-    monkeypatch.setattr(data, '_load_calibration', lambda name, ts: (qp, gp))
-    # properties() must NOT be called on a cache hit.
-    backend.properties = lambda: (_ for _ in ()).throw(
-        AssertionError("live fetch on cache hit"))
+                        lambda name, date=None: cache_calls.append(name) or [])
+    monkeypatch.setattr(data, '_load_calibration',
+                        lambda name, ts: cache_calls.append(('load', name)) or None)
 
-    state = SimpleNamespace(active_backend_name='current')
-    get_props = make_scan_get_props(state, now='2026-07-12')
-    props = get_props(backend)
+    state = SimpleNamespace(
+        active_backend_name='ibm_active',
+        qubit_props_data=qp, gate_props_data=gp, edges_list=edges,
+        qubit_ids=['0', '1', '2', '3'])
+    props = make_scan_get_props(state)(backend)
 
-    assert props.readout_error(2) == pytest.approx(0.030)
-    assert props.gate_error('cz', (2, 1)) == pytest.approx(0.002)
+    assert cache_calls == []                       # cache NEVER consulted
+    assert props.vintage == 'live'
+
+    # Score equals the C1 wrapper on the same fixture (identical data path).
+    from qpu_mapper.export.scoring import estimate_circuit_fidelity
+    st = SimpleNamespace(
+        layouts_data={0: {'alpha': ['0', '1'], 'beta': ['2', '3'],
+                          'other': [], 'ancilla': []}},
+        qubit_props_data=qp, gate_props_data=gp,
+        qubit_ids=['0', '1', '2', '3'], edges_list=edges)
+    local = estimate_circuit_fidelity(st, 0, 'lucj')['fidelity']
+    assert props.score_layout([0, 1, 2, 3])['fidelity'] == pytest.approx(local)
+
+
+# ── L1/t2: a fetch failure raises (no cached fallback) ──────────────────────
+
+def test_remote_fetch_failure_raises_no_cache_fallback(monkeypatch):
+    from qpu_mapper import data
+    # A cached snapshot EXISTS, but it must NOT be used as a fallback.
+    monkeypatch.setattr(data, 'list_known_calibrations',
+                        lambda *a, **k: [{'last_update': '2026-07-05 08:00:00'}])
+    monkeypatch.setattr(data, '_load_calibration',
+                        lambda *a, **k: ({'readout_error': [0.01, 0.02]},
+                                         {'cz_error': [0.001]}))
+
+    backend = _fake_remote_backend()
+    backend.properties = lambda: (_ for _ in ()).throw(RuntimeError("network down"))
+    state = SimpleNamespace(active_backend_name='current_other')
+    with pytest.raises(RuntimeError):
+        make_scan_get_props(state)(backend)      # no silent cached fallback
+
+
+# ── D2 t1: the shim scores against ITS OWN edges, not the current state ─────
+
+def test_shim_scores_against_own_edges():
+    edges = [(0, 1), (1, 2), (2, 3)]
+    # Backend X: coupler (0,1) is DEAD. Backend Y: (0,1) is healthy.
+    x = CachedPropsShim({'readout_error': [0.001] * 4},
+                        {'cz_error': [1.0, 0.001, 0.001]}, edges)
+    y = CachedPropsShim({'readout_error': [0.001] * 4},
+                        {'cz_error': [0.001, 0.001, 0.001]}, edges)
+    # Candidate uses qubits 0,1,2 → only edges (0,1) and (1,2) count.
+    fx = x.score_layout([0, 1, 2])['fidelity']
+    fy = y.score_layout([0, 1, 2])['fidelity']
+    assert fx == pytest.approx(0.0)          # X's dead (0,1) → zero
+    assert fy > 0.9                          # Y's (0,1) healthy → high
+    # Each shim used its OWN per-edge errors, not a shared/state edge list.
+
+
+# ── D2 t2: the hard invariants reject a mispaired snapshot ──────────────────
+
+def test_gate_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        CachedPropsShim({'readout_error': [0.01] * 4},
+                        {'cz_error': [0.001, 0.001]},        # 2 != 3 edges
+                        [(0, 1), (1, 2), (2, 3)])
+
+
+def test_qubit_length_mismatch_raises():
+    with pytest.raises(ValueError):
+        CachedPropsShim({'readout_error': [0.01, 0.02, 0.03]},  # 3 != 4 qubits
+                        {'cz_error': [0.001]}, [(0, 1)], n_qubits=4)
+
+
+# ── D2 t3: end-to-end pin — shim score == core hand-built from same snapshot ─
+
+def test_shim_score_matches_core_handbuilt():
+    from qpu_mapper.export.scoring import estimate_fidelity_core
+    qp = {'readout_error': [0.01, 0.02, 0.03, 0.04]}
+    gp = {'cz_error': [0.001, 0.002, 1.0]}       # (2,3) dead
+    edges = [(0, 1), (1, 2), (2, 3)]
+    cand = [0, 1, 2, 3]
+
+    shim_score = CachedPropsShim(qp, gp, edges).score_layout(cand)['fidelity']
+
+    readout_by_id = {q: qp['readout_error'][q] for q in cand}
+    gate_edges = [(u, v, gp['cz_error'][i]) for i, (u, v) in enumerate(edges)]
+    core = estimate_fidelity_core(cand, readout_by_id, gate_edges,
+                                  all_readout=qp['readout_error'])['fidelity']
+
+    assert shim_score == pytest.approx(core)
+    assert shim_score == pytest.approx(0.0)      # dead coupler seen, not hidden
+
+
+# ── SYM-1 t1: score_layout scores the FULL directed surface (== C1 core) ─────
+
+def test_score_layout_full_directed_surface():
+    from qpu_mapper.export.scoring import estimate_fidelity_core
+    # Bidirectional coupling map + an INCIDENTAL edge (0,2) among the set
+    # (not on the chain path) carrying a large error.
+    edges = [(0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)]
+    cz = [0.01, 0.01, 0.01, 0.01, 0.30, 0.30]
+    qp = {'readout_error': [0.01, 0.01, 0.01]}
+    gp = {'cz_error': cz}
+    cand = [0, 1, 2]
+
+    shim = CachedPropsShim(qp, gp, edges)
+    sh = shim.score_layout(cand)
+
+    core = estimate_fidelity_core(
+        cand, {q: qp['readout_error'][q] for q in cand},
+        [(u, v, cz[i]) for i, (u, v) in enumerate(edges)],
+        all_readout=qp['readout_error'])
+
+    assert sh['fidelity'] == pytest.approx(core['fidelity'])
+    assert sh['n_gates'] == 6                      # all directed edges counted
+    # The incidental (0,2) 0.30 factor IS included (both dirs) — not skipped.
+    healthy_only = estimate_fidelity_core(
+        cand, {q: 0.01 for q in cand},
+        [(0, 1, 0.01), (1, 0, 0.01), (1, 2, 0.01), (2, 1, 0.01)],
+        all_readout=qp['readout_error'])
+    assert sh['fidelity'] < healthy_only['fidelity']
+
+
+# ── SYM-3 t2: shim uses ITS OWN edges (no current-state leak) ────────────────
+
+def test_shim_edges_are_its_own():
+    edges = [(5, 6), (6, 5), (6, 7), (7, 6)]        # backend X's own topology
+    shim = CachedPropsShim({'readout_error': [0.0] * 8},
+                           {'cz_error': [0.1, 0.1, 0.2, 0.2]}, edges, n_qubits=8)
+    assert shim._edges == [(5, 6), (6, 5), (6, 7), (7, 6)]   # X's edges verbatim
+    # A mismatched-length snapshot for a different topology → ValueError (F2).
+    with pytest.raises(ValueError):
+        CachedPropsShim({'readout_error': [0.0] * 8},
+                        {'cz_error': [0.1, 0.1]}, edges, n_qubits=8)

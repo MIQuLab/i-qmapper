@@ -1,14 +1,14 @@
-"""Headless tests for the multi-QPU scan UI (Component 3b) + M1/M2.
+"""Headless tests for the multi-QPU scan UI.
 
-Offline: the data layer is stubbed, and qpu_scan.scan_qpus / list_scan_targets
-are monkeypatched with canned results (no VF2, no network). The background
-spawn and the progress marshal primitive are injected synchronously so the
-handler runs deterministically.
+Offline: the scan runs through the single handler-side path (_scan_backends),
+so we monkeypatch the per-target sweep (ancilla_sweep.sweep_ancilla_layouts),
+list_scan_targets, and the props factory (make_scan_get_props → a stub with
+score_layout + vintage). The spawn and progress marshal are injected
+synchronously so the handler runs deterministically.
 """
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 from qpu_mapper.ui.lucj_panel import _format_sweep_status
 
@@ -42,21 +42,22 @@ def _sweep(prod_hi, prod_lo):
                 'rank_in_stratum': 1, 'source': 'vf2'}
     return {'strata': {2: [entry(prod_lo, 2)], 1: [entry(prod_hi, 1)]},
             'k_max_effective': 2, 'min_bridges': 1, 'vf2_truncated': False,
-            'n_raw_embeddings': 10, 'n_candidates_scored': 20}
+            'n_raw_embeddings': 10, 'n_candidates_scored': 20,
+            'per_stratum': {2: {'n_direct': 1, 'n_derived': 0, 'truncated': False},
+                            1: {'n_direct': 1, 'n_derived': 1, 'truncated': False}}}
 
 
-def _fake_scan_result(error='fetch failed'):
-    return {
-        'results': [
-            {'name': 'ibm_b', 'family': 'Heron', 'sweep': _sweep(0.60, 0.50),
-             'best_lqs': 0.60, 'best_k': 1, 'error': None},
-            {'name': 'ibm_a', 'family': 'Heron', 'sweep': _sweep(0.40, 0.30),
-             'best_lqs': 0.40, 'best_k': 1, 'error': None},
-            {'name': 'ibm_c', 'family': 'Nighthawk', 'sweep': None,
-             'best_lqs': None, 'best_k': None, 'error': error},
-        ],
-        'n_scanned': 2, 'n_failed': 1, 'n_skipped': 0,
-    }
+class _StubProps:
+    """Per-backend props stand-in: score_layout returns a fixed fidelity;
+    carries a vintage. score_layout raises when fid is None."""
+    def __init__(self, fid=0.5, vintage='live'):
+        self._fid = fid
+        self.vintage = vintage
+
+    def score_layout(self, qubits):
+        if self._fid is None:
+            raise RuntimeError("no circuit score")
+        return {'fidelity': self._fid}
 
 
 def _targets():
@@ -82,9 +83,9 @@ def _build(monkeypatch, spawn=_sync_spawn, marshal=None):
 
     state = SessionState()
     state.active_backend = object()
-    state.active_backend_name = "stub"
+    state.active_backend_name = "stub"          # NOT one of _targets → no ref row
     state.active_chip = "stub_chip"
-    state.active_service = SimpleNamespace(backend=lambda n: object())
+    state.active_service = SimpleNamespace(backend=lambda n: SimpleNamespace(name=n))
     state.available_backends = ["ibm_a", "ibm_b", "ibm_c"]
     state.props_warning = None
     state.initial_props = object()
@@ -99,20 +100,26 @@ def _build(monkeypatch, spawn=_sync_spawn, marshal=None):
     return b
 
 
-def _patch_scan(monkeypatch, result=None, capture_progress=False):
+def _patch_scan(monkeypatch, sweeps=None, props=None, targets=None):
+    """Drive _scan_backends: canned per-target sweep + stub props factory."""
     import qpu_mapper.qpu_scan as qs
-    monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: _targets())
-    res = result if result is not None else _fake_scan_result()
+    import qpu_mapper.ancilla_sweep as asw
+    import qpu_mapper.props_shim as ps
+    monkeypatch.setattr(qs, 'list_scan_targets',
+                        lambda *a, **k: targets or _targets())
+    sweeps = sweeps or {'ibm_b': _sweep(0.60, 0.50), 'ibm_a': _sweep(0.40, 0.30),
+                        'ibm_c': RuntimeError('fetch failed')}
 
-    def fake_scan(targets, norb, get_backend, get_props, **kw):
-        cb = kw.get('progress_cb')
-        if capture_progress and cb:
-            for r in res['results']:
-                cb(r['name'], 'start', '')
-                cb(r['name'], 'ok' if r['error'] is None else 'error',
-                   r['error'] or '')
-        return res
-    monkeypatch.setattr(qs, 'scan_qpus', fake_scan)
+    def fake_sweep(norb, backend, propsobj, **kw):
+        s = sweeps[backend.name]
+        if isinstance(s, Exception):
+            raise s
+        return s
+    monkeypatch.setattr(asw, 'sweep_ancilla_layouts', fake_sweep)
+    props = props or {'ibm_b': _StubProps(0.60), 'ibm_a': _StubProps(0.40),
+                      'ibm_c': _StubProps(0.0)}
+    monkeypatch.setattr(ps, 'make_scan_get_props',
+                        lambda state: (lambda backend: props[backend.name]))
 
 
 def _dropdowns(children):
@@ -120,7 +127,7 @@ def _dropdowns(children):
     return [c for c in children if isinstance(c, Dropdown)]
 
 
-# ── t2: scan happy path — table sorted, dropdowns, button re-enabled ────────
+# ── happy path — table sorted, dropdowns, button re-enabled ─────────────────
 
 def test_scan_happy_path(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -129,86 +136,77 @@ def test_scan_happy_path(monkeypatch):
 
     children = b.scan_results_box.children
     table_html = children[0].value
-    assert table_html.index('ibm_b') < table_html.index('ibm_a')  # sorted
+    assert table_html.index('ibm_b') < table_html.index('ibm_a')   # sorted
     assert '60.0%' in table_html and '40.0%' in table_html
-    # One stratified dropdown per successful QPU.
-    assert len(_dropdowns(children)) == 2
-    # Button re-enabled after completion.
+    assert len(_dropdowns(children)) == 2                           # per success
     assert b.btn_scan_qpus.disabled is False
 
 
-# ── t3: progress marshaling — no direct-from-thread widget writes ───────────
+# ── progress marshaling — no direct-from-thread widget writes ───────────────
 
 def test_scan_progress_marshaled(monkeypatch):
     captured = []
     b = _build(monkeypatch, marshal=lambda cb: captured.append(cb))
-    _patch_scan(monkeypatch, capture_progress=True)
+    _patch_scan(monkeypatch)
 
     b.btn_scan_qpus.click()
-    # Progress callbacks were marshaled, NOT applied directly: the progress
-    # label is still empty even though progress_cb fired during the scan.
-    assert b.lbl_scan_progress.value == ""
-    assert captured, "progress updates should have been marshaled"
-
-    # Draining the marshaled callbacks updates the label on the main loop.
+    assert b.lbl_scan_progress.value == ""          # marshaled, not direct
+    assert captured
     for cb in captured:
         cb()
     assert 'ibm_b' in b.lbl_scan_progress.value
     assert '✓' in b.lbl_scan_progress.value
 
 
-# ── t4: failed-backend row greyed with esc()'d error ────────────────────────
+# ── failed-backend row greyed with esc()'d error ────────────────────────────
 
 def test_scan_failed_row_escaped(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
-    _patch_scan(monkeypatch, result=_fake_scan_result(error='boom <x>'))
+    _patch_scan(monkeypatch, sweeps={
+        'ibm_b': _sweep(0.60, 0.50), 'ibm_a': _sweep(0.40, 0.30),
+        'ibm_c': RuntimeError('boom <x>')})
     b.btn_scan_qpus.click()
 
     table_html = b.scan_results_box.children[0].value
-    assert 'color:#999' in table_html          # greyed
-    assert 'boom &lt;x&gt;' in table_html       # esc()'d error, not raw '<x>'
+    assert 'color:#999' in table_html
+    assert 'boom &lt;x&gt;' in table_html
     assert '<x>' not in table_html
 
 
-# ── t7: handoff — selecting a remote candidate stages it ────────────────────
+# ── handoff — selecting a remote candidate stages it ────────────────────────
 
 def test_scan_handoff_on_select(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     _patch_scan(monkeypatch)
-
     staged = []
     b._inter_qpu_handoff[0] = lambda name, cand: staged.append((name, cand))
 
     b.btn_scan_qpus.click()
     dds = _dropdowns(b.scan_results_box.children)
-    dds[0].value = 0                           # pick ibm_b's top candidate
+    dds[0].value = 0                                # ibm_b top candidate
 
     assert len(staged) == 1
     name, cand = staged[0]
     assert name == 'ibm_b'
-    # flat index 0 = top stratum (k descending) = the k=2 entry.
-    assert cand['ancillas'] == [4, 5]
+    assert cand['ancillas'] == [4, 5]              # flat[0] = k=2 entry
 
 
-# ── t5: M1 — sweep mode greys out the score checkbox ────────────────────────
+# ── M1 — sweep mode greys the score checkbox ────────────────────────────────
 
 def test_m1_score_checkbox_toggle(monkeypatch):
     b = _build(monkeypatch)
-    # Default: Ancilla='Auto' (-1) → sweep mode → score checkbox disabled.
     assert b.lucj_ancilla_dd.value == -1
     assert b.lucj_chk_score.disabled is True
-
-    b.lucj_ancilla_dd.value = 2                 # exact count → legacy mode
+    b.lucj_ancilla_dd.value = 2
     assert b.lucj_chk_score.disabled is False
-
-    b.lucj_ancilla_dd.value = -1                # back to sweep
+    b.lucj_ancilla_dd.value = -1
     assert b.lucj_chk_score.disabled is True
 
 
-# ── t6: M2 — per-stratum status line format ─────────────────────────────────
+# ── M2 — per-stratum status line format ─────────────────────────────────────
 
 def test_m2_status_line_format():
-    res = _sweep(0.40, 0.30)                    # strata 2→30%, 1→40%
+    res = _sweep(0.40, 0.30)
     res['k_max_effective'] = 2
     res['min_bridges'] = 1
     res['n_raw_embeddings'] = 214
@@ -216,28 +214,217 @@ def test_m2_status_line_format():
     assert line == "Sweep: k=2..1 · 214 embeddings · best per k: 2→30.0% · 1→40.0%"
 
 
-# ── A3 t4: scan circuit-LQS annotation (success → number, failure → template)
+# ── A3: circuit-LQS annotation (success → number, failure → template) ───────
 
 def test_scan_circuit_lqs_annotated(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
-    _patch_scan(monkeypatch)                       # canned entries, no lqs_circuit
-    # A working per-backend shim → annotation fills circuit LQS on every entry.
-    from qpu_mapper.props_shim import CachedPropsShim
-    qp = {'readout_error': np.array([0.01] * 8)}
-    gp = {'cz_error': np.array([0.001] * 7)}
-    shim = CachedPropsShim(qp, gp, [(i, i + 1) for i in range(7)])
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
-                        lambda state: (lambda backend: shim))
+    _patch_scan(monkeypatch)                        # stub props score → circuit LQS
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert '(template)' not in table               # circuit-scored, not fallback
+    assert '(template)' not in b.scan_results_box.children[0].value
 
 
 def test_scan_template_suffix_only_on_failure(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
-    _patch_scan(monkeypatch)
-    # Default get_backend returns a bare object() → the real get_props raises
-    # (no coupling_map) → annotation skips → lqs_circuit stays None → template.
+    # Props whose score_layout raises → lqs_circuit stays None → template.
+    _patch_scan(monkeypatch, props={'ibm_b': _StubProps(None), 'ibm_a': _StubProps(None),
+                                    'ibm_c': _StubProps(None)})
+    b.btn_scan_qpus.click()
+    assert '(template)' in b.scan_results_box.children[0].value
+
+
+# ── L2/t5: vintage renders 'live · <fetch time>' (no stale badge) ───────────
+
+def test_scan_live_vintage(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    _patch_scan(monkeypatch, props={'ibm_b': _StubProps(0.6, 'live · 09:30'),
+                                    'ibm_a': _StubProps(0.4, 'live · 09:30'),
+                                    'ibm_c': _StubProps(0.0, 'live · 09:30')})
     b.btn_scan_qpus.click()
     table = b.scan_results_box.children[0].value
-    assert '(template)' in table
+    assert 'live · 09:30' in table
+    assert 'stale calib' not in table          # stale-badge path removed
+
+
+# ── L1/t2: a fetch failure → honest error row, others complete ──────────────
+
+def test_scan_fetch_failure_error_row(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
+        {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: _sweep(0.6, 0.5))
+
+    def get_props(state):
+        def gp(backend):
+            if backend.name == 'ibm_a':
+                raise RuntimeError("network down fetching calibration")
+            return _StubProps(0.6, 'live · 09:30')
+        return gp
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props", get_props)
+
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert 'network down' in table             # ibm_a → honest error row
+    assert 'live · 09:30' in table             # ibm_b completed
+
+
+# ── L4/t4: stability filter still reads the cache for HISTORY ────────────────
+
+def test_stability_history_reads_cache(monkeypatch):
+    from qpu_mapper.state import SessionState
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    # Enable the filter (needs local history available) + the scan sub-filter.
+    b.state.cal_history_dates = ['2026-07-01']
+    b.state.cal_history = {'2026-07-01': {'qubit_props': {'readout_error': [0.01] * 8},
+                                          'gate_props': {}}}
+    b._refresh_stability_filter_availability()
+    b.chk_stability_filter.value = True
+    b.chk_scan_stability.value = True
+
+    from qpu_mapper import data
+    loads = []
+    monkeypatch.setattr(data, 'list_known_calibrations',
+                        lambda name, date=None: [{'last_update': '2026-07-05 08:00:00'}])
+    monkeypatch.setattr(data, '_load_calibration',
+                        lambda name, ts: loads.append(name) or
+                        ({'readout_error': [0.01] * 8}, {'cz_error': [0.001] * 7}))
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+                        lambda *a, **k: {**_sweep(0.6, 0.5), 'stability': {'available': True}})
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: _StubProps(0.6, 'live · 09:30')))
+
+    b.btn_scan_qpus.click()
+    assert loads                                # cache loader used for HISTORY
+
+
+# ── P1: local and scan pass IDENTICAL sweep params (the tonight bug) ────────
+
+def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    calls = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda norb, bk, pr, **kw: calls.append(kw) or _sweep(0.6, 0.5))
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets",
+                        lambda *a, **k: _targets())
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: _StubProps(0.6)))
+
+    b.chk_deep_search.value = False                 # a non-default value
+    b.lucj_min_ancilla.value = 2
+
+    b.btn_lucj_run.click()                          # local sweep
+    local_kw = calls[-1]
+    calls.clear()
+    b.btn_scan_qpus.click()                         # scan (per-target)
+    scan_kw = calls[0]
+
+    keys = ('min_bridges', 'top_n', 'hybrid')
+    assert {k: local_kw.get(k) for k in keys} == {k: scan_kw.get(k) for k in keys}
+    assert scan_kw['hybrid'] is False               # honored, not the engine default
+
+
+# ── P2: active backend skipped-with-reference (never re-searched) ───────────
+
+def test_active_backend_skipped_with_reference(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    swept = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda norb, bk, pr, **kw: swept.append(bk.name) or _sweep(0.6, 0.5))
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+        {'name': 'stub', 'family': 'Heron', 'eligible': True, 'reason': None},
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: _StubProps(0.6)))
+
+    b.btn_scan_qpus.click()
+    assert 'stub' not in swept                       # active never swept
+    table = b.scan_results_box.children[0].value
+    assert '📍 stub' in table
+    assert 'current backend' in table
+    assert 'run Auto above' in table                 # no local sweep yet → hint
+
+
+# ── P3: scan honors the hybrid checkbox ─────────────────────────────────────
+
+def test_scan_honors_hybrid_checkbox(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    calls = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda norb, bk, pr, **kw: calls.append(kw) or _sweep(0.6, 0.5))
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets",
+                        lambda *a, **k: _targets())
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: _StubProps(0.6)))
+
+    b.chk_deep_search.value = True
+    b.btn_scan_qpus.click()
+    assert calls and all(kw['hybrid'] is True for kw in calls)
+
+
+# ── SYM-2 t3/t4: None vs 0.0 distinguishable; summary = max over non-None ────
+
+def _scan_html(b):
+    from ipywidgets import HTML
+    return " ".join(c.value for c in b.scan_results_box.children
+                    if isinstance(c, HTML))
+
+
+def _patch_one_target(monkeypatch, sweep, props_obj):
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: sweep)
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: props_obj))
+
+
+def test_annotation_failure_is_none_not_zero(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+
+    class _RaiseProps:
+        vintage = 'live'
+        def score_layout(self, q):
+            raise RuntimeError("edge cz absent from snapshot")
+    _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _RaiseProps())
+
+    b.btn_scan_qpus.click()
+    html = _scan_html(b)
+    assert '(template)' in html                     # None → template, not 0.0%
+    assert 'circuit score unavailable' in html      # failure named in notices
+
+
+def test_genuine_zero_renders_as_zero(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+
+    class _ZeroProps:
+        vintage = 'live'
+        def score_layout(self, q):
+            return {'fidelity': 0.0}                 # a real dead-edge zero
+    _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _ZeroProps())
+
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert '0.0%' in table                          # genuine zero shown as 0.0%
+    assert '(template)' not in table                # 0.0 is a real score
+
+
+def test_summary_best_is_max_over_non_none(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+
+    class _VaryProps:
+        vintage = 'live'
+        def score_layout(self, q):
+            # k=2 entry has 6 qubits → 0.0 (dead edge); k=1 has 5 → 0.62.
+            return {'fidelity': 0.0 if len(q) >= 6 else 0.62}
+    _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _VaryProps())
+
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert '62.0%' in table                         # summary = max, NOT the
+    assert not table.split('ibm_a')[1].startswith('0.0')   # k_max 0.0 wall

@@ -151,23 +151,28 @@ def test_banner_states(monkeypatch):
 
 def test_scan_stability_badges(monkeypatch):
     b = _build(monkeypatch, history=True)
+    b.chk_stability_filter.value = True        # enabled (history available)
+    b.chk_scan_stability.value = True          # filter the scan too
 
-    import qpu_mapper.qpu_scan as qs
-    monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
-
-    def fake_scan(*a, **k):
-        return {'results': [
-            {'name': 'ibm_a', 'family': 'Heron', 'sweep': _canned_res(None),
-             'best_lqs': 0.5, 'best_k': 1, 'error': None,
-             'stability': {'available': True, 'relaxed': False,
-                           'excluded_final': [3, 4], 'window_days': 14}},
-            {'name': 'ibm_b', 'family': 'Heron', 'sweep': _canned_res(None),
-             'best_lqs': 0.4, 'best_k': 1, 'error': None,
-             'stability': {'available': False, 'reason': 'no cached history'}},
-        ], 'n_scanned': 2, 'n_failed': 0, 'n_skipped': 0}
-    monkeypatch.setattr(qs, 'scan_qpus', fake_scan)
+    # ibm_a has CACHED history, ibm_b does not.
+    from qpu_mapper import data
+    monkeypatch.setattr(data, 'list_known_calibrations', lambda name, date=None:
+                        [{'last_update': '2026-07-05 08:00:00'}] if name == 'ibm_a' else [])
+    monkeypatch.setattr(data, '_load_calibration', lambda name, ts:
+                        ({'readout_error': [0.01] * 8}, {'cz_error': [0.001] * 7}))
+    # ibm_a → filtered (excluded_final); ibm_b → plain sweep.
+    filt = dict(_canned_res({'available': True, 'relaxed': False,
+                             'excluded_final': [3, 4], 'window_days': 14}))
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+                        lambda *a, **k: filt)
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: _canned_res(None))
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: SimpleNamespace(
+                            vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
     b.btn_scan_qpus.click()
     table = b.scan_results_box.children[0].value

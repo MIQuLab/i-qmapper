@@ -44,6 +44,16 @@ def _format_best_per_k(strata):
     return ' · '.join(parts)
 
 
+def _sweep_mode_label(res):
+    """(H2) 'direct+derived' when any lower stratum got a direct-VF2 hit,
+    else 'derived-only'."""
+    kmax = res.get('k_max_effective')
+    ps = res.get('per_stratum', {})
+    direct = any(v.get('n_direct', 0) > 0 for k, v in ps.items()
+                 if kmax is not None and k < kmax)
+    return 'direct+derived' if direct else 'derived-only'
+
+
 def _format_sweep_status(res):
     """One-line sweep summary (M2): 'Sweep: k=6..3 · 214 embeddings ·
     best per k: ...'. All interpolations esc()'d."""
@@ -93,6 +103,7 @@ def setup_lucj_callbacks(ctx):
     lucj_ancilla_dd = ctx.lucj_ancilla_dd
     lucj_min_ancilla = ctx.lucj_min_ancilla
     lucj_chk_score = ctx.lucj_chk_score
+    chk_deep_search = ctx.chk_deep_search
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
     lbl_lucj_trunc = ctx.lbl_lucj_trunc
@@ -289,6 +300,24 @@ def setup_lucj_callbacks(ctx):
                     except Exception:
                         e['lqs_circuit'] = None
 
+    # ── P1: SINGLE SOURCE of sweep params — local AND scan read this ──
+    def _sweep_kwargs_from_ui():
+        """The one place sweep parameters are derived from the UI. Both the
+        local sweep and every scan per-target call pass exactly this, so the
+        two can never diverge again (the tonight bug)."""
+        min_val = lucj_min_ancilla.value
+        min_bridges = None if (min_val is None or min_val <= 0) else min_val
+        return {
+            'min_bridges': min_bridges,
+            'top_n': 3,
+            'hybrid': chk_deep_search.value,
+        }
+
+    # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
+    # active backend's reference in the scan table (P2), so the scan never
+    # re-searches self yet keeps the reference point.
+    _local_best_lqs = [None]
+
     # ── Legacy single-count search ───────────────────────────────
     def _generate_legacy(norb, requested_ancillas):
         from ..auto_lucj import get_all_zigzag_layouts
@@ -345,9 +374,8 @@ def setup_lucj_callbacks(ctx):
     def _generate_sweep(norb):
         from ..ancilla_sweep import sweep_ancilla_layouts
 
-        # 0 (or blank) → engine default min(3, k_max); else the user floor.
-        min_val = lucj_min_ancilla.value
-        min_bridges = None if (min_val is None or min_val <= 0) else min_val
+        # P1: exact same params the scan uses (min_bridges / top_n / hybrid).
+        kwargs = _sweep_kwargs_from_ui()
 
         # V2: opt-in stability filter (drop-in superset of the plain sweep).
         history = getattr(state, 'cal_history', None)
@@ -357,7 +385,7 @@ def setup_lucj_callbacks(ctx):
                 norb, state.active_backend, state.initial_props, history,
                 window_days=rb_stability_window.value,
                 threshold=ft_stability_threshold.value,
-                min_bridges=min_bridges)
+                min_bridges=kwargs['min_bridges'], top_n=kwargs['top_n'])
             _render_stability_banner(res.get('stability'), norb)
             # The frozen stability engine can't take circuit_score_fn — fill
             # circuit-level LQS on its survivors here (A2).
@@ -365,8 +393,8 @@ def setup_lucj_callbacks(ctx):
         else:
             res = sweep_ancilla_layouts(
                 norb, state.active_backend, state.initial_props,
-                min_bridges=min_bridges,
-                circuit_score_fn=_circuit_score)   # A2: aligned circuit LQS
+                circuit_score_fn=_circuit_score,   # A2: aligned circuit LQS
+                **kwargs)                          # P1 single source (incl. hybrid)
             if _stability_filter_active():
                 # Checkbox on but no history dict → skipped note.
                 _render_stability_banner(None, norb)
@@ -389,6 +417,11 @@ def setup_lucj_callbacks(ctx):
                 ))
                 flat.append(entry)
 
+        # Remember the best circuit-level LQS for the scan's active-row ref.
+        circ = [e['lqs_circuit'] for e in flat
+                if e.get('lqs_circuit') is not None]
+        _local_best_lqs[0] = max(circ) if circ else None
+
         _seed_layout_dropdown(flat, dd_opts)
 
         # Truncation banner (U5): visible only when the VF2 cap was hit.
@@ -407,10 +440,12 @@ def setup_lucj_callbacks(ctx):
         if flat:
             cap = _k_cap_phrase(norb, res.get('k_max_effective'))
             cap_txt = f" · {esc(cap)}" if cap else ""
+            mode_txt = f" · {esc(_sweep_mode_label(res))}"
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-                f"margin:3px 0;'>✅ {_format_sweep_status(res)}{cap_txt}</div>")
+                f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
+                f"{cap_txt}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
@@ -573,28 +608,37 @@ def setup_lucj_callbacks(ctx):
             if not sweep:
                 continue
             try:
-                scorer = _scan_circuit_score(get_props(get_backend(r['name'])))
+                props = get_props(get_backend(r['name']))
             except Exception:
                 continue
-            for entries in sweep.get('strata', {}).values():
+            # (V2) Surface the calibration provenance the shim used.
+            r['vintage'] = getattr(props, 'vintage', None)
+            scorer = _scan_circuit_score(props)
+            for k, entries in sweep.get('strata', {}).items():
                 for e in entries:
                     if e.get('lqs_circuit') is None:
                         try:
                             e['lqs_circuit'] = scorer(e)
-                        except Exception:
+                        except Exception as exc:
+                            # (F3) Annotation failure is data absence — surface
+                            # it in the notices with backend + stratum + reason,
+                            # never a silent 0.0.
                             e['lqs_circuit'] = None
+                            _log.warning("circuit score unavailable for %s "
+                                         "k=%d: %s", r['name'], k, exc)
 
-    def _scan_filtered(eligible, norb, get_backend, get_props, min_bridges):
-        """Handler-side per-target scan with cached-history stability filter.
-
-        qpu_scan.scan_qpus hardcodes the unfiltered sweep and exposes no
-        exclusion/sweep-fn hook, so the filtered scan can't route through it
-        without editing the frozen engine. This mirrors its contract
-        (per-backend isolation, progress_cb, best_lqs sort) and adds a
-        per-result 'stability' block. Cached history ONLY — no remote fetch.
+    def _scan_backends(eligible, norb, get_backend, get_props, use_filter):
+        """The SINGLE handler-side scan path. Per target it calls the sweep
+        with EXACTLY _sweep_kwargs_from_ui() — the same params as the local
+        sweep (incl. hybrid) — so scan and local can't diverge (P1). When
+        use_filter is on and the backend has CACHED history, it routes through
+        sweep_with_stability instead. Not qpu_scan.scan_qpus, which is frozen
+        and can't forward hybrid; this mirrors its contract (per-backend
+        isolation, progress_cb, best_lqs sort) plus stability + vintage.
         """
         from ..ancilla_sweep import sweep_ancilla_layouts
         from ..stability_filter import sweep_with_stability
+        kwargs = _sweep_kwargs_from_ui()
         window = rb_stability_window.value
         threshold = ft_stability_threshold.value
         results = []
@@ -602,26 +646,31 @@ def setup_lucj_callbacks(ctx):
         for t in eligible:
             name = t.get('name') if isinstance(t, dict) else t
             family = t.get('family') if isinstance(t, dict) else None
-            _on_scan_progress(name, 'start', '')
+            _on_scan_progress(name, 'start', 'fetching calibration…')
             try:
                 backend = get_backend(name)
                 props = get_props(backend)
-                hist = _cached_history_for(name)
+                hist = _cached_history_for(name) if use_filter else None
                 if hist:
+                    # sweep_with_stability (frozen) can't take hybrid; it uses
+                    # the engine default. Forward the shared min_bridges/top_n.
                     res = sweep_with_stability(
                         norb, backend, props, hist, window_days=window,
-                        threshold=threshold, min_bridges=min_bridges, top_n=3)
+                        threshold=threshold,
+                        min_bridges=kwargs['min_bridges'],
+                        top_n=kwargs['top_n'])
                     stab = res.get('stability', {'available': False})
                 else:
-                    res = sweep_ancilla_layouts(
-                        norb, backend, props, min_bridges=min_bridges, top_n=3)
-                    stab = {'available': False, 'reason': 'no cached history'}
+                    res = sweep_ancilla_layouts(norb, backend, props, **kwargs)
+                    stab = ({'available': False, 'reason': 'no cached history'}
+                            if use_filter else None)
             except Exception as exc:
                 n_failed += 1
                 results.append({'name': name, 'family': family, 'sweep': None,
                                 'best_lqs': None, 'best_k': None,
                                 'error': str(exc),
-                                'stability': {'available': False}})
+                                'stability': ({'available': False}
+                                              if use_filter else None)})
                 _on_scan_progress(name, 'error', str(exc))
                 continue
             best_lqs, best_k = None, None
@@ -658,6 +707,7 @@ def setup_lucj_callbacks(ctx):
         _scan['progress'].clear()
         _scan['order'].clear()
         _scan['current'] = None
+        _scan['active'] = None
         btn_scan_qpus.disabled = False
         btn_scan_qpus.description = '🌐 Scan all QPUs'
     btn_scan_clear.on_click(lambda b: _clear_scan_results())
@@ -667,7 +717,7 @@ def setup_lucj_callbacks(ctx):
         for name in _scan['order']:
             st, detail = _scan['progress'].get(name, ('', ''))
             txt = f"{esc(str(name))} {_STATUS_ICON.get(st, '')}"
-            if st == 'error' and detail:
+            if st in ('start', 'error') and detail:
                 txt += f" {esc(str(detail))}"
             chips.append(txt)
         lbl_scan_progress.value = (
@@ -718,6 +768,15 @@ def setup_lucj_callbacks(ctx):
         with contextlib.suppress(Exception):
             hook(backend_name, candidate)
 
+    def _vintage_cell(vintage):
+        """(L2) Calibration provenance. Scan scoring is always LIVE now, so
+        every remote row is 'live · <fetch time>' by construction. The old
+        cached-snapshot stale-badge path (utc parse + >24h compare) is gone —
+        the scan never scores from a cached snapshot."""
+        if not vintage:
+            return "<span style='color:#999;'>—</span>"
+        return f"<span style='color:#1e8449;'>{esc(str(vintage))}</span>"
+
     def _render_results(scan_result):
         results = scan_result['results']
         head = ("<table style='font-size:13px;border-collapse:collapse;'>"
@@ -727,18 +786,36 @@ def setup_lucj_callbacks(ctx):
                 "<th style='padding:3px 8px;'>best LQS</th>"
                 "<th style='padding:3px 8px;'>k</th>"
                 "<th style='padding:3px 8px;'>cands</th>"
-                "<th style='padding:3px 8px;'>stability</th></tr>")
+                "<th style='padding:3px 8px;'>stability</th>"
+                "<th style='padding:3px 8px;'>calib</th></tr>")
         body = []
+        # (P2) Active backend reference row — greyed, quotes the LOCAL number,
+        # never re-searched. Keeps the cross-QPU reference point at zero cost.
+        active = _scan.get('active')
+        if active:
+            lb = _local_best_lqs[0]
+            lqs_ref = (f"{lb * 100.0:.1f}% (local)" if lb is not None
+                       else "run Auto above")
+            body.append(
+                f"<tr style='color:#888;background:#f0f0f0;'>"
+                f"<td style='padding:3px 8px;'>📍 {esc(str(active['name']))}</td>"
+                f"<td style='padding:3px 8px;text-align:center;'>"
+                f"{esc(str(active['family'] or '?'))}</td>"
+                f"<td style='padding:3px 8px;text-align:center;'>"
+                f"{esc(lqs_ref)}</td>"
+                f"<td colspan='4' style='padding:3px 8px;'>current backend — "
+                f"see local results above</td></tr>")
         for r in results:
             name = esc(str(r['name']))
             fam = esc(str(r['family'] or '?'))
             badge = _stability_badge(r)
+            vcell = _vintage_cell(r.get('vintage'))
             if r['error']:
                 body.append(
                     f"<tr style='color:#999;background:#f7f7f7;'>"
                     f"<td style='padding:3px 8px;'>{name}</td>"
                     f"<td style='padding:3px 8px;'>{fam}</td>"
-                    f"<td colspan='4' style='padding:3px 8px;'>✗ "
+                    f"<td colspan='5' style='padding:3px 8px;'>✗ "
                     f"{esc(str(r['error']))}</td></tr>")
             elif r['best_lqs'] is None:
                 body.append(
@@ -748,17 +825,21 @@ def setup_lucj_callbacks(ctx):
                     f"<td colspan='3' style='padding:3px 8px;'>no candidates"
                     f"</td>"
                     f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{badge}</td></tr>")
+                    f"{badge}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{vcell}</td></tr>")
             else:
-                # Scan sweeps aren't circuit-scored (remote backend props are
-                # not the current state's) → template heuristic, flagged.
-                best_entry = None
-                for _entries in r['sweep']['strata'].values():
-                    if _entries:
-                        best_entry = _entries[0]
-                        break
-                if best_entry is not None and best_entry.get('lqs_circuit') is not None:
-                    lqs = esc(f"{best_entry['lqs_circuit'] * 100.0:.1f}%")
+                # (F3) Summary best-LQS = MAX circuit LQS over ALL entries,
+                # ignoring None (annotation failed) and NOT just the k_max
+                # stratum #1 — quoting k_max quoted its 0.0 dead-edge wall
+                # while lower strata were fine (SYM-2). Fall back to the
+                # product heuristic (flagged) only when NOTHING was scored.
+                lqs_vals = [e['lqs_circuit']
+                            for _entries in r['sweep']['strata'].values()
+                            for e in _entries
+                            if e.get('lqs_circuit') is not None]
+                if lqs_vals:
+                    lqs = esc(f"{max(lqs_vals) * 100.0:.1f}%")
                 else:
                     lqs = esc(f"{r['best_lqs'] * 100.0:.1f}% (template)")
                 ncand = sum(len(v) for v in r['sweep']['strata'].values())
@@ -775,7 +856,9 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{esc(str(ncand))}</td>"
                     f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{badge}{cap_html}</td></tr>")
+                    f"{badge}{cap_html}</td>"
+                    f"<td style='padding:3px 8px;text-align:center;'>"
+                    f"{vcell}</td></tr>")
         children = [HTML(head + "".join(body) + "</table>")]
 
         # Per-QPU stratified dropdowns (same label format as single-circuit).
@@ -864,12 +947,10 @@ def setup_lucj_callbacks(ctx):
                 "<span style='color:#e74c3c;font-size:13px;'>❌ Connect a "
                 "backend first.</span>")
             return
-        from ..qpu_scan import list_scan_targets, scan_qpus, _detect_family
+        from ..qpu_scan import list_scan_targets, _detect_family
         from ..props_shim import make_scan_get_props
 
         norb = lucj_norb_slider.value
-        min_val = lucj_min_ancilla.value
-        min_bridges = None if (min_val is None or min_val <= 0) else min_val
         try:
             family = _detect_family(state.active_backend)
         except Exception:
@@ -879,6 +960,16 @@ def setup_lucj_callbacks(ctx):
         targets = list_scan_targets(
             state, norb, same_family_as=family,
             include_other_families=chk_scan_other_families.value)
+
+        # (P2) Never re-search the active backend — mark it skipped and quote
+        # the local result instead. No sweep, no fetch for it.
+        active_name = getattr(state, 'active_backend_name', None)
+        _scan['active'] = None
+        for t in targets:
+            if t.get('name') == active_name:
+                t['eligible'] = False
+                t['reason'] = 'current backend — see local results above'
+                _scan['active'] = {'name': t['name'], 'family': t.get('family')}
         _render_targets(targets)                # immediate feedback
 
         eligible = [t for t in targets if t['eligible']]
@@ -909,13 +1000,9 @@ def setup_lucj_callbacks(ctx):
             except Exception:
                 pass
             try:
-                if use_scan_filter:
-                    result = _scan_filtered(eligible, norb, get_backend,
-                                            get_props, min_bridges)
-                else:
-                    result = scan_qpus(eligible, norb, get_backend, get_props,
-                                       min_bridges=min_bridges, top_n=3,
-                                       progress_cb=_on_scan_progress)
+                # (P1) One scan path, one param source — forwards hybrid.
+                result = _scan_backends(eligible, norb, get_backend,
+                                        get_props, use_scan_filter)
                 # (A3/S2) Circuit-level LQS per backend — one scale everywhere.
                 _annotate_scan_circuit_lqs(result, get_backend, get_props)
                 return (result, list(handler.records))

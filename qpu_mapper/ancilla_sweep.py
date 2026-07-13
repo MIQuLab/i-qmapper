@@ -129,7 +129,7 @@ def _safe_gate_error(props, gate_name, u, v):
 def sweep_ancilla_layouts(norb, backend, props, *,
                           min_bridges=None, top_n=3,
                           mapping_cap=None, exclude_qubits=None,
-                          circuit_score_fn=None) -> dict:
+                          circuit_score_fn=None, hybrid=True) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -161,6 +161,14 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             leaves ``lqs_circuit=None`` and never aborts the sweep. When
             ``None`` (default) the returned dict is byte-compatible with the
             pre-A2 shape — no ``lqs_circuit`` key is added.
+        hybrid: when True (default), each stratum k' < k_max_effective is the
+            UNION of (a) the derived prefix candidates AND (b) a DIRECT VF2 at
+            the k' template on the same (possibly pruned) graph. Derivation
+            alone chains every low-k stratum to k_max's embeddings, so a clean
+            chain that only the smaller k' template can reach is invisible to
+            it; the direct pass recovers exactly those. One extra VF2 per
+            stratum (the cost the old per-k flow already paid). hybrid=False →
+            derivation-only, byte-compatible with the pre-hybrid sweep.
 
     Returns {
       'strata': {k: [entry, ...]},        # k descending; len<=top_n each
@@ -171,6 +179,9 @@ def sweep_ancilla_layouts(norb, backend, props, *,
       'n_candidates_scored': int,         # total variants scored (pre-dedupe)
       'excluded_qubits': [...],           # sorted list actually pruned (empty
                                           #   when exclude_qubits is None)
+      'per_stratum': {k: {'n_direct', 'n_derived', 'truncated'}},
+                                          # per-k provenance; vf2_truncated is
+                                          #   any(per-stratum truncated)
     }
     entry = {
       'layout': [...],                    # chain qubits (alpha+beta)
@@ -278,86 +289,122 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     # strata_pool[k] : dict keyed by (frozenset(chain), frozenset(ancilla))
     #                  -> entry, giving per-stratum dedupe for free.
     strata_pool = {k: {} for k in range(k_max_effective, min_bridges - 1, -1)}
+    per_stratum = {k: {'n_direct': 0, 'n_derived': 0, 'truncated': False}
+                   for k in range(k_max_effective, min_bridges - 1, -1)}
     n_candidates_scored = 0
 
-    for layout in layouts:
+    def _embedding_data(layout, n_bridges):
+        """Per-embedding precompute: chain aggregates + per-bridge factors.
+        Constant across every k' derived from this embedding."""
         alpha = layout[:norb]
         beta = layout[norb:2 * norb]
         chain = layout[:2 * norb]
-        chain_fs = frozenset(chain)
-
-        # Chain aggregates are constant across every variant of this
-        # embedding, so compute them once.
         chain_qubits = np.array(chain, dtype=int)
-        chain_readout_sum = float(readout[chain_qubits].sum())
-        chain_readout_prod = float(np.prod(np.clip(1.0 - readout[chain_qubits],
-                                                   0.0, 1.0)))
         chain_edges = ([(alpha[j], alpha[j + 1]) for j in range(norb - 1)]
                        + [(beta[j], beta[j + 1]) for j in range(norb - 1)])
         chain_gate_errs = np.array([_edge_e(a, b) for a, b in chain_edges],
                                    dtype=float)
-        chain_gate_sum = float(chain_gate_errs.sum())
-        chain_gate_prod = float(np.prod(np.clip(1.0 - chain_gate_errs,
-                                                0.0, 1.0)))
-
-        # Per-bridge contributions for this embedding.
         bridges = []
-        for i in range(k_max_effective):
+        for i in range(n_bridges):
             bphys = layout[2 * norb + i]
             e1 = _edge_e(alpha[4 * i], bphys)
             e2 = _edge_e(bphys, beta[4 * i])
             r = float(readout[bphys])
-            add_i = r + e1 + e2
-            prod_i = (max(0.0, 1.0 - r) * max(0.0, 1.0 - e1)
-                      * max(0.0, 1.0 - e2))
             bridges.append({
-                'phys': bphys,
-                'slot': 4 * i,
-                'add': add_i,
-                'prod': prod_i,
+                'phys': bphys, 'slot': 4 * i, 'add': r + e1 + e2,
+                'prod': max(0.0, 1.0 - r) * max(0.0, 1.0 - e1) * max(0.0, 1.0 - e2),
             })
-
         # Alpha/beta swap normalization (mirror _deduplicate_layouts): the
         # representative alpha is the chain with the smaller first element.
         if alpha and beta and alpha[0] > beta[0]:
             norm_alpha, norm_beta = list(beta), list(alpha)
         else:
             norm_alpha, norm_beta = list(alpha), list(beta)
-        norm_chain = norm_alpha + norm_beta
+        return {
+            'chain_fs': frozenset(chain),
+            'norm_alpha': norm_alpha, 'norm_beta': norm_beta,
+            'norm_chain': norm_alpha + norm_beta,
+            'cr_sum': float(readout[chain_qubits].sum()),
+            'cr_prod': float(np.prod(np.clip(1.0 - readout[chain_qubits], 0.0, 1.0))),
+            'cg_sum': float(chain_gate_errs.sum()),
+            'cg_prod': float(np.prod(np.clip(1.0 - chain_gate_errs, 0.0, 1.0))),
+            'bridges': bridges,
+        }
 
+    def _add_variant(edata, k, source):
+        """Score the first-k prefix of this embedding and add it to
+        strata_pool[k]. Returns True iff a NEW (chain, ancilla) was inserted.
+
+        LUCJ PREFIX CONTRACT: keep bridges at the first k standard slots
+        (0, 4, ..., 4*(k-1)) — for a direct k' embedding that IS every bridge;
+        for a derived one it drops the tail. Scattered subsets are invalid.
+        """
+        bridges = edata['bridges']
+        kept = range(k)
+        ancillas = [bridges[i]['phys'] for i in kept]
+        key = (edata['chain_fs'], frozenset(ancillas))
+        if key in strata_pool[k]:
+            # Duplicate (alpha/beta swap, or a chain found both derived AND
+            # direct): identical qubits/edges → identical score, keep first.
+            return False
+        additive = (edata['cr_sum'] + edata['cg_sum']
+                    + sum(bridges[i]['add'] for i in kept))
+        product = edata['cr_prod'] * edata['cg_prod']
+        for i in kept:
+            product *= bridges[i]['prod']
+        strata_pool[k][key] = {
+            'layout': list(edata['norm_chain']),
+            'alpha': list(edata['norm_alpha']),
+            'beta': list(edata['norm_beta']),
+            'ancillas': ancillas,
+            'bridge_slots': tuple(bridges[i]['slot'] for i in kept),
+            'product_score': product,
+            'additive_score': additive,
+            'rank_in_stratum': 0,  # filled after sort
+            'source': source,
+        }
+        return True
+
+    # 6a. k_max embeddings → the k_max stratum (direct) + derived prefixes.
+    per_stratum[k_max_effective]['truncated'] = vf2_truncated
+    for layout in layouts:
+        edata = _embedding_data(layout, k_max_effective)
         for k in range(k_max_effective, min_bridges - 1, -1):
-            # LUCJ PREFIX CONTRACT: a derived k' candidate keeps the bridges
-            # at the FIRST k' standard slots (0, 4, ..., 4*(k'-1)) and drops
-            # the tail — exactly one variant per k', indistinguishable from a
-            # legacy exact-k' layout. NOT all C(k_max, k') subsets: scattered
-            # slots ({0, 8, 12}) are semantically invalid ansatz layouts.
-            kept = range(k)
             n_candidates_scored += 1
-            ancillas = [bridges[i]['phys'] for i in kept]
-            ancilla_fs = frozenset(ancillas)
-            key = (chain_fs, ancilla_fs)
-            if key in strata_pool[k]:
-                # Duplicate (e.g. alpha/beta swap): identical qubits and
-                # edges -> identical score, so keep the first.
+            source = 'vf2' if k == k_max_effective else 'derived'
+            if _add_variant(edata, k, source):
+                bucket = 'n_direct' if k == k_max_effective else 'n_derived'
+                per_stratum[k][bucket] += 1
+
+    # 6b. HYBRID: a DIRECT VF2 at each lower-k template on the SAME (pruned)
+    # graph — recovers clean chains derivation can't reach from k_max.
+    if hybrid:
+        for k in range(k_max_effective - 1, min_bridges - 1, -1):
+            tmpl_k, nb_k = create_lucj_zigzag_layout(
+                num_orbitals=norb, backend_coupling_graph=search_graph,
+                requested_bridges=k)
+            if nb_k != k:
+                # The k' template auto-reduced to a different count — the
+                # derived stratum already covers this k; skip the direct pass.
+                _log.debug("Hybrid: k=%d template returned %d bridges; "
+                           "skipping direct pass", k, nb_k)
                 continue
-            additive = (chain_readout_sum + chain_gate_sum
-                        + sum(bridges[i]['add'] for i in kept))
-            product = chain_readout_prod * chain_gate_prod
-            for i in kept:
-                product *= bridges[i]['prod']
-            strata_pool[k][key] = {
-                'layout': list(norm_chain),
-                'alpha': list(norm_alpha),
-                'beta': list(norm_beta),
-                'ancillas': ancillas,
-                # Always the first-k' standard slots — this field now
-                # certifies the prefix contract: tuple(range(0, 4*k, 4)).
-                'bridge_slots': tuple(bridges[i]['slot'] for i in kept),
-                'product_score': product,
-                'additive_score': additive,
-                'rank_in_stratum': 0,  # filled after sort
-                'source': 'vf2' if k == k_max_effective else 'derived',
-            }
+            maps_k = _collect_vf2_mappings(search_graph, tmpl_k, cap=cap)
+            if len(maps_k) >= cap:
+                per_stratum[k]['truncated'] = True
+            exp_k = 2 * norb + nb_k
+            for mapping in maps_k:
+                lay = [None] * exp_k
+                for key, value in mapping.items():
+                    lay[value] = _key_to_phys(key)
+                if any(v is None for v in lay):
+                    continue
+                n_candidates_scored += 1
+                if _add_variant(_embedding_data(lay, nb_k), k, 'vf2'):
+                    per_stratum[k]['n_direct'] += 1
+
+    # Aggregate truncation for the existing banner (k_max OR any direct pass).
+    vf2_truncated = any(m['truncated'] for m in per_stratum.values())
 
     # ---- 7. Rank each stratum by product_score desc, slice top_n ---------
     # product_score is the internal PRE-RANK (cross-stratum-comparable, cheap).
@@ -392,4 +439,5 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         'n_raw_embeddings': n_raw_embeddings,
         'n_candidates_scored': n_candidates_scored,
         'excluded_qubits': excluded_sorted,
+        'per_stratum': per_stratum,
     }

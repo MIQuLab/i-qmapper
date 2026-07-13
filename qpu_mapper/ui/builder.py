@@ -305,7 +305,8 @@ class MapperUIBuilder:
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
             lucj_min_ancilla=self.lucj_min_ancilla,
-            lucj_chk_score=self.lucj_chk_score, btn_lucj_run=self.btn_lucj_run,
+            lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
+            btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
             dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
@@ -1227,6 +1228,12 @@ class MapperUIBuilder:
             value=True,
             description='Score layouts (pick lowest error)',
             layout=W)
+        self.chk_deep_search = Checkbox(
+            value=True,
+            description='Deep search per ancilla count',
+            layout=W,
+            tooltip='adds a direct search per k — complete but slower; '
+                    'off = fast derivation from k_max only')
         self.btn_lucj_run = Button(
             description='🤖 Generate LUCJ Layout',
             button_style='success', layout=W)
@@ -1692,6 +1699,7 @@ class MapperUIBuilder:
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
             self.lucj_chk_score,
+            self.chk_deep_search,
             self.chk_stability_filter,
             self.stability_ctrl_box,
             self.lbl_lucj_stability,
