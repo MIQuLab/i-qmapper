@@ -183,8 +183,10 @@ def setup_lucj_callbacks(ctx):
             lqs = entry['product_score'] * 100.0
             header = (f"<b>k={k} · #{entry['rank_in_stratum']}</b> "
                       f"· LQS {lqs:.1f}% "
-                      f"<span style='color:#888;'>(add {entry['additive_score']:.4f}, "
-                      f"{esc(str(entry.get('source', '')))})</span>")
+                      f"<span style='color:#888;'>template fidelity "
+                      f"(single-pass edges); internal ranking sum "
+                      f"{entry['additive_score']:.4f}, "
+                      f"{esc(str(entry.get('source', '')))}</span>")
             anc = ', '.join(str(q) for q in entry['ancillas'])
             lbl_lucj_detail.value = (
                 f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
@@ -203,6 +205,12 @@ def setup_lucj_callbacks(ctx):
                 f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
                 f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
             )
+    # (C4) Disambiguate the LQS number: it's template fidelity, not the
+    # circuit-level Estimated Layout-Quality box in the Analysis panel.
+    with contextlib.suppress(Exception):
+        dd_lucj_layout.tooltip = ('LQS = template fidelity (single-pass '
+                                  'edges), not the circuit-level Estimated '
+                                  'Layout-Quality')
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
 
     # ── Dropdown re-seed helper (observer-safe) ──────────────────
@@ -396,6 +404,7 @@ def setup_lucj_callbacks(ctx):
     # ── B2/B3/B4: Multi-QPU scan ─────────────────────────────────
     btn_scan_qpus = ctx.btn_scan_qpus
     chk_scan_other_families = ctx.chk_scan_other_families
+    btn_scan_clear = ctx.btn_scan_clear
     lbl_scan_progress = ctx.lbl_scan_progress
     scan_results_box = ctx.scan_results_box
     scan_spawn_bg = ctx.scan_spawn_bg
@@ -542,6 +551,18 @@ def setup_lucj_callbacks(ctx):
 
     _scan = {'progress': {}, 'order': []}
     _STATUS_ICON = {'start': '⏳', 'ok': '✓', 'skipped': '·', 'error': '✗'}
+
+    def _clear_scan_results():
+        # (C2) Full reset — table, per-QPU dropdowns, notices, progress line,
+        # and the scan button. No ghost dropdown state survives.
+        scan_results_box.children = []
+        lbl_scan_progress.value = ""
+        _scan['progress'].clear()
+        _scan['order'].clear()
+        _scan['current'] = None
+        btn_scan_qpus.disabled = False
+        btn_scan_qpus.description = '🌐 Scan all QPUs'
+    btn_scan_clear.on_click(lambda b: _clear_scan_results())
 
     def _render_progress_line():
         chips = []
@@ -745,6 +766,7 @@ def setup_lucj_callbacks(ctx):
         except Exception:
             family = None
 
+        _clear_scan_results()                   # (C2) drop any stale results
         targets = list_scan_targets(
             state, norb, same_family_as=family,
             include_other_families=chk_scan_other_families.value)
@@ -757,9 +779,6 @@ def setup_lucj_callbacks(ctx):
                 "backends for this norb / family scope.</div>")
             return
 
-        _scan['progress'].clear()
-        _scan['order'].clear()
-        _scan['current'] = None
         _scan['norb'] = norb
         btn_scan_qpus.disabled = True
         btn_scan_qpus.description = '⏳ Scanning...'

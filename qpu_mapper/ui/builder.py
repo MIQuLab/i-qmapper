@@ -324,6 +324,7 @@ class MapperUIBuilder:
             # Multi-QPU scan (B2/B3/B4).
             btn_scan_qpus=self.btn_scan_qpus,
             chk_scan_other_families=self.chk_scan_other_families,
+            btn_scan_clear=self.btn_scan_clear,
             lbl_scan_progress=self.lbl_scan_progress,
             scan_results_box=self.scan_results_box,
             scan_spawn_bg=default_spawn_bg,
@@ -1260,6 +1261,10 @@ class MapperUIBuilder:
             layout=W,
             tooltip='Filter each scanned backend using its CACHED history '
                     'only — no remote history fetch in this version')
+        self.btn_scan_clear = Button(
+            description='✕ Clear results', button_style='',
+            layout=Layout(width='130px'),
+            tooltip='Dismiss the scan results table, dropdowns and notices')
 
         # ── Multi-QPU scan cluster ───────────────────────────────
         self.btn_scan_qpus = Button(
@@ -1675,6 +1680,8 @@ class MapperUIBuilder:
         falls back to the dropdown).
         """
         self._refresh_stability_filter_availability()
+        name = esc(str(getattr(self.state, 'active_backend_name', '')
+                       or 'current backend'))
         return VBox([
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:4px 0;'>"
                  "🤖 Auto-LUCJ Layout Engine</div>"),
@@ -1691,18 +1698,30 @@ class MapperUIBuilder:
             self.btn_lucj_run,
             self.lbl_lucj_trunc,
             self.lbl_lucj_status,
+            # ── Local (current backend) results — ABOVE the scan block ──
+            HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
+            HTML(f"<div style='font-size:14px;font-weight:bold;color:#1a5276;"
+                 f"margin:3px 0;'>📍 This backend ({name})</div>"),
+            HTML("<div style='font-size:12px;color:#888;margin:0 0 3px 0;'>"
+                 "Per-layout <b>LQS</b> is <i>template fidelity (single-pass "
+                 "edges)</i>; the <i>Estimated Layout-Quality</i> box "
+                 "(Analysis) is the circuit-level score. Two different "
+                 "scales.</div>"),
+            self.dd_lucj_layout,
+            self.lbl_lucj_detail,
+            # ── Remote scan block — its own header + Clear control ──────
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🌐 Scan All QPUs</div>"),
+            HBox([
+                HTML("<div style='font-size:14px;font-weight:bold;"
+                     "color:#1a5276;margin:3px 8px 3px 0;'>🌐 Scan All "
+                     "QPUs (other backends)</div>"),
+                self.btn_scan_clear,
+            ], layout=Layout(align_items='center')),
             self.btn_scan_qpus,
             self.chk_scan_other_families,
             self.chk_scan_stability,
             self.lbl_scan_progress,
             self.scan_results_box,
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "📋 Inspect Layouts</div>"),
-            self.dd_lucj_layout,
-            self.lbl_lucj_detail,
             HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
                  "🔗 Multi-Circuit (Multi-Programming)</div>"),

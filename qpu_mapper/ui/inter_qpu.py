@@ -283,10 +283,20 @@ def setup_inter_qpu(ctx):
         with contextlib.suppress(Exception):
             dd_backend_qpu2.value = backend_name
         _pending_handoff[0] = (backend_name, candidate)
-        lbl_qpu2_status.value = (
-            f"<span style='font-size:14px;color:#e67e22;'>Staged "
-            f"<b>{esc(str(backend_name))}</b> — click <b>Connect QPU 2</b> "
-            f"to view this candidate on its chip.</span>")
+        # (C3) Prominent one-liner explaining the half-open state until the
+        # user clicks Connect. Replaced by the connect status once connected.
+        staged_html = (
+            f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
+            f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
+            f"margin:3px 0;font-weight:bold;'>📡 {esc(str(backend_name))} "
+            f"staged — click <b>Connect QPU 2</b> to load the device and "
+            f"paint the candidate.</div>")
+        lbl_qpu2_status.value = staged_html
+        # Also surface it inside the revealed QPU-2 sidebar slot, so the
+        # prompt is visible wherever the user is looking.
+        if _qpu2_content_box[0] is not None:
+            with contextlib.suppress(Exception):
+                _qpu2_content_box[0].children = [HTML(staged_html)]
 
     if handoff_cell is not None:
         handoff_cell[0] = stage_remote_candidate
