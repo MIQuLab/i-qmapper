@@ -15,7 +15,12 @@ shape auto_lucj's zigzag template expects. Two such blocks are built:
 
 For norb=8 the geometric ceiling is k_max = ceil(8/4) = 2 bridges (orbital
 slots 0 and 4), so k_max_effective == 2 and a min_bridges=1 sweep produces two
-strata (k=2 intact VF2 layouts, k=1 subtraction variants).
+strata (k=2 intact VF2 layouts, k=1 PREFIX variants — one per embedding,
+keeping only the bridge at slot 0).
+
+LUCJ PREFIX CONTRACT: a derived k' candidate keeps the bridges at the first k'
+standard slots (0, 4, ..., 4*(k'-1)), never a scattered subset. Enforced by
+test_bridge_slots_are_prefix and test_prefix_legacy_equivalence below.
 """
 
 import time
@@ -163,6 +168,42 @@ def test_kminus1_variant_present(backend, props):
     top_ancillas = set(top['ancillas'])
     assert any(set(e['ancillas']) < top_ancillas for e in same_chain), (
         "the top layout's own k-1 subtraction variant is absent")
+
+
+# ── F2c: bridge_slots are the first-k' standard slots — no holes, ever ──────
+
+def test_bridge_slots_are_prefix(backend, props):
+    """The regression born from the scattered-ancilla bug: EVERY entry in
+    EVERY stratum must keep bridges at the first k' standard slots, so
+    bridge_slots == (0, 4, ..., 4*(k'-1)) with no offsets and no gaps."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
+    for k, entries in res['strata'].items():
+        for e in entries:
+            k_prime = len(e['ancillas'])
+            assert e['bridge_slots'] == tuple(range(0, 4 * k_prime, 4)), (
+                f"k={k} entry has non-prefix slots {e['bridge_slots']}")
+            assert len(e['bridge_slots']) == k_prime == k
+
+
+# ── F2d: a derived k' entry == its parent embedding's first-k' bridges ──────
+
+def test_prefix_legacy_equivalence(backend, props):
+    """A derived k' candidate must be indistinguishable from the original
+    code computing exactly-k' on the same embedding: its kept ancilla
+    physical qubits equal the first k' ancillas of a k_max parent on the
+    same chain (ancillas are stored in bridge-slot order)."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
+    kmax = res['k_max_effective']
+    parents = res['strata'][kmax]                     # full-ancilla vf2 entries
+    for k, entries in res['strata'].items():
+        for e in entries:
+            chain = frozenset(e['alpha']) | frozenset(e['beta'])
+            assert any(
+                (frozenset(p['alpha']) | frozenset(p['beta'])) == chain
+                and list(p['ancillas'][:k]) == list(e['ancillas'])
+                for p in parents), (
+                f"k={k} ancillas {e['ancillas']} are not the first-{k} "
+                f"bridges of any parent embedding")
 
 
 # ── t3: good region wins every stratum ──────────────────────────────────────

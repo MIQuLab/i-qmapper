@@ -34,12 +34,24 @@ Why this is strictly better than per-`k` search:
 
 * The k_max template is the *most constrained* subgraph, so the VF2 cap
   removes the fewest useful embeddings there.
-* Every k_max embedding yields all of its lower-`k` variants for free —
-  including the "good-region k-1 layout" that an independent k-1 search,
-  starting from the rigid every-4th-orbital template, never generates.
-* Subtraction also unlocks *non-standard* bridge-position sets (e.g. keeping
-  orbital slots ``{0, 8, 12}`` out of ``{0, 4, 8, 12}``) that the fixed
-  template cannot express at all.
+* Every k_max embedding yields its lower-`k` variants for free — including the
+  "good-region k-1 layout" that an independent k-1 search, starting from the
+  rigid every-4th-orbital template, never generates.
+
+LUCJ PREFIX CONTRACT (do not break)
+-----------------------------------
+A derived k' candidate keeps the bridges at the **first k' standard slots**
+``(0, 4, ..., 4*(k'-1))`` and drops the tail — exactly ONE variant per k' per
+embedding, byte-for-byte indistinguishable from a legacy exact-k' layout.
+
+We deliberately do NOT enumerate all ``C(k_max, k')`` bridge subsets. A
+scattered set like ``{0, 8, 12}`` is a *valid subgraph* with a *valid score*
+but a **semantically invalid ansatz layout**: the LUCJ construction places
+bridges at consecutive standard slots, and a downstream consumer (rendering,
+codegen, exact-k' equivalence) assumes that. Keeping only the prefix restores
+the contract — and, as a bonus, does strictly less work (one variant per k',
+not a combinatorial fan-out). ``bridge_slots`` is retained precisely to
+*certify* this: it is always ``tuple(range(0, 4*k', 4))``.
 
 Scoring: product vs additive
 -----------------------------
@@ -68,7 +80,6 @@ Caveats
   suitable for ranking, not absolute fidelity prediction.
 """
 
-import itertools
 import logging
 
 import numpy as np
@@ -303,31 +314,38 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         norm_chain = norm_alpha + norm_beta
 
         for k in range(k_max_effective, min_bridges - 1, -1):
-            for kept in itertools.combinations(range(k_max_effective), k):
-                n_candidates_scored += 1
-                ancillas = [bridges[i]['phys'] for i in kept]
-                ancilla_fs = frozenset(ancillas)
-                key = (chain_fs, ancilla_fs)
-                if key in strata_pool[k]:
-                    # Duplicate (e.g. alpha/beta swap): identical qubits and
-                    # edges -> identical score, so keep the first.
-                    continue
-                additive = (chain_readout_sum + chain_gate_sum
-                            + sum(bridges[i]['add'] for i in kept))
-                product = chain_readout_prod * chain_gate_prod
-                for i in kept:
-                    product *= bridges[i]['prod']
-                strata_pool[k][key] = {
-                    'layout': list(norm_chain),
-                    'alpha': list(norm_alpha),
-                    'beta': list(norm_beta),
-                    'ancillas': ancillas,
-                    'bridge_slots': tuple(bridges[i]['slot'] for i in kept),
-                    'product_score': product,
-                    'additive_score': additive,
-                    'rank_in_stratum': 0,  # filled after sort
-                    'source': 'vf2' if k == k_max_effective else 'derived',
-                }
+            # LUCJ PREFIX CONTRACT: a derived k' candidate keeps the bridges
+            # at the FIRST k' standard slots (0, 4, ..., 4*(k'-1)) and drops
+            # the tail — exactly one variant per k', indistinguishable from a
+            # legacy exact-k' layout. NOT all C(k_max, k') subsets: scattered
+            # slots ({0, 8, 12}) are semantically invalid ansatz layouts.
+            kept = range(k)
+            n_candidates_scored += 1
+            ancillas = [bridges[i]['phys'] for i in kept]
+            ancilla_fs = frozenset(ancillas)
+            key = (chain_fs, ancilla_fs)
+            if key in strata_pool[k]:
+                # Duplicate (e.g. alpha/beta swap): identical qubits and
+                # edges -> identical score, so keep the first.
+                continue
+            additive = (chain_readout_sum + chain_gate_sum
+                        + sum(bridges[i]['add'] for i in kept))
+            product = chain_readout_prod * chain_gate_prod
+            for i in kept:
+                product *= bridges[i]['prod']
+            strata_pool[k][key] = {
+                'layout': list(norm_chain),
+                'alpha': list(norm_alpha),
+                'beta': list(norm_beta),
+                'ancillas': ancillas,
+                # Always the first-k' standard slots — this field now
+                # certifies the prefix contract: tuple(range(0, 4*k, 4)).
+                'bridge_slots': tuple(bridges[i]['slot'] for i in kept),
+                'product_score': product,
+                'additive_score': additive,
+                'rank_in_stratum': 0,  # filled after sort
+                'source': 'vf2' if k == k_max_effective else 'derived',
+            }
 
     # ---- 7. Rank each stratum by product_score desc, slice top_n ---------
     strata = {}
