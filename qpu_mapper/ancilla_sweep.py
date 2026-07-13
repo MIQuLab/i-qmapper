@@ -128,7 +128,8 @@ def _safe_gate_error(props, gate_name, u, v):
 
 def sweep_ancilla_layouts(norb, backend, props, *,
                           min_bridges=None, top_n=3,
-                          mapping_cap=None, exclude_qubits=None) -> dict:
+                          mapping_cap=None, exclude_qubits=None,
+                          circuit_score_fn=None) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -149,6 +150,17 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             coupling graph BEFORE template creation (a hard search-space
             filter, e.g. volatile qubits from stability analysis). ``None`` or
             empty → byte-for-byte identical to the unfiltered sweep.
+        circuit_score_fn: optional ``callable(entry) -> float`` computing a
+            CIRCUIT-LEVEL fidelity for a candidate, using the SAME code path
+            as the UI's Estimated Layout-Quality box
+            (``export.scoring.estimate_circuit_fidelity``). It is state-bound
+            (needs the app's dict-shaped props), so the UI injects it rather
+            than the engine calling it directly. When provided, it is called
+            ONLY on the top_n sliced entries per stratum (cheap) and its
+            result is stored on ``entry['lqs_circuit']``; a scoring failure
+            leaves ``lqs_circuit=None`` and never aborts the sweep. When
+            ``None`` (default) the returned dict is byte-compatible with the
+            pre-A2 shape — no ``lqs_circuit`` key is added.
 
     Returns {
       'strata': {k: [entry, ...]},        # k descending; len<=top_n each
@@ -348,6 +360,10 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             }
 
     # ---- 7. Rank each stratum by product_score desc, slice top_n ---------
+    # product_score is the internal PRE-RANK (cross-stratum-comparable, cheap).
+    # Circuit-level scoring (A2) runs ONLY on the sliced survivors — top_n per
+    # stratum — so the expensive state-bound scorer is called O(top_n * strata)
+    # times, not per raw candidate.
     strata = {}
     for k in range(k_max_effective, min_bridges - 1, -1):
         entries = sorted(strata_pool[k].values(),
@@ -355,6 +371,15 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         entries = entries[:top_n]
         for rank, entry in enumerate(entries, start=1):
             entry['rank_in_stratum'] = rank
+        if circuit_score_fn is not None:
+            for entry in entries:
+                try:
+                    entry['lqs_circuit'] = circuit_score_fn(entry)
+                except Exception as exc:
+                    # A scoring error must never abort the sweep.
+                    _log.warning("Circuit scoring failed for a candidate "
+                                 "(k=%d): %s", k, exc)
+                    entry['lqs_circuit'] = None
         strata[k] = entries
         _log.debug("Ancilla sweep stratum k=%d: %d candidates (top_n=%d)",
                    k, len(entries), top_n)

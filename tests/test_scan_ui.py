@@ -214,3 +214,30 @@ def test_m2_status_line_format():
     res['n_raw_embeddings'] = 214
     line = _format_sweep_status(res)
     assert line == "Sweep: k=2..1 · 214 embeddings · best per k: 2→30.0% · 1→40.0%"
+
+
+# ── A3 t4: scan circuit-LQS annotation (success → number, failure → template)
+
+def test_scan_circuit_lqs_annotated(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    _patch_scan(monkeypatch)                       # canned entries, no lqs_circuit
+    # A working per-backend shim → annotation fills circuit LQS on every entry.
+    from qpu_mapper.props_shim import CachedPropsShim
+    qp = {'readout_error': np.array([0.01] * 8)}
+    gp = {'cz_error': np.array([0.001] * 7)}
+    shim = CachedPropsShim(qp, gp, [(i, i + 1) for i in range(7)])
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: shim))
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert '(template)' not in table               # circuit-scored, not fallback
+
+
+def test_scan_template_suffix_only_on_failure(monkeypatch):
+    b = _build(monkeypatch, marshal=lambda cb: cb())
+    _patch_scan(monkeypatch)
+    # Default get_backend returns a bare object() → the real get_props raises
+    # (no coupling_map) → annotation skips → lqs_circuit stays None → template.
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    assert '(template)' in table

@@ -206,6 +206,56 @@ def test_prefix_legacy_equivalence(backend, props):
                 f"bridges of any parent embedding")
 
 
+# ── A2: circuit_score_fn on the sliced survivors only ──────────────────────
+
+def test_circuit_score_fn_on_sliced_only(backend, props):
+    """(A2) The injected scorer runs ONCE per sliced entry (top_n per
+    stratum), and its value lands on entry['lqs_circuit']."""
+    calls = []
+
+    def scorer(entry):
+        calls.append(entry)
+        return 0.5
+
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3,
+                                circuit_score_fn=scorer)
+    total = sum(len(v) for v in res['strata'].values())
+    assert len(calls) == total                        # exactly once per survivor
+    assert total <= 3 * len(res['strata'])            # cheap-slice property
+    for entries in res['strata'].values():
+        for e in entries:
+            assert e['lqs_circuit'] == 0.5
+
+
+def test_circuit_score_error_keeps_entry_none(backend, props):
+    """(A2) A scorer that raises on one candidate leaves it lqs_circuit=None;
+    the sweep still completes and other entries are scored."""
+    calls = []
+
+    def scorer(entry):
+        calls.append(1)
+        if len(calls) == 1:
+            raise ValueError("boom")
+        return 0.5
+
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3,
+                                circuit_score_fn=scorer)
+    vals = [e['lqs_circuit'] for entries in res['strata'].values()
+            for e in entries]
+    assert vals.count(None) == 1                       # the failed one
+    assert 0.5 in vals                                 # the rest scored
+    assert res['strata']                               # sweep completed
+
+
+def test_no_circuit_score_fn_is_byte_compatible(backend, props):
+    """(A2 default guarantee) Without the scorer, no lqs_circuit key appears —
+    the dict shape is unchanged from pre-A2."""
+    res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3)
+    for entries in res['strata'].values():
+        for e in entries:
+            assert 'lqs_circuit' not in e
+
+
 # ── t3: good region wins every stratum ──────────────────────────────────────
 
 def test_good_region_wins(backend, props):

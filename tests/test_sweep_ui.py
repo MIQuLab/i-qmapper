@@ -59,6 +59,9 @@ def _fake_sweep_result(vf2_truncated=False):
             'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
             'ancillas': anc, 'bridge_slots': tuple(range(0, 4 * len(anc), 4)),
             'product_score': prod, 'additive_score': add,
+            # A2: engine now attaches circuit-level LQS; equal to product here
+            # so the rendered percentage is unchanged in these UI assertions.
+            'lqs_circuit': prod,
             'rank_in_stratum': 1, 'source': src,
         }
     return {
@@ -71,6 +74,25 @@ def _fake_sweep_result(vf2_truncated=False):
         'vf2_truncated': vf2_truncated,
         'n_raw_embeddings': 214, 'n_candidates_scored': 1891,
     }
+
+
+# ── A2 t2: label/status formatters prefer circuit-level LQS ─────────────────
+
+def test_formatters_use_lqs_circuit():
+    from qpu_mapper.ui.lucj_panel import _entry_lqs_pct, _format_best_per_k
+
+    circ = {'product_score': 0.30, 'lqs_circuit': 0.42, 'ancillas': [4]}
+    pct, is_tmpl = _entry_lqs_pct(circ)
+    assert pct == '42.0%' and is_tmpl is False          # circuit LQS, no flag
+
+    tmpl = {'product_score': 0.30, 'ancillas': [4]}      # no lqs_circuit
+    pct2, is_tmpl2 = _entry_lqs_pct(tmpl)
+    assert pct2 == '30.0%' and is_tmpl2 is True          # falls back, flagged
+
+    strata = {2: [{'product_score': 0.3, 'lqs_circuit': 0.5}],
+              1: [{'product_score': 0.4, 'lqs_circuit': 0.6}]}
+    assert _format_best_per_k(strata) == '2→50.0% · 1→60.0%'
+    assert _format_best_per_k({1: [{'product_score': 0.4}]}) == '1→40.0%'
 
 
 # ── t1: sweep mode default → stratified dropdown, exact label format ────────

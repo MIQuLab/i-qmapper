@@ -15,15 +15,32 @@ from ..html_safe import esc
 _log = logging.getLogger(__name__)
 
 
+def _entry_lqs(entry):
+    """(lqs_value, is_template): the circuit-level LQS (``entry['lqs_circuit']``,
+    same scale as the Estimated Layout-Quality box) when available, else the
+    internal template heuristic ``product_score`` with the template flag set."""
+    val = entry.get('lqs_circuit')
+    if val is not None:
+        return val, False
+    return entry['product_score'], True
+
+
+def _entry_lqs_pct(entry):
+    """('25.3%', is_template) for display."""
+    val, is_tmpl = _entry_lqs(entry)
+    return f"{val * 100.0:.1f}%", is_tmpl
+
+
 def _format_best_per_k(strata):
     """"6→24.1% · 5→24.6% · 4→25.0% · 3→25.3%" — the LQS gradient across
-    strata (best product_score per k, k descending). Shows the trade-off
-    instead of a single size-biased "winner"."""
+    strata (best entry per k, k descending). Uses circuit-level LQS when
+    present. Shows the trade-off instead of a single size-biased "winner"."""
     parts = []
     for k in sorted(strata.keys(), reverse=True):
         entries = strata[k]
         if entries:
-            parts.append(f"{k}→{entries[0]['product_score'] * 100.0:.1f}%")
+            val, _ = _entry_lqs(entries[0])
+            parts.append(f"{k}→{val * 100.0:.1f}%")
     return ' · '.join(parts)
 
 
@@ -177,15 +194,17 @@ def setup_lucj_callbacks(ctx):
         entry = _lucj_all_layouts[idx]
         _apply_lucj_layout(entry)
         if 'product_score' in entry:
-            # Sweep candidate: multiplicative LQS is the headline; the
-            # additive sum (size-biased across k) goes in the detail only.
+            # Sweep candidate: circuit-level LQS (matches the Estimated
+            # Layout-Quality box) is the headline; the internal ranking sum
+            # (size-biased across k) goes in the detail only.
             k = len(entry['ancillas'])
-            lqs = entry['product_score'] * 100.0
+            pct, is_tmpl = _entry_lqs_pct(entry)
+            scale = ('template fidelity (single-pass edges)' if is_tmpl
+                     else 'circuit-level (matches Estimated Layout-Quality)')
             header = (f"<b>k={k} · #{entry['rank_in_stratum']}</b> "
-                      f"· LQS {lqs:.1f}% "
-                      f"<span style='color:#888;'>template fidelity "
-                      f"(single-pass edges); internal ranking sum "
-                      f"{entry['additive_score']:.4f}, "
+                      f"· LQS {pct} "
+                      f"<span style='color:#888;'>{scale}; internal ranking "
+                      f"sum {entry['additive_score']:.4f}, "
                       f"{esc(str(entry.get('source', '')))}</span>")
             anc = ', '.join(str(q) for q in entry['ancillas'])
             lbl_lucj_detail.value = (
@@ -205,12 +224,15 @@ def setup_lucj_callbacks(ctx):
                 f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
                 f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
             )
-    # (C4) Disambiguate the LQS number: it's template fidelity, not the
-    # circuit-level Estimated Layout-Quality box in the Analysis panel.
+    # (A2) The LQS shown here is the circuit-level score — the same number
+    # the Estimated Layout-Quality box reports. '(template)' flags the
+    # internal heuristic used only when circuit scoring is unavailable.
     with contextlib.suppress(Exception):
-        dd_lucj_layout.tooltip = ('LQS = template fidelity (single-pass '
-                                  'edges), not the circuit-level Estimated '
-                                  'Layout-Quality')
+        dd_lucj_layout.tooltip = ('LQS = circuit-level fidelity, the same '
+                                  'number as the Estimated Layout-Quality '
+                                  'box. "(template)" = internal heuristic '
+                                  'fallback when circuit scoring is '
+                                  'unavailable.')
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
 
     # ── Dropdown re-seed helper (observer-safe) ──────────────────
@@ -231,6 +253,41 @@ def setup_lucj_callbacks(ctx):
         dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
         if entries:
             _apply_lucj_layout(entries[0])
+
+    # ── A2: circuit-level LQS for a sweep candidate ──────────────
+    def _circuit_score(entry):
+        """Score a sweep candidate with the SAME path as the Estimated
+        Layout-Quality box: build a scratch layout from the candidate and
+        run export.scoring.estimate_circuit_fidelity against the current
+        backend's props. Returns a fidelity in [0, 1] or None."""
+        from types import SimpleNamespace
+        from ..export.scoring import estimate_circuit_fidelity
+        layout = {
+            'alpha': [str(q) for q in entry['alpha']],
+            'beta': [str(q) for q in entry['beta']],
+            'other': [],
+            'ancilla': [str(q) for q in entry['ancillas']],
+        }
+        fake = SimpleNamespace(
+            layouts_data={0: layout},
+            qubit_props_data=getattr(state, 'qubit_props_data', {}) or {},
+            gate_props_data=getattr(state, 'gate_props_data', {}) or {},
+            qubit_ids=state.qubit_ids,
+            edges_list=state.edges_list,
+        )
+        res = estimate_circuit_fidelity(fake, 0, 'lucj')
+        return res['fidelity'] if res else None
+
+    def _annotate_circuit_lqs(res):
+        """Fill entry['lqs_circuit'] for any strata entry that lacks it (the
+        stability-filter path can't pass circuit_score_fn to the engine)."""
+        for entries in res.get('strata', {}).values():
+            for e in entries:
+                if 'lqs_circuit' not in e:
+                    try:
+                        e['lqs_circuit'] = _circuit_score(e)
+                    except Exception:
+                        e['lqs_circuit'] = None
 
     # ── Legacy single-count search ───────────────────────────────
     def _generate_legacy(norb, requested_ancillas):
@@ -302,10 +359,14 @@ def setup_lucj_callbacks(ctx):
                 threshold=ft_stability_threshold.value,
                 min_bridges=min_bridges)
             _render_stability_banner(res.get('stability'), norb)
+            # The frozen stability engine can't take circuit_score_fn — fill
+            # circuit-level LQS on its survivors here (A2).
+            _annotate_circuit_lqs(res)
         else:
             res = sweep_ancilla_layouts(
                 norb, state.active_backend, state.initial_props,
-                min_bridges=min_bridges)
+                min_bridges=min_bridges,
+                circuit_score_fn=_circuit_score)   # A2: aligned circuit LQS
             if _stability_filter_active():
                 # Checkbox on but no history dict → skipped note.
                 _render_stability_banner(None, norb)
@@ -314,14 +375,16 @@ def setup_lucj_callbacks(ctx):
 
         strata = res['strata']
         # Flatten k descending, entries in stratum order; the dropdown value
-        # is the flat index. Label format is fixed: "k=4 · #1 · LQS 25.3%".
+        # is the flat index. Label: "k=4 · #1 · LQS 25.3%" (circuit-level;
+        # "(template)" suffix when circuit scoring was unavailable).
         flat = []
         dd_opts = []
         for k in sorted(strata.keys(), reverse=True):
             for entry in strata[k]:
-                lqs = entry['product_score'] * 100.0
+                pct, is_tmpl = _entry_lqs_pct(entry)
+                suffix = " (template)" if is_tmpl else ""
                 dd_opts.append((
-                    f"k={k} · #{entry['rank_in_stratum']} · LQS {lqs:.1f}%",
+                    f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}",
                     len(flat),
                 ))
                 flat.append(entry)
@@ -486,6 +549,41 @@ def setup_lucj_callbacks(ctx):
         return (f"<span style='color:#1e8449;'>🛡 −{esc(str(n))} "
                 f"qubits{extra}</span>")
 
+    def _scan_circuit_score(props):
+        """Per-backend circuit-level scorer: uses the shim's own arrays via
+        the shared core, so every scan entry lands on the SAME scale as the
+        local C1 box. Returns None when the shim can't score."""
+        def _fn(entry):
+            qubits = (list(entry['alpha']) + list(entry['beta'])
+                      + list(entry['ancillas']))
+            if not hasattr(props, 'score_layout'):
+                return None
+            res = props.score_layout(qubits)
+            return res['fidelity'] if res else None
+        return _fn
+
+    def _annotate_scan_circuit_lqs(scan_result, get_backend, get_props):
+        """(A3/S2) Fill each scan entry's lqs_circuit with THAT backend's
+        circuit-level fidelity, so the scan table/dropdowns display the same
+        scale as the local sweep. Runs on the worker thread (props are
+        cache-first). A per-backend failure leaves lqs_circuit as-is (None →
+        the '(template)' fallback still applies to genuine failures only)."""
+        for r in scan_result.get('results', []):
+            sweep = r.get('sweep')
+            if not sweep:
+                continue
+            try:
+                scorer = _scan_circuit_score(get_props(get_backend(r['name'])))
+            except Exception:
+                continue
+            for entries in sweep.get('strata', {}).values():
+                for e in entries:
+                    if e.get('lqs_circuit') is None:
+                        try:
+                            e['lqs_circuit'] = scorer(e)
+                        except Exception:
+                            e['lqs_circuit'] = None
+
     def _scan_filtered(eligible, norb, get_backend, get_props, min_bridges):
         """Handler-side per-target scan with cached-history stability filter.
 
@@ -592,8 +690,9 @@ def setup_lucj_callbacks(ctx):
 
     def _entry_label(entry):
         k = len(entry['ancillas'])
-        return (f"k={k} · #{entry['rank_in_stratum']} · "
-                f"LQS {entry['product_score'] * 100.0:.1f}%")
+        pct, is_tmpl = _entry_lqs_pct(entry)
+        suffix = " (template)" if is_tmpl else ""
+        return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
 
     def _render_targets(targets):
         rows = []
@@ -651,7 +750,17 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{badge}</td></tr>")
             else:
-                lqs = esc(f"{r['best_lqs'] * 100.0:.1f}%")
+                # Scan sweeps aren't circuit-scored (remote backend props are
+                # not the current state's) → template heuristic, flagged.
+                best_entry = None
+                for _entries in r['sweep']['strata'].values():
+                    if _entries:
+                        best_entry = _entries[0]
+                        break
+                if best_entry is not None and best_entry.get('lqs_circuit') is not None:
+                    lqs = esc(f"{best_entry['lqs_circuit'] * 100.0:.1f}%")
+                else:
+                    lqs = esc(f"{r['best_lqs'] * 100.0:.1f}% (template)")
                 ncand = sum(len(v) for v in r['sweep']['strata'].values())
                 cap = _k_cap_phrase(_scan.get('norb', 0),
                                     r['sweep'].get('k_max_effective'))
@@ -807,6 +916,8 @@ def setup_lucj_callbacks(ctx):
                     result = scan_qpus(eligible, norb, get_backend, get_props,
                                        min_bridges=min_bridges, top_n=3,
                                        progress_cb=_on_scan_progress)
+                # (A3/S2) Circuit-level LQS per backend — one scale everywhere.
+                _annotate_scan_circuit_lqs(result, get_backend, get_props)
                 return (result, list(handler.records))
             finally:
                 try:

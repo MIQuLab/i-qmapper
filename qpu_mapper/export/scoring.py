@@ -42,6 +42,77 @@ def compute_error_delta(qp_a, gp_a, qp_b, gp_b):
 # ESTIMATED FIDELITY
 # ═══════════════════════════════════════════════════════════════════════
 
+def estimate_fidelity_core(layout_qubit_ids, readout_by_id, gate_edges,
+                           all_readout=None):
+    """Pure product-form fidelity — the math of :func:`estimate_circuit_fidelity`
+    with all state reads lifted out, so the SAME scorer serves the local C1
+    box (state-backed wrapper below) and the multi-QPU scan (per-backend
+    arrays from ``props_shim.CachedPropsShim``).
+
+    Args:
+        layout_qubit_ids: ordered iterable of qubit ids in the layout.
+        readout_by_id: ``{qubit_id: readout_error}`` for (at least) the layout
+            ids. NaN allowed (skipped). Missing ids are skipped.
+        gate_edges: iterable of ``(id_u, id_v, cz_error)`` — the device
+            couplings; those with BOTH endpoints in the layout set contribute.
+        all_readout: optional full readout array for device-mean outlier
+            detection; ``None`` → no outliers.
+
+    Returns the same dict shape as :func:`estimate_circuit_fidelity`.
+    """
+    qubit_set = set(layout_qubit_ids)
+
+    readout_f = 1.0
+    worst_q = (None, 0)
+    n_q = 0
+    for qid in layout_qubit_ids:
+        err = readout_by_id.get(qid)
+        if err is None:
+            continue
+        if not np.isnan(err):
+            readout_f *= (1 - err)
+            n_q += 1
+            if err > worst_q[1]:
+                worst_q = (qid, float(err))
+
+    gate_f = 1.0
+    worst_g = (None, 0)
+    n_g = 0
+    for u_id, v_id, err in gate_edges:
+        if u_id in qubit_set and v_id in qubit_set:
+            if err is not None and not np.isnan(err):
+                gate_f *= (1 - err)
+                n_g += 1
+                if err > worst_g[1]:
+                    worst_g = ((u_id, v_id), float(err))
+
+    total_f = readout_f * gate_f
+
+    outliers = []
+    if all_readout is not None:
+        arr = np.asarray(all_readout, dtype=float)
+        if len(arr) > OUTLIER_MIN_SAMPLES:
+            valid = arr[~np.isnan(arr)]
+            if len(valid) > 0:
+                mean, std = np.mean(valid), np.std(valid)
+                threshold = mean + OUTLIER_SIGMA * std
+                for qid in layout_qubit_ids:
+                    err = readout_by_id.get(qid)
+                    if err is not None and not np.isnan(err) and err > threshold:
+                        outliers.append((qid, float(err)))
+
+    return {
+        'fidelity': float(total_f),
+        'readout_fidelity': float(readout_f),
+        'gate_fidelity': float(gate_f),
+        'n_qubits': n_q,
+        'n_gates': n_g,
+        'worst_qubit': worst_q,
+        'worst_gate': worst_g,
+        'outliers': outliers,
+    }
+
+
 def estimate_circuit_fidelity(state, circuit_idx, mode='lucj'):
     """Estimate a product-form fidelity upper bound from calibration data.
 
@@ -113,66 +184,25 @@ def estimate_circuit_fidelity(state, circuit_idx, mode='lucj'):
     if not qubit_ids or not state.qubit_props_data:
         return None
 
+    # ── State reads → plain arrays/dicts, then delegate to the pure core ──
     q_id_map = {q: i for i, q in enumerate(state.qubit_ids)} if state.qubit_ids else {}
 
-    # Readout fidelity
     re_arr = state.qubit_props_data.get('readout_error', np.array([]))
-    readout_f = 1.0
-    worst_q = (None, 0)
-    n_q = 0
+    readout_by_id = {}
     for qid in qubit_ids:
         idx = q_id_map.get(qid)
         if idx is not None and idx < len(re_arr):
-            err = re_arr[idx]
-            if not np.isnan(err):
-                readout_f *= (1 - err)
-                n_q += 1
-                if err > worst_q[1]:
-                    worst_q = (qid, float(err))
+            readout_by_id[qid] = re_arr[idx]
 
-    # Gate fidelity (CZ gates between layout qubits)
     cz_arr = state.gate_props_data.get('cz_error', np.array([]))
-    qubit_set = set(qubit_ids)
-    gate_f = 1.0
-    worst_g = (None, 0)
-    n_g = 0
+    gate_edges = []
     for i, edge in enumerate(state.edges_list or []):
+        # Access u_id/v_id for every edge (same pattern as before), but only
+        # feed the core edges whose cz value is present — the both-endpoints-
+        # in-layout filter and NaN skip live in estimate_fidelity_core.
         u_id, v_id = state.qubit_ids[edge[0]], state.qubit_ids[edge[1]]
-        if u_id in qubit_set and v_id in qubit_set:
-            if i < len(cz_arr):
-                err = cz_arr[i]
-                if not np.isnan(err):
-                    # Multiplicative fidelity accumulation, same form as
-                    # readout_f above: each valid gate contributes a
-                    # (1 - err) factor to the product.
-                    gate_f *= (1 - err)
-                    n_g += 1
-                    if err > worst_g[1]:
-                        worst_g = ((u_id, v_id), float(err))
+        if i < len(cz_arr):
+            gate_edges.append((u_id, v_id, cz_arr[i]))
 
-    total_f = readout_f * gate_f
-
-    # Outlier detection: flag qubits whose readout error sits more than
-    # OUTLIER_SIGMA standard deviations above the device mean.
-    outliers = []
-    if len(re_arr) > OUTLIER_MIN_SAMPLES:
-        valid = re_arr[~np.isnan(re_arr)]
-        if len(valid) > 0:
-            mean, std = np.mean(valid), np.std(valid)
-            threshold = mean + OUTLIER_SIGMA * std
-            for qid in qubit_ids:
-                idx = q_id_map.get(qid)
-                if idx is not None and idx < len(re_arr):
-                    if not np.isnan(re_arr[idx]) and re_arr[idx] > threshold:
-                        outliers.append((qid, float(re_arr[idx])))
-
-    return {
-        'fidelity': float(total_f),
-        'readout_fidelity': float(readout_f),
-        'gate_fidelity': float(gate_f),
-        'n_qubits': n_q,
-        'n_gates': n_g,
-        'worst_qubit': worst_q,
-        'worst_gate': worst_g,
-        'outliers': outliers,
-    }
+    return estimate_fidelity_core(qubit_ids, readout_by_id, gate_edges,
+                                  all_readout=re_arr)

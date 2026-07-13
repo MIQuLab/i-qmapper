@@ -85,6 +85,27 @@ class CachedPropsShim:
             raise KeyError(
                 f"no gate_error for edge {(u, v)!r}") from exc
 
+    def score_layout(self, layout_qubit_ids):
+        """Circuit-level fidelity for a layout on THIS backend, via the shared
+        ``export.scoring.estimate_fidelity_core`` — so a scan candidate lands
+        on the SAME scale as the local Estimated Layout-Quality box. Returns
+        the core dict (``None`` only if the layout is empty)."""
+        from .export.scoring import estimate_fidelity_core
+        ids = list(layout_qubit_ids)
+        if not ids:
+            return None
+        readout_by_id = {}
+        for q in ids:
+            try:
+                readout_by_id[q] = self._readout[q]
+            except (IndexError, KeyError, TypeError):
+                pass
+        gate_edges = [(u, v, err)
+                      for key, err in self._gate.items()
+                      for (u, v) in (tuple(key),)]
+        return estimate_fidelity_core(ids, readout_by_id, gate_edges,
+                                      all_readout=self._readout)
+
 
 def _backend_edges(backend):
     """Deterministic edge list for a backend, matching data._generate_ibm."""

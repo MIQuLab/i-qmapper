@@ -1702,11 +1702,6 @@ class MapperUIBuilder:
             HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
             HTML(f"<div style='font-size:14px;font-weight:bold;color:#1a5276;"
                  f"margin:3px 0;'>📍 This backend ({name})</div>"),
-            HTML("<div style='font-size:12px;color:#888;margin:0 0 3px 0;'>"
-                 "Per-layout <b>LQS</b> is <i>template fidelity (single-pass "
-                 "edges)</i>; the <i>Estimated Layout-Quality</i> box "
-                 "(Analysis) is the circuit-level score. Two different "
-                 "scales.</div>"),
             self.dd_lucj_layout,
             self.lbl_lucj_detail,
             # ── Remote scan block — its own header + Clear control ──────
