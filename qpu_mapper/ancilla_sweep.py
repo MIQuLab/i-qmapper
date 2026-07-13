@@ -399,9 +399,18 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                     lay[value] = _key_to_phys(key)
                 if any(v is None for v in lay):
                     continue
-                n_candidates_scored += 1
-                if _add_variant(_embedding_data(lay, nb_k), k, 'vf2'):
-                    per_stratum[k]['n_direct'] += 1
+                edata = _embedding_data(lay, nb_k)
+                # (K1) CASCADE: this direct k'-embedding seeds its OWN stratum
+                # (source 'vf2') AND every stratum below it via the prefix rule
+                # (source 'derived'). So a region that only a k'-search reaches
+                # — never enumerated at k_max — still populates all lower
+                # strata, and best-per-k stays monotone as k decreases.
+                for kk in range(k, min_bridges - 1, -1):
+                    n_candidates_scored += 1
+                    src = 'vf2' if kk == k else 'derived'
+                    if _add_variant(edata, kk, src):
+                        bucket = 'n_direct' if kk == k else 'n_derived'
+                        per_stratum[kk][bucket] += 1
 
     # Aggregate truncation for the existing banner (k_max OR any direct pass).
     vf2_truncated = any(m['truncated'] for m in per_stratum.values())
@@ -440,4 +449,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         'n_candidates_scored': n_candidates_scored,
         'excluded_qubits': excluded_sorted,
         'per_stratum': per_stratum,
+        # (K3) The ACTUAL VF2 cap, so the truncation banner can name it
+        # ("truncated at 2000 mappings") instead of n_raw_embeddings, and
+        # per_stratum[k]['truncated'] says WHICH strata hit it.
+        'mapping_cap': cap,
     }
