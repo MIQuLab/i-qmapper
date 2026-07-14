@@ -98,7 +98,8 @@ def select_excluded(volatility, *, threshold):
 
 def sweep_with_stability(norb, backend, props, history, *,
                          window_days=14, threshold=_DEFAULT_THRESHOLD,
-                         min_bridges=None, top_n=3, mapping_cap=None):
+                         min_bridges=None, top_n=3, mapping_cap=None,
+                         today=None):
     """Stability-filtered ancilla sweep with an automatic relax valve.
 
     1. Score volatility over the windowed history and build the excluded set.
@@ -123,7 +124,10 @@ def sweep_with_stability(norb, backend, props, history, *,
     if not history:
         return _plain()
 
-    volatility = compute_qubit_volatility(history, window_days)
+    # (F2) Anchor the window to the SELECTED date when one is active — dates
+    # after `today` are ignored, so the window is [today-window_days, today].
+    # today=None keeps the now-anchored latest-window behaviour (live mode).
+    volatility = compute_qubit_volatility(history, window_days, today=today)
     if not volatility:
         return _plain()
 

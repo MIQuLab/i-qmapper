@@ -69,8 +69,12 @@ class _Props:
 
 
 def _run():
+    # shuffle_seed=None pins the NATURAL node order this fixture's truncation
+    # story depends on (poor region enumerated first). The cascade is what's
+    # under test here; the shuffle has its own suite (test_shuffle_search.py).
     return sweep_ancilla_layouts(NORB, _make_backend(), _Props(),
-                                 min_bridges=1, top_n=50, mapping_cap=CAP)
+                                 min_bridges=1, top_n=50, mapping_cap=CAP,
+                                 shuffle_seed=None)
 
 
 def _in_good(e):
@@ -132,3 +136,108 @@ def test_result_exposes_mapping_cap_for_the_banner():
     # per-stratum truncation flags say WHICH strata hit it (k=1 did, k=2 didn't).
     assert res['per_stratum'][1]['truncated'] is True
     assert res['per_stratum'][2]['truncated'] is False
+
+
+# ── W2: monotonicity on the DISPLAYED metric (product ≠ circuit scale) ───────
+#
+# The live bug: strata are sliced to top_n by product_score BEFORE the UI's
+# lqs_circuit is computed. Where the scales diverge, the true circuit-best
+# falls below the product line unseen and the status line reads e.g.
+# "3→49.3% · 2→40.8%" — non-monotone on the DISPLAYED metric.
+#
+# Fixture with the scales deliberately opposed:
+#   * region D (low ids): width-16 ladder, bridges cols 0..7 → k=2 only, MANY
+#     decoys, props error 0.001 → HIGH product_score (product's favourites).
+#   * region G (high ids): width-12 ladder, bridges cols 0,4,8 → hosts k=3,
+#     props error 0.02 → LOW product_score, but the canned circuit scorer rates
+#     G's qubits ~1.0 and D's ~0.5 → G is the DISPLAYED-metric winner.
+# The k=3 winner is in G; its k=2 prefix (the monotonicity anchor) has product
+# BELOW every D decoy, so product-only slicing drops it — W1 must keep it in the
+# scoring window and surface it once ranked by lqs_circuit.
+
+_WG = set(range(100, 127))          # region G ids
+
+
+def _w2_ladder(edges, w_top, w_bot, brg_cols, bt, bb, bg):
+    t = [bt + j for j in range(w_top)]
+    b = [bb + j for j in range(w_bot)]
+    for j in range(w_top - 1):
+        edges.append((t[j], t[j + 1]))
+    for j in range(w_bot - 1):
+        edges.append((b[j], b[j + 1]))
+    for i, c in enumerate(brg_cols):
+        edges.append((t[c], bg + i))
+        edges.append((bg + i, b[c]))
+
+
+def _w2_backend():
+    edges = []
+    _w2_ladder(edges, 16, 16, list(range(8)), 0, 16, 32)     # D: k=2 decoys
+    _w2_ladder(edges, 12, 12, [0, 4, 8], 100, 112, 124)      # G: hosts k=3
+    g = rustworkx.PyDiGraph()
+    for i in range(127):
+        g.add_node(i)
+    for u, v in edges:
+        g.add_edge(u, v, None)
+    return SimpleNamespace(coupling_map=SimpleNamespace(graph=g),
+                           operation_names=['cz', 'sx', 'rz', 'x'], name='chip')
+
+
+class _W2Props:                     # product_score PRE-FILTER favours D
+    def readout_error(self, q):
+        return 0.02 if q in _WG else 0.001
+
+    def gate_error(self, name, edge):
+        u, v = edge
+        return 0.02 if (u in _WG and v in _WG) else 0.001
+
+
+def _w2_circuit(entry):             # DISPLAYED metric favours G, fewer bridges higher
+    qs = entry['alpha'] + entry['beta'] + entry['ancillas']
+    f = 1.0
+    for q in qs:
+        f *= 0.999 if q in _WG else 0.5
+    return f
+
+
+def _w2_region(entry):
+    return 'G' if set(entry['alpha'] + entry['beta'] + entry['ancillas']) <= _WG else 'D'
+
+
+def _w2_run(**kw):
+    return sweep_ancilla_layouts(NORB, _w2_backend(), _W2Props(), min_bridges=1,
+                                 top_n=3, shuffle_seed=None, **kw)
+
+
+def test_displayed_metric_best_per_k_is_monotone():
+    res = _w2_run(circuit_score_fn=_w2_circuit)
+    ks = sorted(res['strata'], reverse=True)
+    bests = [res['strata'][k][0]['lqs_circuit'] for k in ks]
+    for hi, lo in zip(bests, bests[1:]):
+        assert lo >= hi - 1e-9, f"displayed-metric best fell: {bests} for {ks}"
+    # Each stratum's displayed winner is region G (the circuit-good region).
+    for k in ks:
+        assert _w2_region(res['strata'][k][0]) == 'G'
+
+
+def test_slice_contains_higher_winners_prefix_anchor():
+    res = _w2_run(circuit_score_fn=_w2_circuit)
+    k3 = res['strata'][3][0]
+    assert _w2_region(k3) == 'G'
+    chain, anc2 = frozenset(k3['layout']), frozenset(k3['ancillas'][:2])
+    # The k=3 winner's k=2 prefix survives into the k=2 slice (W1 anchor),
+    # and it is the displayed winner there (circuit >= its k=3 parent).
+    k2_top = res['strata'][2][0]
+    assert frozenset(k2_top['layout']) == chain
+    assert frozenset(k2_top['ancillas']) == anc2
+    assert k2_top['lqs_circuit'] >= k3['lqs_circuit'] - 1e-9
+
+
+def test_product_only_slice_would_have_hidden_the_anchor():
+    # The divergence is real: without the circuit scorer, product-only slicing
+    # fills the k=2 top_n with the low-error D decoys — the G anchor is nowhere
+    # in the displayed slice. This is exactly what W1 rescues.
+    res = _w2_run()                                   # no circuit_score_fn
+    regions = [_w2_region(e) for e in res['strata'][2]]
+    assert regions == ['D', 'D', 'D']
+    assert 'lqs_circuit' not in res['strata'][2][0]   # byte-compat shape intact

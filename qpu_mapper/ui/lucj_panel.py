@@ -103,6 +103,7 @@ def setup_lucj_callbacks(ctx):
     lucj_ancilla_dd = ctx.lucj_ancilla_dd
     lucj_min_ancilla = ctx.lucj_min_ancilla
     lucj_top_n = ctx.lucj_top_n
+    lucj_search_cap = ctx.lucj_search_cap
     lucj_chk_score = ctx.lucj_chk_score
     chk_deep_search = ctx.chk_deep_search
     btn_lucj_run = ctx.btn_lucj_run
@@ -301,6 +302,35 @@ def setup_lucj_callbacks(ctx):
                     except Exception:
                         e['lqs_circuit'] = None
 
+    # ── Temporal anchoring: one epoch per search ─────────────────────
+    def _selected_date_anchor():
+        """(F2) The selected calibration's date 'YYYY-MM-DD' when a PAST date
+        is active, else None (live). Used to anchor the stability window and
+        the epoch-mixing header note to the user's chosen date."""
+        if getattr(state, 'time_mode', 'live') == 'live':
+            return None
+        ts = getattr(state, 'point_timestamp', None)
+        return ts[:10] if isinstance(ts, str) and len(ts) >= 10 else None
+
+    def _local_scoring_props():
+        """(F1) Pre-rank on the SAME epoch as the C1 circuit-score — the
+        selected date's arrays — so product_score and lqs_circuit never mix
+        epochs inside one search. Reuses the scan's CachedPropsShim adapter.
+        Falls back to live initial_props if the arrays aren't loaded / mis-shape
+        (never break the sweep for a scoring-input choice)."""
+        from ..props_shim import CachedPropsShim
+        qp = getattr(state, 'qubit_props_data', None)
+        gp = getattr(state, 'gate_props_data', None)
+        edges = getattr(state, 'edges_list', None)
+        if not qp or not gp or edges is None or 'readout_error' not in qp:
+            return state.initial_props
+        key = 'cz_error' if 'cz_error' in gp else next(iter(gp))
+        n = len(state.qubit_ids) if getattr(state, 'qubit_ids', None) else None
+        try:
+            return CachedPropsShim(qp, gp, list(edges), gate_key=key, n_qubits=n)
+        except Exception:
+            return state.initial_props
+
     # ── P1: SINGLE SOURCE of sweep params — local AND scan read this ──
     def _sweep_kwargs_from_ui():
         """The one place sweep parameters are derived from the UI. Both the
@@ -309,10 +339,12 @@ def setup_lucj_callbacks(ctx):
         min_val = lucj_min_ancilla.value
         min_bridges = None if (min_val is None or min_val <= 0) else min_val
         top_val = lucj_top_n.value
+        cap_val = lucj_search_cap.value
         return {
             'min_bridges': min_bridges,
             'top_n': top_val if (top_val and top_val >= 1) else 3,
             'hybrid': chk_deep_search.value,
+            'mapping_cap': cap_val if (cap_val and cap_val >= 1) else None,
         }
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
@@ -379,22 +411,26 @@ def setup_lucj_callbacks(ctx):
         # P1: exact same params the scan uses (min_bridges / top_n / hybrid).
         kwargs = _sweep_kwargs_from_ui()
 
+        # F1: pre-rank on the same epoch as the circuit-score (selected date).
+        scoring_props = _local_scoring_props()
+        anchor = _selected_date_anchor()          # F2: window/header anchor
         # V2: opt-in stability filter (drop-in superset of the plain sweep).
         history = getattr(state, 'cal_history', None)
         if _stability_filter_active() and history:
             from ..stability_filter import sweep_with_stability
             res = sweep_with_stability(
-                norb, state.active_backend, state.initial_props, history,
+                norb, state.active_backend, scoring_props, history,
                 window_days=rb_stability_window.value,
                 threshold=ft_stability_threshold.value,
-                min_bridges=kwargs['min_bridges'], top_n=kwargs['top_n'])
-            _render_stability_banner(res.get('stability'), norb)
+                min_bridges=kwargs['min_bridges'], top_n=kwargs['top_n'],
+                mapping_cap=kwargs['mapping_cap'], today=anchor)
+            _render_stability_banner(res.get('stability'), norb, anchor=anchor)
             # The frozen stability engine can't take circuit_score_fn — fill
             # circuit-level LQS on its survivors here (A2).
             _annotate_circuit_lqs(res)
         else:
             res = sweep_ancilla_layouts(
-                norb, state.active_backend, state.initial_props,
+                norb, state.active_backend, scoring_props,
                 circuit_score_fn=_circuit_score,   # A2: aligned circuit LQS
                 **kwargs)                          # P1 single source (incl. hybrid)
             if _stability_filter_active():
@@ -540,8 +576,14 @@ def setup_lucj_callbacks(ctx):
         return bool(chk_stability_filter.value
                     and not chk_stability_filter.disabled)
 
-    def _render_stability_banner(stab, norb):
-        """Render res['stability'] (V2): filtered / relaxed / unavailable."""
+    def _render_stability_banner(stab, norb, anchor=None):
+        """Render res['stability'] (V2): filtered / relaxed / unavailable.
+        `anchor` (a 'YYYY-MM-DD' selected date) names the window's upper bound
+        when a past date is active (F2)."""
+        # F2: "14d before <date>" when a past date anchors the window, else "14d".
+        def _window_txt():
+            wd = esc(str(stab.get('window_days')))
+            return (f"{wd}d before {esc(anchor)}" if anchor else f"{wd}d")
         if stab is None or not stab.get('available', False):
             lbl_lucj_stability.value = (
                 "<div style='font-size:13px;color:#888;margin:3px 0;'>"
@@ -562,7 +604,7 @@ def setup_lucj_callbacks(ctx):
                 f"<div style='font-size:13px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>🛡 filtered {esc(str(n))} volatile qubits "
-                f"(window {esc(str(stab.get('window_days')))}d)</div>")
+                f"(window {_window_txt()})</div>")
 
     def _cached_history_for(backend_name):
         """Assemble a per-backend history dict from the DISK CACHE ONLY (no
@@ -663,12 +705,13 @@ def setup_lucj_callbacks(ctx):
                 hist = _cached_history_for(name) if use_filter else None
                 if hist:
                     # sweep_with_stability (frozen) can't take hybrid; it uses
-                    # the engine default. Forward the shared min_bridges/top_n.
+                    # the engine default. Forward min_bridges/top_n/mapping_cap.
                     res = sweep_with_stability(
                         norb, backend, props, hist, window_days=window,
                         threshold=threshold,
                         min_bridges=kwargs['min_bridges'],
-                        top_n=kwargs['top_n'])
+                        top_n=kwargs['top_n'],
+                        mapping_cap=kwargs['mapping_cap'])
                     stab = res.get('stability', {'available': False})
                 else:
                     res = sweep_ancilla_layouts(norb, backend, props, **kwargs)
@@ -870,6 +913,17 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{vcell}</td></tr>")
         children = [HTML(head + "".join(body) + "</table>")]
+
+        # F3: when a PAST date is active locally, the local backend was scored
+        # on that date but remote backends are scored LIVE — say so, no silent
+        # mixing.
+        _anchor = _selected_date_anchor()
+        if _anchor:
+            children.insert(0, HTML(
+                f"<div style='font-size:12px;color:#b9770e;background:#fef9e7;"
+                f"padding:3px 8px;border-radius:4px;border:1px solid #fdebd0;"
+                f"margin:0 0 4px;'>⏱ local backend scored on "
+                f"{esc(_anchor)}; remote backends on live calibrations</div>"))
 
         # Per-QPU stratified dropdowns (same label format as single-circuit).
         for r in results:

@@ -80,9 +80,12 @@ Caveats
   suitable for ranking, not absolute fidelity prediction.
 """
 
+import hashlib
 import logging
+import random
 
 import numpy as np
+import rustworkx
 
 from .auto_lucj import (
     _collect_vf2_mappings,
@@ -100,6 +103,21 @@ _log = logging.getLogger(__name__)
 # the fidelity factor (1 - 1.0) = 0, i.e. the candidate is effectively
 # excluded from the top ranks.
 _UNCALIBRATED_PENALTY = 1.0
+
+# Sentinel for the `shuffle_seed` keyword: AUTO derives a deterministic
+# per-stratum seed from (backend_name, norb, k). None disables the shuffle
+# (natural node-index order == pre-shuffle behaviour, byte-compatible). An
+# explicit int is combined with k so strata still sample differently yet
+# reproducibly. See S1 in the SHUFFLED SEARCH ORDER change.
+_AUTO_SHUFFLE = object()
+
+
+def _stable_seed(*parts) -> int:
+    """Process-independent 32-bit seed from the parts (Python's built-in
+    hash() is salted per run and unusable here). Deterministic across runs
+    and machines so a shuffled search is reproducible."""
+    digest = hashlib.md5('|'.join(str(p) for p in parts).encode()).hexdigest()
+    return int(digest[:8], 16)
 
 
 def _safe_readout(props, qubit):
@@ -129,7 +147,8 @@ def _safe_gate_error(props, gate_name, u, v):
 def sweep_ancilla_layouts(norb, backend, props, *,
                           min_bridges=None, top_n=3,
                           mapping_cap=None, exclude_qubits=None,
-                          circuit_score_fn=None, hybrid=True) -> dict:
+                          circuit_score_fn=None, hybrid=True,
+                          shuffle_seed=_AUTO_SHUFFLE) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -161,6 +180,17 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             leaves ``lqs_circuit=None`` and never aborts the sweep. When
             ``None`` (default) the returned dict is byte-compatible with the
             pre-A2 shape — no ``lqs_circuit`` key is added.
+        shuffle_seed: controls the node-INSERTION order of the graph handed to
+            each VF2 call, so a truncated search samples the whole chip instead
+            of one geographic corner (node-index prefix). ``AUTO`` (default)
+            derives a deterministic per-stratum seed from
+            ``(backend_name, norb, k)`` — reproducible across runs, and each
+            stratum samples a different region. ``None`` keeps the natural
+            order (byte-for-byte identical to the pre-shuffle sweep — the
+            pinned compatibility path). An explicit ``int`` is combined with
+            ``k`` (still per-stratum, still reproducible; for tests). Physical
+            qubit ids ride in node data and are recovered order-independently
+            via ``_key_to_phys`` — no relabel leakage.
         hybrid: when True (default), each stratum k' < k_max_effective is the
             UNION of (a) the derived prefix candidates AND (b) a DIRECT VF2 at
             the k' template on the same (possibly pruned) graph. Derivation
@@ -179,9 +209,10 @@ def sweep_ancilla_layouts(norb, backend, props, *,
       'n_candidates_scored': int,         # total variants scored (pre-dedupe)
       'excluded_qubits': [...],           # sorted list actually pruned (empty
                                           #   when exclude_qubits is None)
-      'per_stratum': {k: {'n_direct', 'n_derived', 'truncated'}},
+      'per_stratum': {k: {'n_direct', 'n_derived', 'truncated', 'shuffled'}},
                                           # per-k provenance; vf2_truncated is
-                                          #   any(per-stratum truncated)
+                                          #   any(per-stratum truncated);
+                                          #   'shuffled' = search order permuted
     }
     entry = {
       'layout': [...],                    # chain qubits (alpha+beta)
@@ -214,6 +245,37 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         def _key_to_phys(k):
             return k
 
+    # ---- 1b. Per-stratum shuffled search graph (S1) -----------------------
+    # The template (WHAT to search for) is always built on the natural
+    # `search_graph`, so k_max_effective and every k' template are stable and
+    # seed-independent. Only the TARGET graph handed to VF2 is permuted, which
+    # merely changes the ORDER embeddings are yielded — so a cap truncates a
+    # chip-wide SAMPLE, not one low-index corner. Node data carries the
+    # physical id; recovery is order-independent.
+    backend_name = str(getattr(backend, 'name', '') or '')
+
+    def _seed_for(k):
+        if shuffle_seed is None:
+            return None
+        if shuffle_seed is _AUTO_SHUFFLE:
+            return _stable_seed(backend_name, norb, k)
+        return _stable_seed(shuffle_seed, k)
+
+    def _search_for(k):
+        """(graph, key_to_phys, shuffled) for the VF2 call at stratum k."""
+        seed = _seed_for(k)
+        if seed is None:
+            return search_graph, _key_to_phys, False
+        order = list(search_graph.node_indices())
+        random.Random(seed).shuffle(order)
+        g = rustworkx.PyGraph()
+        old_to_new = {}
+        for old in order:
+            old_to_new[old] = g.add_node(_key_to_phys(old))   # data = phys id
+        for u, v in search_graph.edge_list():
+            g.add_edge(old_to_new[u], old_to_new[v], None)
+        return g, (lambda key: g[key]), True
+
     k_max = (norb + 3) // 4  # ceil(norb / 4): the geometric bridge ceiling
     template, k_max_effective = create_lucj_zigzag_layout(
         num_orbitals=norb,
@@ -238,7 +300,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
 
     # ---- 3. Collect VF2 embeddings, detect truncation ---------------------
     cap = mapping_cap if mapping_cap is not None else _MAX_RAW_VF2_MAPPINGS
-    mappings = _collect_vf2_mappings(search_graph, template, cap=cap)
+    kmax_graph, kmax_key_to_phys, kmax_shuffled = _search_for(k_max_effective)
+    mappings = _collect_vf2_mappings(kmax_graph, template, cap=cap)
     # The helper only *logs* truncation; detect it by the cap being reached.
     vf2_truncated = len(mappings) >= cap
     if vf2_truncated:
@@ -250,7 +313,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     for mapping in mappings:
         layout = [None] * expected_size
         for key, value in mapping.items():
-            layout[value] = _key_to_phys(key)
+            layout[value] = kmax_key_to_phys(key)
         if any(v is None for v in layout):
             _log.debug("Ancilla sweep: skipping incomplete VF2 mapping")
             continue
@@ -289,7 +352,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     # strata_pool[k] : dict keyed by (frozenset(chain), frozenset(ancilla))
     #                  -> entry, giving per-stratum dedupe for free.
     strata_pool = {k: {} for k in range(k_max_effective, min_bridges - 1, -1)}
-    per_stratum = {k: {'n_direct': 0, 'n_derived': 0, 'truncated': False}
+    per_stratum = {k: {'n_direct': 0, 'n_derived': 0, 'truncated': False,
+                       'shuffled': False}
                    for k in range(k_max_effective, min_bridges - 1, -1)}
     n_candidates_scored = 0
 
@@ -367,6 +431,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
 
     # 6a. k_max embeddings → the k_max stratum (direct) + derived prefixes.
     per_stratum[k_max_effective]['truncated'] = vf2_truncated
+    per_stratum[k_max_effective]['shuffled'] = kmax_shuffled
     for layout in layouts:
         edata = _embedding_data(layout, k_max_effective)
         for k in range(k_max_effective, min_bridges - 1, -1):
@@ -389,14 +454,16 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                 _log.debug("Hybrid: k=%d template returned %d bridges; "
                            "skipping direct pass", k, nb_k)
                 continue
-            maps_k = _collect_vf2_mappings(search_graph, tmpl_k, cap=cap)
+            k_graph, k_key_to_phys, k_shuffled = _search_for(k)
+            per_stratum[k]['shuffled'] = k_shuffled
+            maps_k = _collect_vf2_mappings(k_graph, tmpl_k, cap=cap)
             if len(maps_k) >= cap:
                 per_stratum[k]['truncated'] = True
             exp_k = 2 * norb + nb_k
             for mapping in maps_k:
                 lay = [None] * exp_k
                 for key, value in mapping.items():
-                    lay[value] = _key_to_phys(key)
+                    lay[value] = k_key_to_phys(key)
                 if any(v is None for v in lay):
                     continue
                 edata = _embedding_data(lay, nb_k)
@@ -415,30 +482,73 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     # Aggregate truncation for the existing banner (k_max OR any direct pass).
     vf2_truncated = any(m['truncated'] for m in per_stratum.values())
 
-    # ---- 7. Rank each stratum by product_score desc, slice top_n ---------
-    # product_score is the internal PRE-RANK (cross-stratum-comparable, cheap).
-    # Circuit-level scoring (A2) runs ONLY on the sliced survivors — top_n per
-    # stratum — so the expensive state-bound scorer is called O(top_n * strata)
-    # times, not per raw candidate.
+    # ---- 7. Slice each stratum by the DISPLAYED metric (W1) ---------------
+    # product_score (template scale) is the cheap PRE-FILTER for the pool, but
+    # the final slice must be chosen by the metric the UI shows (lqs_circuit).
+    # The two scales diverge, so slicing to top_n by product_score BEFORE
+    # circuit-scoring can drop the true circuit-best below the line unseen —
+    # the live "3->49.3% . 2->40.8%" monotonicity violation.
+    #
+    # Fix: circuit-score a WIDENED window = the top W by product_score
+    # (W = max(top_n*5, 25)) PLUS, guaranteed regardless of rank, the
+    # prefix-child of every higher stratum's already-selected winner (the
+    # monotonicity anchors — the cascade already generated them, so they live
+    # in this pool). Then rank the scored window by lqs_circuit (None sinks)
+    # and slice to top_n. With no circuit scorer the pre-A2 product-sliced
+    # shape is preserved byte-for-byte.
     strata = {}
+    # higher_winners: (chain_fs, ancillas) of every selected entry in a higher
+    # stratum, so stratum k can pull in each one's k-prefix child as an anchor.
+    higher_winners = []
     for k in range(k_max_effective, min_bridges - 1, -1):
-        entries = sorted(strata_pool[k].values(),
-                         key=lambda e: e['product_score'], reverse=True)
-        entries = entries[:top_n]
+        pool = strata_pool[k]
+        by_product = sorted(pool.items(),
+                            key=lambda kv: kv[1]['product_score'], reverse=True)
+
+        if circuit_score_fn is None:
+            # Byte-compatible pre-A2 path: product slice, no lqs_circuit.
+            entries = [e for _, e in by_product[:top_n]]
+            for rank, entry in enumerate(entries, start=1):
+                entry['rank_in_stratum'] = rank
+            strata[k] = entries
+            continue
+
+        W = max(top_n * 5, 25)
+        window_keys = [key for key, _ in by_product[:W]]
+        seen = set(window_keys)
+        # Guarantee anchors: the k-prefix child of each higher winner.
+        for chain_fs, anc_full in higher_winners:
+            if len(anc_full) < k:
+                continue
+            akey = (chain_fs, frozenset(anc_full[:k]))
+            if akey in pool and akey not in seen:
+                seen.add(akey)
+                window_keys.append(akey)
+        window = [pool[key] for key in window_keys]
+
+        for entry in window:
+            try:
+                entry['lqs_circuit'] = circuit_score_fn(entry)
+            except Exception as exc:
+                # A scoring error must never abort the sweep.
+                _log.warning("Circuit scoring failed for a candidate "
+                             "(k=%d): %s", k, exc)
+                entry['lqs_circuit'] = None
+        # Rank by the DISPLAYED metric; None sinks; product_score breaks ties.
+        window.sort(
+            key=lambda e: (e['lqs_circuit'] is not None,
+                           e['lqs_circuit'] if e['lqs_circuit'] is not None
+                           else 0.0,
+                           e['product_score']),
+            reverse=True)
+        entries = window[:top_n]
         for rank, entry in enumerate(entries, start=1):
             entry['rank_in_stratum'] = rank
-        if circuit_score_fn is not None:
-            for entry in entries:
-                try:
-                    entry['lqs_circuit'] = circuit_score_fn(entry)
-                except Exception as exc:
-                    # A scoring error must never abort the sweep.
-                    _log.warning("Circuit scoring failed for a candidate "
-                                 "(k=%d): %s", k, exc)
-                    entry['lqs_circuit'] = None
         strata[k] = entries
-        _log.debug("Ancilla sweep stratum k=%d: %d candidates (top_n=%d)",
-                   k, len(entries), top_n)
+        higher_winners.extend(
+            (frozenset(e['layout']), tuple(e['ancillas'])) for e in entries)
+        _log.debug("Ancilla sweep stratum k=%d: scored %d, kept top %d",
+                   k, len(window), len(entries))
 
     return {
         'strata': strata,

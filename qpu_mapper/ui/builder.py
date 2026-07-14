@@ -305,6 +305,7 @@ class MapperUIBuilder:
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
             lucj_min_ancilla=self.lucj_min_ancilla, lucj_top_n=self.lucj_top_n,
+            lucj_search_cap=self.lucj_search_cap,
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
@@ -1232,6 +1233,15 @@ class MapperUIBuilder:
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
             tooltip='candidates shown per ancilla count')
+        # (S4) Advanced: the VF2 mapping cap. Raise to trade time for
+        # exhaustiveness (default matches auto_lucj._MAX_RAW_VF2_MAPPINGS).
+        self.lucj_search_cap = BoundedIntText(
+            value=2000, min=100, max=20000, step=500,
+            description='Search cap:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='max VF2 mappings enumerated per search — higher = more '
+                    'exhaustive, slower')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
@@ -1707,6 +1717,7 @@ class MapperUIBuilder:
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
             self.lucj_top_n,
+            self.lucj_search_cap,
             self.lucj_chk_score,
             self.chk_deep_search,
             self.chk_stability_filter,
