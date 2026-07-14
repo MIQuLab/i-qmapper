@@ -45,7 +45,7 @@ def _format_best_per_k(strata):
 
 
 def _sweep_mode_label(res):
-    """(H2) 'direct+derived' when any lower stratum got a direct-VF2 hit,
+    """'direct+derived' when any lower stratum got a direct-VF2 hit,
     else 'derived-only'."""
     kmax = res.get('k_max_effective')
     ps = res.get('per_stratum', {})
@@ -55,7 +55,7 @@ def _sweep_mode_label(res):
 
 
 def _format_sweep_status(res):
-    """One-line sweep summary (M2): 'Sweep: k=6..3 · 214 embeddings ·
+    """One-line sweep summary: 'Sweep: k=6..3 · 214 embeddings ·
     best per k: ...'. All interpolations esc()'d."""
     k_range = f"{res['k_max_effective']}..{res['min_bridges']}"
     emb = f"{res['n_raw_embeddings']:,}"
@@ -65,7 +65,7 @@ def _format_sweep_status(res):
 
 
 def _k_cap_phrase(norb, k_effective):
-    """(N1) 'k capped at E (requested R)' when the geometric request
+    """'k capped at E (requested R)' when the geometric request
     ceil(norb/4) exceeds what actually fit; '' otherwise. Pure metadata —
     replaces the operator's need to read the repeated stderr warning."""
     request = (norb + 3) // 4
@@ -75,7 +75,7 @@ def _k_cap_phrase(norb, k_effective):
 
 
 class _ScanNoticeCapture(logging.Handler):
-    """(N2) Captures WARNING+ records off the 'qpu_mapper' logger during a
+    """Captures WARNING+ records off the 'qpu_mapper' logger during a
     scan, tagging each with the current backend context. emit() never raises
     out — a logging hiccup must not break the scan."""
 
@@ -238,7 +238,7 @@ def setup_lucj_callbacks(ctx):
                 f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
                 f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
             )
-    # (A2) The LQS shown here is the circuit-level score — the same number
+    # The LQS shown here is the circuit-level score — the same number
     # the Estimated Layout-Quality box reports. '(template)' flags the
     # internal heuristic used only when circuit scoring is unavailable.
     with contextlib.suppress(Exception):
@@ -268,7 +268,7 @@ def setup_lucj_callbacks(ctx):
         if entries:
             _apply_lucj_layout(entries[0])
 
-    # ── A2: circuit-level LQS for a sweep candidate ──────────────
+    # ── circuit-level LQS for a sweep candidate ──────────────
     def _circuit_score(entry):
         """Score a sweep candidate with the SAME path as the Estimated
         Layout-Quality box: build a scratch layout from the candidate and
@@ -305,7 +305,7 @@ def setup_lucj_callbacks(ctx):
 
     # ── Temporal anchoring: one epoch per search ─────────────────────
     def _selected_date_anchor():
-        """(F2) The selected calibration's date 'YYYY-MM-DD' when a PAST date
+        """The selected calibration's date 'YYYY-MM-DD' when a PAST date
         is active, else None (live). Used to anchor the stability window and
         the epoch-mixing header note to the user's chosen date."""
         if getattr(state, 'time_mode', 'live') == 'live':
@@ -314,7 +314,7 @@ def setup_lucj_callbacks(ctx):
         return ts[:10] if isinstance(ts, str) and len(ts) >= 10 else None
 
     def _local_scoring_props():
-        """(F1) Pre-rank on the SAME epoch as the C1 circuit-score — the
+        """Pre-rank on the SAME epoch as the C1 circuit-score — the
         selected date's arrays — so product_score and lqs_circuit never mix
         epochs inside one search. Reuses the scan's CachedPropsShim adapter.
         Falls back to live initial_props if the arrays aren't loaded / mis-shape
@@ -332,11 +332,11 @@ def setup_lucj_callbacks(ctx):
         except Exception:
             return state.initial_props
 
-    # ── P1: SINGLE SOURCE of sweep params — local AND scan read this ──
+    # ── SINGLE SOURCE of sweep params — local AND scan read this ──
     def _sweep_kwargs_from_ui():
         """The one place sweep parameters are derived from the UI. Both the
         local sweep and every scan per-target call pass exactly this, so the
-        two can never diverge again (the tonight bug)."""
+        two can never diverge again (a divergence here silently skews rankings)."""
         min_val = lucj_min_ancilla.value
         min_bridges = None if (min_val is None or min_val <= 0) else min_val
         top_val = lucj_top_n.value
@@ -346,12 +346,12 @@ def setup_lucj_callbacks(ctx):
             'top_n': top_val if (top_val and top_val >= 1) else 3,
             'hybrid': chk_deep_search.value,
             'mapping_cap': cap_val if (cap_val and cap_val >= 1) else None,
-            # (D2) 0.8 default when ON; None → exact top-N (byte-compatible).
+            # 0.8 default when ON; None → exact top-N (byte-compatible).
             'diversity_threshold': 0.8 if chk_lucj_diverse.value else None,
         }
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
-    # active backend's reference in the scan table (P2), so the scan never
+    # active backend's reference in the scan table, so the scan never
     # re-searches self yet keeps the reference point.
     _local_best_lqs = [None]
 
@@ -411,13 +411,13 @@ def setup_lucj_callbacks(ctx):
     def _generate_sweep(norb):
         from ..ancilla_sweep import sweep_ancilla_layouts
 
-        # P1: exact same params the scan uses (min_bridges / top_n / hybrid).
+        # exact same params the scan uses (min_bridges / top_n / hybrid).
         kwargs = _sweep_kwargs_from_ui()
 
-        # F1: pre-rank on the same epoch as the circuit-score (selected date).
+        # pre-rank on the same epoch as the circuit-score (selected date).
         scoring_props = _local_scoring_props()
-        anchor = _selected_date_anchor()          # F2: window/header anchor
-        # V2: opt-in stability filter (drop-in superset of the plain sweep).
+        anchor = _selected_date_anchor()          # window/header anchor
+        # opt-in stability filter (drop-in superset of the plain sweep).
         history = getattr(state, 'cal_history', None)
         if _stability_filter_active() and history:
             from ..stability_filter import sweep_with_stability
@@ -430,13 +430,13 @@ def setup_lucj_callbacks(ctx):
                 quality_sigma=_floor_sigma())
             _render_stability_banner(res.get('stability'), norb, anchor=anchor)
             # The frozen stability engine can't take circuit_score_fn — fill
-            # circuit-level LQS on its survivors here (A2).
+            # circuit-level LQS on its survivors here.
             _annotate_circuit_lqs(res)
         else:
             res = sweep_ancilla_layouts(
                 norb, state.active_backend, scoring_props,
-                circuit_score_fn=_circuit_score,   # A2: aligned circuit LQS
-                **kwargs)                          # P1 single source (incl. hybrid)
+                circuit_score_fn=_circuit_score,   # aligned circuit LQS
+                **kwargs)                          # single source (incl. hybrid)
             if _stability_filter_active():
                 # Checkbox on but no history dict → skipped note.
                 _render_stability_banner(None, norb)
@@ -453,7 +453,7 @@ def setup_lucj_callbacks(ctx):
             for entry in strata[k]:
                 pct, is_tmpl = _entry_lqs_pct(entry)
                 suffix = " (template)" if is_tmpl else ""
-                alt = " · alt region" if entry.get('diverse') else ""   # (D2)
+                alt = " · alt region" if entry.get('diverse') else ""   # region-diversity flag
                 dd_opts.append((
                     f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
                     f"{alt}",
@@ -468,7 +468,7 @@ def setup_lucj_callbacks(ctx):
 
         _seed_layout_dropdown(flat, dd_opts)
 
-        # Truncation banner (U5/K3): visible only when the VF2 cap was hit.
+        # Truncation banner: visible only when the VF2 cap was hit.
         # Name the REAL cap (mapping_cap) and WHICH strata truncated — not
         # k_max's n_raw_embeddings, which is an embedding count, not the cap.
         if res['vf2_truncated']:
@@ -487,7 +487,7 @@ def setup_lucj_callbacks(ctx):
         else:
             lbl_lucj_trunc.value = ""
 
-        # One-line summary (M2): per-stratum LQS gradient, NOT a single
+        # One-line summary: per-stratum LQS gradient, NOT a single
         # size-biased "best LQS" (product_score always favours fewer bridges).
         if flat:
             cap = _k_cap_phrase(norb, res.get('k_max_effective'))
@@ -539,7 +539,7 @@ def setup_lucj_callbacks(ctx):
 
     btn_lucj_run.on_click(_on_lucj_generate)
 
-    # ── M1: sweep mode always scores → grey out the score checkbox ────
+    # ── sweep mode always scores → grey out the score checkbox ────
     def _on_ancilla_mode_change(change=None):
         # 'Auto' (-1) == sweep mode; the engine always computes LQS there,
         # so the legacy "Score layouts" toggle is meaningless.
@@ -551,7 +551,7 @@ def setup_lucj_callbacks(ctx):
     lucj_ancilla_dd.observe(_on_ancilla_mode_change, names='value')
     _on_ancilla_mode_change()  # set initial state (default -1 → disabled)
 
-    # ── B2/B3/B4: Multi-QPU scan ─────────────────────────────────
+    # ── Multi-QPU scan ─────────────────────────────────
     btn_scan_qpus = ctx.btn_scan_qpus
     chk_scan_other_families = ctx.chk_scan_other_families
     btn_scan_clear = ctx.btn_scan_clear
@@ -561,7 +561,7 @@ def setup_lucj_callbacks(ctx):
     scan_marshal = ctx.scan_marshal
     inter_qpu_handoff = ctx.inter_qpu_handoff  # shared cell → stage hook
 
-    # ── Stability filter (V1/V2/V3) ──────────────────────────────
+    # ── Stability filter ──────────────────────────────
     chk_stability_filter = ctx.chk_stability_filter
     rb_stability_window = ctx.rb_stability_window
     ft_stability_threshold = ctx.ft_stability_threshold
@@ -569,7 +569,7 @@ def setup_lucj_callbacks(ctx):
     stability_ctrl_box = ctx.stability_ctrl_box
 
     def _floor_sigma():
-        """(F3) Quality-floor σ from the UI; 0 → None (floor off). Read at
+        """Quality-floor σ from the UI; 0 → None (floor off). Read at
         each sweep_with_stability call site (like window/threshold), so the
         local sweep and the scan share it by construction."""
         v = getattr(ft_stability_floor, 'value', None)
@@ -591,10 +591,10 @@ def setup_lucj_callbacks(ctx):
                     and not chk_stability_filter.disabled)
 
     def _render_stability_banner(stab, norb, anchor=None):
-        """Render res['stability'] (V2): filtered / relaxed / unavailable.
+        """Render res['stability']: filtered / relaxed / unavailable.
         `anchor` (a 'YYYY-MM-DD' selected date) names the window's upper bound
-        when a past date is active (F2)."""
-        # F2: "14d before <date>" when a past date anchors the window, else "14d".
+        when a past date is active."""
+        # "14d before <date>" when a past date anchors the window, else "14d".
         def _window_txt():
             wd = esc(str(stab.get('window_days')))
             return (f"{wd}d before {esc(anchor)}" if anchor else f"{wd}d")
@@ -614,7 +614,7 @@ def setup_lucj_callbacks(ctx):
                 f"(most-volatile still excluded)</div>")
         else:
             total = len(stab.get('excluded_final', []))
-            m_floor = stab.get('n_floor_excluded', 0)      # (F3) outliers
+            m_floor = stab.get('n_floor_excluded', 0)      # outliers
             n_vol = total - m_floor
             floor_txt = f" + {esc(str(m_floor))} outlier" if m_floor else ""
             lbl_lucj_stability.value = (
@@ -667,7 +667,7 @@ def setup_lucj_callbacks(ctx):
         return _fn
 
     def _annotate_scan_circuit_lqs(scan_result, get_backend, get_props):
-        """(A3/S2) Fill each scan entry's lqs_circuit with THAT backend's
+        """Fill each scan entry's lqs_circuit with THAT backend's
         circuit-level fidelity, so the scan table/dropdowns display the same
         scale as the local sweep. Runs on the worker thread (props are
         cache-first). A per-backend failure leaves lqs_circuit as-is (None →
@@ -680,7 +680,7 @@ def setup_lucj_callbacks(ctx):
                 props = get_props(get_backend(r['name']))
             except Exception:
                 continue
-            # (V2) Surface the calibration provenance the shim used.
+            # Surface the calibration provenance the shim used.
             r['vintage'] = getattr(props, 'vintage', None)
             scorer = _scan_circuit_score(props)
             for k, entries in sweep.get('strata', {}).items():
@@ -689,7 +689,7 @@ def setup_lucj_callbacks(ctx):
                         try:
                             e['lqs_circuit'] = scorer(e)
                         except Exception as exc:
-                            # (F3) Annotation failure is data absence — surface
+                            # Annotation failure is data absence — surface
                             # it in the notices with backend + stratum + reason,
                             # never a silent 0.0.
                             e['lqs_circuit'] = None
@@ -697,7 +697,7 @@ def setup_lucj_callbacks(ctx):
                                          "k=%d: %s", r['name'], k, exc)
 
     def _scan_backends(eligible, norb, get_backend, get_props, use_filter):
-        """The SINGLE handler-side scan path (U2). The per-backend isolation /
+        """The SINGLE handler-side scan path. The per-backend isolation /
         progress / best-LQS ranking loop lives ONCE, in qpu_scan.scan_qpus; we
         inject a ``sweep_fn`` closure that carries the only handler-specific
         parts: the SAME params as the local sweep (_sweep_kwargs_from_ui, incl.
@@ -713,7 +713,7 @@ def setup_lucj_callbacks(ctx):
         kwargs = _sweep_kwargs_from_ui()
         window = rb_stability_window.value
         threshold = ft_stability_threshold.value
-        floor_sigma = _floor_sigma()          # (F3) scan inherits the floor
+        floor_sigma = _floor_sigma()          # scan inherits the floor
 
         def _sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
             # min_bridges/top_n arrive from scan_qpus (they equal kwargs); the
@@ -734,7 +734,7 @@ def setup_lucj_callbacks(ctx):
             return res
 
         def _progress(name, status, detail=''):
-            # Preserve the pre-U2 'start' detail (scan_qpus emits it empty).
+            # Preserve the 'start' detail (scan_qpus emits it empty).
             if status == 'start' and not detail:
                 detail = 'fetching calibration…'
             _on_scan_progress(name, status, detail)
@@ -756,7 +756,7 @@ def setup_lucj_callbacks(ctx):
     _STATUS_ICON = {'start': '⏳', 'ok': '✓', 'skipped': '·', 'error': '✗'}
 
     def _clear_scan_results():
-        # (C2) Full reset — table, per-QPU dropdowns, notices, progress line,
+        # Full reset — table, per-QPU dropdowns, notices, progress line,
         # and the scan button. No ghost dropdown state survives.
         scan_results_box.children = []
         lbl_scan_progress.value = ""
@@ -798,7 +798,7 @@ def setup_lucj_callbacks(ctx):
         k = len(entry['ancillas'])
         pct, is_tmpl = _entry_lqs_pct(entry)
         suffix = " (template)" if is_tmpl else ""
-        alt = " · alt region" if entry.get('diverse') else ""    # (D2)
+        alt = " · alt region" if entry.get('diverse') else ""    # region-diversity flag
         return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}{alt}"
 
     def _render_targets(targets):
@@ -826,7 +826,7 @@ def setup_lucj_callbacks(ctx):
             hook(backend_name, candidate)
 
     def _vintage_cell(vintage):
-        """(L2) Calibration provenance. Scan scoring is always LIVE now, so
+        """Calibration provenance. Scan scoring is always LIVE now, so
         every remote row is 'live · <fetch time>' by construction. The old
         cached-snapshot stale-badge path (utc parse + >24h compare) is gone —
         the scan never scores from a cached snapshot."""
@@ -846,7 +846,7 @@ def setup_lucj_callbacks(ctx):
                 "<th style='padding:3px 8px;'>stability</th>"
                 "<th style='padding:3px 8px;'>calib</th></tr>")
         body = []
-        # (P2) Active backend reference row — greyed, quotes the LOCAL number,
+        # Active backend reference row — greyed, quotes the LOCAL number,
         # never re-searched. Keeps the cross-QPU reference point at zero cost.
         active = _scan.get('active')
         if active:
@@ -886,10 +886,10 @@ def setup_lucj_callbacks(ctx):
                     f"<td style='padding:3px 8px;text-align:center;'>"
                     f"{vcell}</td></tr>")
             else:
-                # (F3) Summary best-LQS = MAX circuit LQS over ALL entries,
+                # Summary best-LQS = MAX circuit LQS over ALL entries,
                 # ignoring None (annotation failed) and NOT just the k_max
                 # stratum #1 — quoting k_max quoted its 0.0 dead-edge wall
-                # while lower strata were fine (SYM-2). Fall back to the
+                # while lower strata were fine. Fall back to the
                 # product heuristic (flagged) only when NOTHING was scored.
                 lqs_vals = [e['lqs_circuit']
                             for _entries in r['sweep']['strata'].values()
@@ -918,7 +918,7 @@ def setup_lucj_callbacks(ctx):
                     f"{vcell}</td></tr>")
         children = [HTML(head + "".join(body) + "</table>")]
 
-        # F3: when a PAST date is active locally, the local backend was scored
+        # when a PAST date is active locally, the local backend was scored
         # on that date but remote backends are scored LIVE — say so, no silent
         # mixing.
         _anchor = _selected_date_anchor()
@@ -972,7 +972,7 @@ def setup_lucj_callbacks(ctx):
         scan_results_box.children = children
 
     def _append_notices(notices):
-        # (N2) Collapsible "⚠ notices (N)" under the results table:
+        # Collapsible "⚠ notices (N)" under the results table:
         # deduplicated messages (message → ×count), grouped by backend
         # context. Hidden when empty.
         if not notices:
@@ -1024,12 +1024,12 @@ def setup_lucj_callbacks(ctx):
         except Exception:
             family = None
 
-        _clear_scan_results()                   # (C2) drop any stale results
+        _clear_scan_results()                   # drop any stale results
         targets = list_scan_targets(
             state, norb, same_family_as=family,
             include_other_families=chk_scan_other_families.value)
 
-        # (P2) Never re-search the active backend — mark it skipped and quote
+        # Never re-search the active backend — mark it skipped and quote
         # the local result instead. No sweep, no fetch for it.
         active_name = getattr(state, 'active_backend_name', None)
         _scan['active'] = None
@@ -1056,7 +1056,7 @@ def setup_lucj_callbacks(ctx):
                            and chk_scan_stability.value)
 
         def _work():
-            # (N2/N3) Capture WARNING+ off 'qpu_mapper' for the scan's
+            # Capture WARNING+ off 'qpu_mapper' for the scan's
             # duration and stop them leaking under the cell (propagate=False).
             # Attach in try, restore BOTH in finally (done + error paths).
             logger = logging.getLogger('qpu_mapper')
@@ -1068,10 +1068,10 @@ def setup_lucj_callbacks(ctx):
             except Exception:
                 pass
             try:
-                # (P1) One scan path, one param source — forwards hybrid.
+                # One scan path, one param source — forwards hybrid.
                 result = _scan_backends(eligible, norb, get_backend,
                                         get_props, use_scan_filter)
-                # (A3/S2) Circuit-level LQS per backend — one scale everywhere.
+                # Circuit-level LQS per backend — one scale everywhere.
                 _annotate_scan_circuit_lqs(result, get_backend, get_props)
                 return (result, list(handler.records))
             finally:
@@ -1274,7 +1274,7 @@ def setup_lucj_callbacks(ctx):
 
     btn_lucj_multi.on_click(_on_lucj_multi)
 
-    # ── Re-optimization (F3) ─────────────────────────────────────
+    # ── Re-optimization ─────────────────────────────────────
     def _reoptimize_downstream(changed_idx):
         try:
             from ..auto_lucj import reoptimize_after_change

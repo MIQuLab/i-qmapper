@@ -210,7 +210,7 @@ def sweep_with_stability(norb, backend, props, history, *,
     # today=None keeps the now-anchored latest-window behaviour (live mode).
     volatility = compute_qubit_volatility(history, window_days, today=today)
 
-    # (F2) Quality floor on the CURRENT props (independent of history).
+    # Quality floor on the CURRENT props (independent of history).
     floor_qubits = []
     if quality_sigma is not None:
         n_q = _n_qubits_from_history(history)

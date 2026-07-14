@@ -999,8 +999,8 @@ def auto_load_recent_history(state, days=14, min_cached_threshold=5):
           'cache' — cache had ≥ threshold; only cached entries loaded.
           'fetch' — cache had < threshold; fetch_calibration_history ran.
     """
-    # Spec: don't touch state if the user has already populated
-    # cal_history via Multi-day mode before this auto-load fires.
+    # Don't touch state if the user has already populated cal_history via
+    # Multi-day mode before this auto-load fires.
     if state.cal_history_dates:
         return len(state.cal_history_dates), 'noop'
 

@@ -59,7 +59,7 @@ def test_import_json_size_cap(make_state, make_slot, monkeypatch):
         import_json_layout(st, big, "general")
 
 
-# ── M1 hostile-partition regression tests ────────────────────────────
+# ── hostile-partition regression tests ────────────────────────────
 # A partition read from an untrusted layout file must never crash the
 # import nor silently produce a wrong (negative-slice) split. Every
 # malformed shape falls back to the documented midpoint behaviour.

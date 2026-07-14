@@ -1,4 +1,4 @@
-"""K2 — the cascade invariant (every direct stratum seeds all lower strata).
+"""The cascade invariant (every direct stratum seeds all lower strata).
 
 Reproduces the live failure shape offline, deterministically, with a real VF2
 run on a tiny two-region host:
@@ -123,12 +123,13 @@ def test_cascade_delivers_prefix_a_truncated_direct_search_missed():
 def test_prefix_child_scores_at_least_its_direct_parent():
     res = _run()
     k2, k1 = _best_good(res, 2), _best_good(res, 1)
-    # The user's live proof: 67.8% child from a 67.2% parent — dropping one
-    # bridge's error factors can only raise the product.
+    # Observed on hardware: a 3-bridge prefix scoring 67.8% from a 4-bridge
+    # parent at 67.2% — dropping a bridge's error factors can only raise the
+    # product, so a prefix child is never worse than its direct parent.
     assert k1['product_score'] >= k2['product_score'] - 1e-12
 
 
-# ── K3: the actual cap is surfaced for an honest truncation banner ──────────
+# ── the actual cap is surfaced for an honest truncation banner ──────────
 
 def test_result_exposes_mapping_cap_for_the_banner():
     res = _run()
@@ -138,7 +139,7 @@ def test_result_exposes_mapping_cap_for_the_banner():
     assert res['per_stratum'][2]['truncated'] is False
 
 
-# ── W2: monotonicity on the DISPLAYED metric (product ≠ circuit scale) ───────
+# ── monotonicity on the DISPLAYED metric (product ≠ circuit scale) ───────
 #
 # The live bug: strata are sliced to top_n by product_score BEFORE the UI's
 # lqs_circuit is computed. Where the scales diverge, the true circuit-best
@@ -152,7 +153,7 @@ def test_result_exposes_mapping_cap_for_the_banner():
 #     props error 0.02 → LOW product_score, but the canned circuit scorer rates
 #     G's qubits ~1.0 and D's ~0.5 → G is the DISPLAYED-metric winner.
 # The k=3 winner is in G; its k=2 prefix (the monotonicity anchor) has product
-# BELOW every D decoy, so product-only slicing drops it — W1 must keep it in the
+# BELOW every D decoy, so product-only slicing drops it — the widened-window slice must keep it in the
 # scoring window and surface it once ranked by lqs_circuit.
 
 _WG = set(range(100, 127))          # region G ids
@@ -225,7 +226,7 @@ def test_slice_contains_higher_winners_prefix_anchor():
     k3 = res['strata'][3][0]
     assert _w2_region(k3) == 'G'
     chain, anc2 = frozenset(k3['layout']), frozenset(k3['ancillas'][:2])
-    # The k=3 winner's k=2 prefix survives into the k=2 slice (W1 anchor),
+    # The k=3 winner's k=2 prefix survives into the k=2 slice (anchor),
     # and it is the displayed winner there (circuit >= its k=3 parent).
     k2_top = res['strata'][2][0]
     assert frozenset(k2_top['layout']) == chain
@@ -236,7 +237,7 @@ def test_slice_contains_higher_winners_prefix_anchor():
 def test_product_only_slice_would_have_hidden_the_anchor():
     # The divergence is real: without the circuit scorer, product-only slicing
     # fills the k=2 top_n with the low-error D decoys — the G anchor is nowhere
-    # in the displayed slice. This is exactly what W1 rescues.
+    # in the displayed slice. This is exactly what the widened window rescues.
     res = _w2_run()                                   # no circuit_score_fn
     regions = [_w2_region(e) for e in res['strata'][2]]
     assert regions == ['D', 'D', 'D']

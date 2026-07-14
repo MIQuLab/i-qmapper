@@ -1,4 +1,4 @@
-"""D3 — quota-balanced diverse top-N slicing.
+"""Quota-balanced diverse top-N slicing.
 
 Unit tests for the ranking-agnostic selector `_select_with_diversity` (the
 quota math) plus an engine byte-compat pin for diversity_threshold=None.
@@ -27,7 +27,7 @@ def test_jaccard_basics():
     assert _jaccard(frozenset({1, 2, 3}), frozenset({1, 2, 4})) == 0.5
 
 
-# ── t1: quota picks a different-region entry for the reserved slot ──────────
+# ── quota picks a different-region entry for the reserved slot ──────────
 
 def test_quota_reserves_slot_for_diverse_region():
     e1 = _mk(range(10))                       # {0..9}
@@ -42,7 +42,7 @@ def test_quota_reserves_slot_for_diverse_region():
     assert e1['diverse'] is False and e2['diverse'] is False
 
 
-# ── t2: all similar → fallback to plain top-3, nothing marked diverse ───────
+# ── all similar → fallback to plain top-3, nothing marked diverse ───────
 
 def test_all_similar_falls_back_to_plain():
     es = [_mk(list(range(9)) + [10 + i]) for i in range(5)]   # all ≈ {0..8}+1
@@ -51,7 +51,7 @@ def test_all_similar_falls_back_to_plain():
     assert all(e['diverse'] is False for e in out)   # no genuine diversity pick
 
 
-# ── t5: threshold→0.99 makes ~everything "dissimilar" → plain slicing ───────
+# ── threshold→0.99 makes ~everything "dissimilar" → plain slicing ───────
 
 def test_high_threshold_behaves_like_plain_slice():
     e1 = _mk(range(10))
@@ -70,7 +70,7 @@ def test_never_returns_fewer_than_pool():
     assert _select_with_diversity([], top_n=3, threshold=0.8) == []
 
 
-# ── t3: diversity_threshold=None is byte-compatible (no 'diverse' key) ──────
+# ── diversity_threshold=None is byte-compatible (no 'diverse' key) ──────
 
 def _make_backend():
     edges = []

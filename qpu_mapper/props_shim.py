@@ -103,7 +103,7 @@ class CachedPropsShim:
         # C1 wrapper's EXACT edge surface — every coupling in the backend's
         # own map (both directions, as edges_list carries them), paired
         # positionally. Deduping here would halve the gate factors and inflate
-        # the product (SYM-1).
+        # the product.
         self._edges = [(int(u), int(v)) for (u, v) in edges]
         self._gate_arr = gate_arr
         # Deduped map for the direction-insensitive gate_error() the sweep's
@@ -194,7 +194,7 @@ def make_scan_get_props(state, *, now=None):
         return dt.strftime('%H:%M') if hasattr(dt, 'strftime') else str(dt)
 
     def _from_state():
-        """(V1) The active backend is scored on the SESSION'S CURRENT props —
+        """The active backend is scored on the SESSION'S CURRENT props —
         the same qubit_props_data/gate_props_data/edges_list the C1 box reads —
         so the scan row for the active backend equals the C1 box exactly, live.
         Returns None if the session hasn't loaded calibration yet."""
@@ -211,7 +211,7 @@ def make_scan_get_props(state, *, now=None):
     def get_props(backend):
         backend_name = getattr(backend, 'name', None)
 
-        # (V1) Active backend → live session props (that IS live).
+        # Active backend → live session props (that IS live).
         if (backend_name is not None
                 and backend_name == getattr(state, 'active_backend_name', None)):
             live = _from_state()

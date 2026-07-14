@@ -59,7 +59,7 @@ def _fake_sweep_result(vf2_truncated=False):
             'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
             'ancillas': anc, 'bridge_slots': tuple(range(0, 4 * len(anc), 4)),
             'product_score': prod, 'additive_score': add,
-            # A2: engine now attaches circuit-level LQS; equal to product here
+            # engine now attaches circuit-level LQS; equal to product here
             # so the rendered percentage is unchanged in these UI assertions.
             'lqs_circuit': prod,
             'rank_in_stratum': 1, 'source': src,
@@ -73,7 +73,7 @@ def _fake_sweep_result(vf2_truncated=False):
         'k_max_effective': 3, 'min_bridges': 1,
         'vf2_truncated': vf2_truncated,
         'n_raw_embeddings': 214, 'n_candidates_scored': 1891,
-        # (K3) real engine metadata: which strata hit the cap, and the cap.
+        # real engine metadata: which strata hit the cap, and the cap.
         'per_stratum': {
             3: {'n_direct': 5, 'n_derived': 0, 'truncated': vf2_truncated},
             2: {'n_direct': 0, 'n_derived': 5, 'truncated': False},
@@ -83,7 +83,7 @@ def _fake_sweep_result(vf2_truncated=False):
     }
 
 
-# ── A2 t2: label/status formatters prefer circuit-level LQS ─────────────────
+# ── label/status formatters prefer circuit-level LQS ─────────────────
 
 def test_formatters_use_lqs_circuit():
     from qpu_mapper.ui.lucj_panel import _entry_lqs_pct, _format_best_per_k
@@ -102,7 +102,7 @@ def test_formatters_use_lqs_circuit():
     assert _format_best_per_k({1: [{'product_score': 0.4}]}) == '1→40.0%'
 
 
-# ── t1: sweep mode default → stratified dropdown, exact label format ────────
+# ── sweep mode default → stratified dropdown, exact label format ────────
 
 def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
     calls = []
@@ -124,7 +124,7 @@ def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
     assert [opt[1] for opt in b.dd_lucj_layout.options] == [0, 1, 2]
 
 
-# ── K4: the "Show top" field controls entries-per-stratum in the dropdown ───
+# ── the "Show top" field controls entries-per-stratum in the dropdown ───
 
 def _fake_sweep_topn(*a, **k):
     """Echo the requested top_n: k_max=3, each stratum gets top_n entries."""
@@ -160,7 +160,7 @@ def test_top_n_field_controls_dropdown_entries(builder, monkeypatch):
     assert len(labels) == 21                          # 3 strata × 7
 
 
-# ── t2: legacy mode → single-search path, sweep NOT called ──────────────────
+# ── legacy mode → single-search path, sweep NOT called ──────────────────
 
 def test_legacy_mode_skips_sweep(builder, monkeypatch):
     sweep_calls, legacy_calls = [], []
@@ -184,7 +184,7 @@ def test_legacy_mode_skips_sweep(builder, monkeypatch):
     assert legacy_calls[0][1]['requested_bridges'] == 2
 
 
-# ── t3: apply a k=2 derived entry → chains + its 2 ancillas placed ──────────
+# ── apply a k=2 derived entry → chains + its 2 ancillas placed ──────────
 
 def test_apply_derived_candidate_places_chains_and_ancillas(builder, monkeypatch):
     monkeypatch.setattr(
@@ -209,7 +209,7 @@ def test_apply_derived_candidate_places_chains_and_ancillas(builder, monkeypatch
         assert q in d['styles']
 
 
-# ── t4: truncation banner visibility ────────────────────────────────────────
+# ── truncation banner visibility ────────────────────────────────────────
 
 def test_truncation_banner(builder, monkeypatch):
     monkeypatch.setattr(
@@ -217,7 +217,7 @@ def test_truncation_banner(builder, monkeypatch):
         lambda *a, **k: _fake_sweep_result(vf2_truncated=True))
     b = builder
     b.btn_lucj_run.click()
-    # (K3) names the REAL cap and the truncated stratum — not n_raw_embeddings.
+    # names the REAL cap and the truncated stratum — not n_raw_embeddings.
     assert "truncated at 2,000 mappings for k=3" in b.lbl_lucj_trunc.value
     assert "214" not in b.lbl_lucj_trunc.value          # old embedding-count gone
     assert b.lbl_lucj_trunc.value != ""
@@ -230,7 +230,7 @@ def test_truncation_banner(builder, monkeypatch):
     assert b.lbl_lucj_trunc.value == ""
 
 
-# ── t5: engine ValueError surfaces as a friendly status, no traceback ───────
+# ── engine ValueError surfaces as a friendly status, no traceback ───────
 
 def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
     def boom(*a, **k):
@@ -249,7 +249,7 @@ def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
     assert b.btn_lucj_run.disabled is False
 
 
-# ── H2: the deep-search checkbox wires hybrid= and the M2 mode label ────────
+# ── the deep-search checkbox wires hybrid= and the per-stratum mode label ────────
 
 def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
     calls = []
@@ -279,7 +279,7 @@ def test_sweep_mode_label():
     assert _sweep_mode_label(dv) == 'derived-only'
 
 
-# ── D2: diverse entries get a "· alt region" dropdown-label suffix ──────────
+# ── diverse entries get a "· alt region" dropdown-label suffix ──────────
 
 def test_diverse_entry_label_suffix(builder, monkeypatch):
     def _fake(*a, **k):

@@ -76,7 +76,7 @@ def _all_qubits(res):
     return used
 
 
-# ── t1: volatility scoring ──────────────────────────────────────────────────
+# ── volatility scoring ──────────────────────────────────────────────────
 
 def test_volatility_orders_volatile_above_stable():
     # q3 spikes hard, q10 mildly, q5 flat.
@@ -86,7 +86,7 @@ def test_volatility_orders_volatile_above_stable():
     assert vol[5] == 0.0                       # flat series → no volatility
 
 
-# ── t2: select_excluded ─────────────────────────────────────────────────────
+# ── select_excluded ─────────────────────────────────────────────────────
 
 def test_select_excluded_threshold_and_order():
     vol = {3: 5.0, 2: 4.5, 10: 2.0, 5: 0.0, 7: 0.8}
@@ -95,7 +95,7 @@ def test_select_excluded_threshold_and_order():
     assert 5 not in excluded and 7 not in excluded
 
 
-# ── t3: filtered sweep never uses excluded qubits (A1 correctness) ──────────
+# ── filtered sweep never uses excluded qubits (correctness) ──────────
 
 def test_filtered_sweep_excludes_qubits():
     backend, props = _make_backend(), _Props()
@@ -107,7 +107,7 @@ def test_filtered_sweep_excludes_qubits():
     assert res['strata']                        # still found layouts (block B)
 
 
-# ── t4: RELAX VALVE (the crux) ──────────────────────────────────────────────
+# ── RELAX VALVE (the crux) ──────────────────────────────────────────────
 
 def test_relax_valve_readmits_least_volatile():
     backend, props = _make_backend(), _Props()
@@ -131,7 +131,7 @@ def test_relax_valve_readmits_least_volatile():
     assert used.isdisjoint(set(st['excluded_final']))
 
 
-# ── t5: no history → plain sweep, stability unavailable ─────────────────────
+# ── no history → plain sweep, stability unavailable ─────────────────────
 
 def test_no_history_runs_plain_sweep():
     backend, props = _make_backend(), _Props()
@@ -141,7 +141,7 @@ def test_no_history_runs_plain_sweep():
         assert res['strata']
 
 
-# ── t6: A1 non-regression — exclude_qubits=None path ────────────────────────
+# ── non-regression — exclude_qubits=None path ────────────────────────
 
 def test_a1_default_is_unfiltered():
     backend, props = _make_backend(), _Props()
@@ -154,7 +154,7 @@ def test_a1_default_is_unfiltered():
     assert list(base['strata'].keys()) == list(explicit_none['strata'].keys())
 
 
-# ── t7: metadata — sorted excluded_final, vf2_truncated propagated ──────────
+# ── metadata — sorted excluded_final, vf2_truncated propagated ──────────
 
 def test_metadata_and_truncation_propagation():
     backend, props = _make_backend(), _Props()
@@ -170,7 +170,7 @@ def test_metadata_and_truncation_propagation():
     assert res['excluded_qubits'] == sorted(res['excluded_qubits'])
 
 
-# ── F1/F2: quality floor — stably-terrible qubits volatility is blind to ────
+# ── quality floor — stably-terrible qubits volatility is blind to ────
 
 class _OutlierProps:
     """Current props where qubit 24 is a stable device outlier (~73× the

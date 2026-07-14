@@ -41,7 +41,7 @@ def _entry(prod, k):
     }
 
 
-# ── t1: list_scan_targets — flags and reasons ───────────────────────────────
+# ── list_scan_targets — flags and reasons ───────────────────────────────
 
 def test_list_scan_targets_flags_and_reasons():
     service = SimpleNamespace(backends=lambda: [
@@ -78,7 +78,7 @@ def test_list_scan_targets_flags_and_reasons():
     assert not widened['ibm_d']['eligible']      # still too small
 
 
-# ── t2: scan happy path — ranking + progress order ──────────────────────────
+# ── scan happy path — ranking + progress order ──────────────────────────
 
 def test_scan_happy_path_sorted_and_progress(monkeypatch):
     scores = {'ibm_a': 0.30, 'ibm_b': 0.50}
@@ -109,7 +109,7 @@ def test_scan_happy_path_sorted_and_progress(monkeypatch):
     ]
 
 
-# ── t3: isolation — one backend failing doesn't kill the scan ───────────────
+# ── isolation — one backend failing doesn't kill the scan ───────────────
 
 def test_scan_isolation_on_props_failure(monkeypatch):
     monkeypatch.setattr(
@@ -139,7 +139,7 @@ def test_scan_isolation_on_props_failure(monkeypatch):
     assert out['results'][-1]['name'] == 'ibm_a'
 
 
-# ── t4: best_lqs / best_k extraction ────────────────────────────────────────
+# ── best_lqs / best_k extraction ────────────────────────────────────────
 
 def test_best_lqs_extraction(monkeypatch):
     # Max product_score is the k=1 entry (0.90); k=3 top is 0.20.
@@ -162,7 +162,7 @@ def test_best_lqs_extraction(monkeypatch):
     assert r['best_k'] == 1
 
 
-# ── t5: empty eligible set ──────────────────────────────────────────────────
+# ── empty eligible set ──────────────────────────────────────────────────
 
 def test_scan_empty_targets():
     out = scan_qpus([], 4, get_backend=lambda n: None, get_props=lambda b: None)
@@ -186,7 +186,7 @@ def test_scan_skips_ineligible_targets(monkeypatch):
     assert out['results'][0]['sweep'] is None
 
 
-# ── U1/U3: sweep_fn injection hook — the ONE loop, a pluggable sweep ────────
+# ── sweep_fn injection hook — the ONE loop, a pluggable sweep ────────
 
 def test_sweep_fn_injected_per_target_with_isolation():
     """t-new-1: sweep_fn is called per eligible target with the forwarded

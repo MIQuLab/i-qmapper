@@ -1,4 +1,4 @@
-"""A3 tests — one scorer everywhere (estimate_fidelity_core).
+"""One scorer everywhere (estimate_fidelity_core).
 
 Pure/offline. Pins C1 behaviour across the extract, checks the shim's
 per-backend scorer, and proves scan == local on identical calibration.
@@ -14,7 +14,7 @@ from qpu_mapper.export.scoring import (
 from qpu_mapper.props_shim import CachedPropsShim
 
 
-# ── t1: C1 pin — behaviour unchanged across the refactor-extract ────────────
+# ── C1 pin — behaviour unchanged across the refactor-extract ────────────
 
 def test_c1_pin_unchanged():
     qubit_ids = ['0', '1', '2', '3']
@@ -47,7 +47,7 @@ def test_c1_pin_unchanged():
     assert core == res
 
 
-# ── t2: per-backend shim scorer == hand-computed product ────────────────────
+# ── per-backend shim scorer == hand-computed product ────────────────────
 
 def test_shim_score_hand_computed():
     qp = {'readout_error': np.array([0.01, 0.02, 0.03, 0.04])}
@@ -63,7 +63,7 @@ def test_shim_score_hand_computed():
     assert shim.score_layout([]) is None                    # empty → None
 
 
-# ── t3: scan row == local number on the SAME calibration (the screenshot) ──
+# ── scan row == local number on the SAME calibration (the screenshot) ──
 
 def test_scan_equals_local_same_backend():
     qp = {'readout_error': np.array([0.01, 0.02, 0.03, 0.04, 0.05, 0.06])}

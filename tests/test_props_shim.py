@@ -28,7 +28,7 @@ def _fixtures():
     return qubit_props, gate_props, edges
 
 
-# ── t1: the crux ────────────────────────────────────────────────────────────
+# ── the crux ────────────────────────────────────────────────────────────
 
 def test_readout_error_by_qubit():
     qp, gp, edges = _fixtures()
@@ -79,7 +79,7 @@ def test_custom_gate_key():
     assert shim.gate_error('ecr', (0, 1)) == pytest.approx(0.005)
 
 
-# ── L1/t1/t3/t5: remote scoring is LIVE — never a cache read ────────────────
+# ── remote scoring is LIVE — never a cache read ────────────────
 
 def _fake_remote_backend(name='ibm_remote', n=4):
     edges = [(0, 1), (1, 2), (2, 3)]
@@ -116,14 +116,14 @@ def test_remote_scoring_is_live_never_cache_read(monkeypatch):
     state = SimpleNamespace(active_backend_name='current_other')
     props = make_scan_get_props(state, now=datetime(2026, 7, 12, 9, 30))(backend)
 
-    assert fetched == [1]                 # t1: LIVE fetch happened
-    assert reads == []                    # t1: ZERO cache-read for scoring
-    assert saves                          # t3: warming save still happened
-    assert props.vintage == 'live · 09:30'  # t5: live · <fetch time>
+    assert fetched == [1]                 # LIVE fetch happened
+    assert reads == []                    # ZERO cache-read for scoring
+    assert saves                          # warming save still happened
+    assert props.vintage == 'live · 09:30'  # live · <fetch time>
     assert props.readout_error(0) == pytest.approx(0.02)
 
 
-# ── V1: active backend scored on LIVE state props (cache NOT consulted) ──────
+# ── active backend scored on LIVE state props (cache NOT consulted) ──────
 
 def test_active_backend_uses_state_props_not_cache(monkeypatch):
     qp = {'readout_error': np.array([0.01, 0.02, 0.03, 0.04])}
@@ -163,7 +163,7 @@ def test_active_backend_uses_state_props_not_cache(monkeypatch):
     assert props.score_layout([0, 1, 2, 3])['fidelity'] == pytest.approx(local)
 
 
-# ── L1/t2: a fetch failure raises (no cached fallback) ──────────────────────
+# ── a fetch failure raises (no cached fallback) ──────────────────────
 
 def test_remote_fetch_failure_raises_no_cache_fallback(monkeypatch):
     from qpu_mapper import data
@@ -181,7 +181,7 @@ def test_remote_fetch_failure_raises_no_cache_fallback(monkeypatch):
         make_scan_get_props(state)(backend)      # no silent cached fallback
 
 
-# ── D2 t1: the shim scores against ITS OWN edges, not the current state ─────
+# ── the shim scores against ITS OWN edges, not the current state ─────
 
 def test_shim_scores_against_own_edges():
     edges = [(0, 1), (1, 2), (2, 3)]
@@ -198,7 +198,7 @@ def test_shim_scores_against_own_edges():
     # Each shim used its OWN per-edge errors, not a shared/state edge list.
 
 
-# ── D2 t2: the hard invariants reject a mispaired snapshot ──────────────────
+# ── the hard invariants reject a mispaired snapshot ──────────────────
 
 def test_gate_length_mismatch_raises():
     with pytest.raises(ValueError):
@@ -213,7 +213,7 @@ def test_qubit_length_mismatch_raises():
                         {'cz_error': [0.001]}, [(0, 1)], n_qubits=4)
 
 
-# ── D2 t3: end-to-end pin — shim score == core hand-built from same snapshot ─
+# ── end-to-end pin — shim score == core hand-built from same snapshot ─
 
 def test_shim_score_matches_core_handbuilt():
     from qpu_mapper.export.scoring import estimate_fidelity_core
@@ -270,7 +270,7 @@ def test_shim_edges_are_its_own():
     shim = CachedPropsShim({'readout_error': [0.0] * 8},
                            {'cz_error': [0.1, 0.1, 0.2, 0.2]}, edges, n_qubits=8)
     assert shim._edges == [(5, 6), (6, 5), (6, 7), (7, 6)]   # X's edges verbatim
-    # A mismatched-length snapshot for a different topology → ValueError (F2).
+    # A mismatched-length snapshot for a different topology → ValueError.
     with pytest.raises(ValueError):
         CachedPropsShim({'readout_error': [0.0] * 8},
                         {'cz_error': [0.1, 0.1]}, edges, n_qubits=8)

@@ -777,7 +777,7 @@ def get_multi_circuit_layouts(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# JOINT RE-OPTIMIZATION (F3)
+# JOINT RE-OPTIMIZATION
 # ═══════════════════════════════════════════════════════════════════════
 
 def reoptimize_after_change(

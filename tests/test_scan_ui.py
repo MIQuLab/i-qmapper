@@ -191,7 +191,7 @@ def test_scan_handoff_on_select(monkeypatch):
     assert cand['ancillas'] == [4, 5]              # flat[0] = k=2 entry
 
 
-# ── M1 — sweep mode greys the score checkbox ────────────────────────────────
+# ── sweep mode greys the score checkbox ────────────────────────────────
 
 def test_m1_score_checkbox_toggle(monkeypatch):
     b = _build(monkeypatch)
@@ -203,7 +203,7 @@ def test_m1_score_checkbox_toggle(monkeypatch):
     assert b.lucj_chk_score.disabled is True
 
 
-# ── M2 — per-stratum status line format ─────────────────────────────────────
+# ── per-stratum status line format ─────────────────────────────────────
 
 def test_m2_status_line_format():
     res = _sweep(0.40, 0.30)
@@ -214,7 +214,7 @@ def test_m2_status_line_format():
     assert line == "Sweep: k=2..1 · 214 embeddings · best per k: 2→30.0% · 1→40.0%"
 
 
-# ── A3: circuit-LQS annotation (success → number, failure → template) ───────
+# ── circuit-LQS annotation (success → number, failure → template) ───────
 
 def test_scan_circuit_lqs_annotated(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -232,7 +232,7 @@ def test_scan_template_suffix_only_on_failure(monkeypatch):
     assert '(template)' in b.scan_results_box.children[0].value
 
 
-# ── L2/t5: vintage renders 'live · <fetch time>' (no stale badge) ───────────
+# ── vintage renders 'live · <fetch time>' (no stale badge) ───────────
 
 def test_scan_live_vintage(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -245,7 +245,7 @@ def test_scan_live_vintage(monkeypatch):
     assert 'stale calib' not in table          # stale-badge path removed
 
 
-# ── L1/t2: a fetch failure → honest error row, others complete ──────────────
+# ── a fetch failure → honest error row, others complete ──────────────
 
 def test_scan_fetch_failure_error_row(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -269,7 +269,7 @@ def test_scan_fetch_failure_error_row(monkeypatch):
     assert 'live · 09:30' in table             # ibm_b completed
 
 
-# ── L4/t4: stability filter still reads the cache for HISTORY ────────────────
+# ── stability filter still reads the cache for HISTORY ────────────────
 
 def test_stability_history_reads_cache(monkeypatch):
     from qpu_mapper.state import SessionState
@@ -300,7 +300,8 @@ def test_stability_history_reads_cache(monkeypatch):
     assert loads                                # cache loader used for HISTORY
 
 
-# ── P1: local and scan pass IDENTICAL sweep params (the tonight bug) ────────
+# ── Regression: local sweep and scan must receive IDENTICAL sweep params ────
+#    (any divergence silently skews cross-QPU rankings against the local one).
 
 def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -315,9 +316,9 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
 
     b.chk_deep_search.value = False                 # a non-default value
     b.lucj_min_ancilla.value = 2
-    b.lucj_top_n.value = 7                           # (K4) non-default top_n
-    b.lucj_search_cap.value = 5000                   # (S4) non-default cap
-    b.chk_lucj_diverse.value = True                 # (D2) non-default diversity
+    b.lucj_top_n.value = 7                           # non-default top_n
+    b.lucj_search_cap.value = 5000                   # non-default cap
+    b.chk_lucj_diverse.value = True                 # non-default diversity
 
     b.btn_lucj_run.click()                          # local sweep
     local_kw = calls[-1]
@@ -328,13 +329,13 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     keys = ('min_bridges', 'top_n', 'hybrid', 'mapping_cap', 'diversity_threshold')
     assert {k: local_kw.get(k) for k in keys} == {k: scan_kw.get(k) for k in keys}
     assert scan_kw['hybrid'] is False               # honored, not the engine default
-    # (K4/S4/D2) Show-top, Search-cap, diversity reach BOTH paths — parity.
+    # Show-top, Search-cap, diversity reach BOTH paths — parity.
     assert local_kw['top_n'] == 7 and scan_kw['top_n'] == 7
     assert local_kw['mapping_cap'] == 5000 and scan_kw['mapping_cap'] == 5000
     assert local_kw['diversity_threshold'] == 0.8 and scan_kw['diversity_threshold'] == 0.8
 
 
-# ── P2: active backend skipped-with-reference (never re-searched) ───────────
+# ── active backend skipped-with-reference (never re-searched) ───────────
 
 def test_active_backend_skipped_with_reference(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
@@ -356,7 +357,7 @@ def test_active_backend_skipped_with_reference(monkeypatch):
     assert 'run Auto above' in table                 # no local sweep yet → hint
 
 
-# ── P3: scan honors the hybrid checkbox ─────────────────────────────────────
+# ── scan honors the hybrid checkbox ─────────────────────────────────────
 
 def test_scan_honors_hybrid_checkbox(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())

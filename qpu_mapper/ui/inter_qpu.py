@@ -94,9 +94,9 @@ def setup_inter_qpu(ctx):
     _sidebar2 = [None]            # QPU 2 sidebar VBox
     _zoom2 = [None]               # QPU 2 zoom toolbar
     _dispose2 = [None]            # callable that unobserves all QPU 2 widgets
-    _connect_in_flight = [False]  # (O4) race guard: one auto-connect at a time
+    _connect_in_flight = [False]  # race guard: one auto-connect at a time
 
-    # (O2) Background runner for the ONE-CLICK auto-connect. The Connect-QPU2
+    # Background runner for the ONE-CLICK auto-connect. The Connect-QPU2
     # button handler is SYNCHRONOUS + network-touching; the scan pattern
     # (default_spawn_bg + marshalled on_done/on_error) keeps the kernel
     # responsive. Injectable via ctx for headless tests.
@@ -260,7 +260,7 @@ def setup_inter_qpu(ctx):
         toggle.options = options
         toggle.value = saved_value
 
-    # ── B5: remote-candidate handoff (scan → inter-QPU) ─────────
+    # ── remote-candidate handoff (scan → inter-QPU) ─────────
     handoff_cell = getattr(ctx, 'handoff_cell', None)
 
     def _apply_candidate_to_state(s2, candidate):
@@ -293,7 +293,7 @@ def setup_inter_qpu(ctx):
         with contextlib.suppress(Exception):
             dd_backend_qpu2.value = backend_name
         _pending_handoff[0] = (backend_name, candidate)
-        # (C3) Prominent one-liner explaining the half-open state until the
+        # Prominent one-liner explaining the half-open state until the
         # user clicks Connect. Replaced by the connect status once connected.
         staged_html = (
             f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
@@ -308,7 +308,7 @@ def setup_inter_qpu(ctx):
             with contextlib.suppress(Exception):
                 _qpu2_content_box[0].children = [HTML(staged_html)]
 
-    # (O2) The scan handoff now triggers ONE-CLICK connect (stage + auto-
+    # The scan handoff now triggers ONE-CLICK connect (stage + auto-
     # connect), defined after the connect handler below. Bound via a trampoline
     # so this assignment can precede _auto_connect's definition.
     if handoff_cell is not None:
@@ -317,7 +317,7 @@ def setup_inter_qpu(ctx):
     # ── Connect-QPU2 handler ────────────────────────────────────
     def _on_connect_qpu2(b):
         # Returns None on success, or an error STRING on failure — so the
-        # one-click auto path (O2) can tell whether to fall back to staged.
+        # one-click auto path can tell whether to fall back to staged.
         # The button's on_click ignores the return, so its behaviour is
         # unchanged.
         backend_name = dd_backend_qpu2.value
@@ -364,7 +364,7 @@ def setup_inter_qpu(ctx):
             s2.props_warning = props_warn
             s2.active_coords = new_coords
 
-            # B5: if this connect was staged from a scan pick for this
+            # if this connect was staged from a scan pick for this
             # backend, pre-load the chosen candidate so QPU-2 paints it.
             pend = _pending_handoff[0]
             if pend is not None and pend[0] == backend_name:
@@ -395,7 +395,7 @@ def setup_inter_qpu(ctx):
 
             _state2[0] = s2
             _fig2[0] = f2
-            _w2[0] = w2                 # (O4) kept for same-backend repaint
+            _w2[0] = w2                 # kept for same-backend repaint
             _sidebar2[0] = sidebar2
             _zoom2[0] = zoom2_bar
             # Disposer: walk the full widget tree (sidebar + fig_box) and
@@ -462,9 +462,9 @@ def setup_inter_qpu(ctx):
 
     btn_connect_qpu2.on_click(_on_connect_qpu2)
 
-    # ── O2/O3/O4: one-click auto-connect on a scan-candidate pick ───────
+    # ── one-click auto-connect on a scan-candidate pick ───────
     def _staged_with_error(backend_name, candidate, err):
-        """(O3) Failure → back to today's STAGED state (re-stage so a manual
+        """Failure → back to today's STAGED state (re-stage so a manual
         Connect re-applies the candidate) plus an esc()'d one-line error. The
         user loses nothing; one click recovers."""
         stage_remote_candidate(backend_name, candidate)
@@ -476,10 +476,10 @@ def setup_inter_qpu(ctx):
         """The scan handoff hook (replaces bare staging): stage, then drive the
         SAME Connect-QPU2 handler automatically. Idempotent + race-guarded."""
         # Always stage first (reveal panel, prefill dropdown, preload candidate,
-        # staged banner) — identical to the pre-O2 behaviour and the fallback.
+        # staged banner) — identical to the prior staging behaviour and the fallback.
         stage_remote_candidate(backend_name, candidate)
 
-        # (O4) Same backend already connected as QPU-2 → skip the reconnect,
+        # Same backend already connected as QPU-2 → skip the reconnect,
         # just apply the candidate and repaint. _state2[0] holds the connected
         # QPU-2 SessionState.
         s2 = _state2[0]
@@ -498,7 +498,7 @@ def setup_inter_qpu(ctx):
                 f"<b>{esc(str(backend_name))}</b>.</div>")
             return
 
-        # (O4) A connect already in flight → the staging above is enough;
+        # A connect already in flight → the staging above is enough;
         # don't launch a second connect.
         if _connect_in_flight[0]:
             return

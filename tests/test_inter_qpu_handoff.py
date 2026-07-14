@@ -1,4 +1,4 @@
-"""O5 — one-click inter-QPU handoff: selecting a remote scan candidate stages
+"""One-click inter-QPU handoff: selecting a remote scan candidate stages
 AND auto-connects QPU 2, with graceful fallback, race guards, and a same-backend
 shortcut. Headless: the network-touching connect deps are stubbed.
 """
@@ -97,7 +97,7 @@ def _stub_connect_deps(monkeypatch):
 _CAND = {'alpha': [0], 'beta': [1], 'ancillas': [2]}
 
 
-# ── t1: selection triggers connect once; staged→connecting→connected ────────
+# ── selection triggers connect once; staged→connecting→connected ────────
 
 def test_selection_auto_connects_once(monkeypatch):
     from qpu_mapper.ui.inter_qpu import setup_inter_qpu
@@ -116,7 +116,7 @@ def test_selection_auto_connects_once(monkeypatch):
     assert ctx.btn_connect_qpu2.disabled is False    # trigger re-enabled
 
 
-# ── t2: connect raising → staged fallback + error, trigger re-enabled ───────
+# ── connect raising → staged fallback + error, trigger re-enabled ───────
 
 def test_connect_failure_falls_back_to_staged(monkeypatch):
     from qpu_mapper.ui.inter_qpu import setup_inter_qpu
@@ -136,7 +136,7 @@ def test_connect_failure_falls_back_to_staged(monkeypatch):
     assert ctx.dd_backend_qpu2.value == 'ibm_k'
 
 
-# ── t3: in-flight guard — a second selection does not double-connect ────────
+# ── in-flight guard — a second selection does not double-connect ────────
 
 def test_in_flight_guard_no_double_connect(monkeypatch):
     from qpu_mapper.ui.inter_qpu import setup_inter_qpu
@@ -161,7 +161,7 @@ def test_in_flight_guard_no_double_connect(monkeypatch):
     assert calls == ['ibm_k']
 
 
-# ── t4: same backend already connected → apply + repaint, no reconnect ──────
+# ── same backend already connected → apply + repaint, no reconnect ──────
 
 def test_same_backend_applies_without_reconnect(monkeypatch):
     from qpu_mapper.ui.inter_qpu import setup_inter_qpu

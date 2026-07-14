@@ -119,7 +119,7 @@ def props():
     return FakeProps()
 
 
-# ── t1: shape ──────────────────────────────────────────────────────────────
+# ── shape ──────────────────────────────────────────────────────────────
 
 def test_shape(backend, props):
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3)
@@ -143,12 +143,13 @@ def test_shape(backend, props):
             range(1, len(entries) + 1))
 
 
-# ── t2: regression — the good-region k-1 layout is derived for free ─────────
+# ── regression — the good-region k-1 layout is derived for free ─────────
 
 def test_kminus1_variant_present(backend, props):
-    """The user's observation: an independent per-k search misses the k-1
-    layout that lives inside the best k-max embedding. With subtraction it is
-    always in the k-1 pool on the same chain qubits."""
+    """Regression: an independent per-k search can miss the k-1 layout that
+    lives inside the best k-max embedding. Deriving lower-k by bridge
+    subtraction guarantees it is always in the k-1 pool on the same chain
+    qubits (guards the geographic-prefix miss)."""
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
     top = res['strata'][2][0]                         # best intact k=2 layout
     assert top['source'] == 'vf2'
@@ -209,10 +210,10 @@ def test_prefix_legacy_equivalence(backend, props):
                 f"bridges of any parent embedding")
 
 
-# ── A2: circuit_score_fn on the sliced survivors only ──────────────────────
+# ── circuit_score_fn on the sliced survivors only ──────────────────────
 
 def test_circuit_score_fn_scores_widened_window(backend, props):
-    """(W1) The scorer runs on a WIDENED window — top W by product_score plus
+    """The scorer runs on a WIDENED window — top W by product_score plus
     the monotonicity anchors — not merely the sliced top_n, so the displayed
     metric's best can't hide below the product_score line. Every survivor still
     carries lqs_circuit, and the window is bounded (not the whole raw pool)."""
@@ -234,7 +235,7 @@ def test_circuit_score_fn_scores_widened_window(backend, props):
 
 
 def test_circuit_score_error_sinks_below_slice_not_aborts(backend, props):
-    """(W1) A scorer that raises leaves that candidate lqs_circuit=None; None
+    """A scorer that raises leaves that candidate lqs_circuit=None; None
     sinks below the displayed-metric slice, so the sweep completes and its
     survivors are exactly the successfully-scored candidates."""
     raised = []
@@ -256,15 +257,15 @@ def test_circuit_score_error_sinks_below_slice_not_aborts(backend, props):
 
 
 def test_no_circuit_score_fn_is_byte_compatible(backend, props):
-    """(A2 default guarantee) Without the scorer, no lqs_circuit key appears —
-    the dict shape is unchanged from pre-A2."""
+    """Default guarantee: without the circuit scorer, no lqs_circuit key
+    appears — the result dict keeps its original (product-only) shape."""
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3)
     for entries in res['strata'].values():
         for e in entries:
             assert 'lqs_circuit' not in e
 
 
-# ── t3: good region wins every stratum ──────────────────────────────────────
+# ── good region wins every stratum ──────────────────────────────────────
 
 def test_good_region_wins(backend, props):
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=3)
@@ -275,7 +276,7 @@ def test_good_region_wins(backend, props):
             f"stratum k={k} winner {sorted(used)} leaks outside good region")
 
 
-# ── t4: size-bias guard (within-stratum agreement, across-stratum factor) ───
+# ── size-bias guard (within-stratum agreement, across-stratum factor) ───
 
 def test_size_bias_product_vs_additive(backend, props):
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, top_n=1000)
@@ -306,7 +307,7 @@ def test_size_bias_product_vs_additive(backend, props):
     assert ratio == pytest.approx(1.0 / per_ancilla, abs=1e-9)
 
 
-# ── t5: dedupe ──────────────────────────────────────────────────────────────
+# ── dedupe ──────────────────────────────────────────────────────────────
 
 def test_dedupe(backend, props):
     """Alpha/beta-swap embeddings collapse to a single entry per stratum."""
@@ -322,7 +323,7 @@ def test_dedupe(backend, props):
     assert res['n_raw_embeddings'] > len(res['strata'][2])
 
 
-# ── t6: validation ──────────────────────────────────────────────────────────
+# ── validation ──────────────────────────────────────────────────────────
 
 def test_validation(backend, props):
     with pytest.raises(ValueError):
@@ -336,7 +337,7 @@ def test_validation(backend, props):
     assert all(e['source'] == 'vf2' for e in res['strata'][2])
 
 
-# ── t7: truncation ──────────────────────────────────────────────────────────
+# ── truncation ──────────────────────────────────────────────────────────
 
 def test_truncation(backend, props):
     res = sweep_ancilla_layouts(8, backend, props, min_bridges=1, mapping_cap=1)
@@ -351,7 +352,7 @@ def test_truncation(backend, props):
             assert len(e['ancillas']) == k
 
 
-# ── Hybrid mode (H1) ────────────────────────────────────────────────────────
+# ── Hybrid mode ────────────────────────────────────────────────────────
 
 def _regression_backend():
     """A graph where the k_max (2-bridge) template ONLY fits a bad-qubit

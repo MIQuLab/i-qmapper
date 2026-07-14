@@ -108,7 +108,7 @@ _UNCALIBRATED_PENALTY = 1.0
 # per-stratum seed from (backend_name, norb, k). None disables the shuffle
 # (natural node-index order == pre-shuffle behaviour, byte-compatible). An
 # explicit int is combined with k so strata still sample differently yet
-# reproducibly. See S1 in the SHUFFLED SEARCH ORDER change.
+# reproducibly. See the per-stratum shuffled-search-graph construction below.
 _AUTO_SHUFFLE = object()
 
 
@@ -249,7 +249,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             qubit ids ride in node data and are recovered order-independently
             via ``_key_to_phys`` — no relabel leakage.
         diversity_threshold: when a float in (0, 1), rebalance each stratum's
-            top_n for REGION diversity (D1). After the displayed-metric
+            top_n for REGION diversity. After the displayed-metric
             ranking, the first ceil(top_n/2) slots keep the best entries
             absolutely; each remaining slot takes the best entry whose Jaccard
             similarity — ``|A∩B|/|A∪B|`` over the full qubit set (alpha ∪ beta ∪
@@ -313,7 +313,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         def _key_to_phys(k):
             return k
 
-    # ---- 1b. Per-stratum shuffled search graph (S1) -----------------------
+    # ---- 1b. Per-stratum shuffled search graph ----------------------------
     # The template (WHAT to search for) is always built on the natural
     # `search_graph`, so k_max_effective and every k' template are stable and
     # seed-independent. Only the TARGET graph handed to VF2 is permuted, which
@@ -535,7 +535,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                 if any(v is None for v in lay):
                     continue
                 edata = _embedding_data(lay, nb_k)
-                # (K1) CASCADE: this direct k'-embedding seeds its OWN stratum
+                # CASCADE: this direct k'-embedding seeds its OWN stratum
                 # (source 'vf2') AND every stratum below it via the prefix rule
                 # (source 'derived'). So a region that only a k'-search reaches
                 # — never enumerated at k_max — still populates all lower
@@ -550,20 +550,21 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     # Aggregate truncation for the existing banner (k_max OR any direct pass).
     vf2_truncated = any(m['truncated'] for m in per_stratum.values())
 
-    # ---- 7. Slice each stratum by the DISPLAYED metric (W1) ---------------
+    # ---- 7. Slice each stratum by the DISPLAYED metric --------------------
     # product_score (template scale) is the cheap PRE-FILTER for the pool, but
     # the final slice must be chosen by the metric the UI shows (lqs_circuit).
     # The two scales diverge, so slicing to top_n by product_score BEFORE
     # circuit-scoring can drop the true circuit-best below the line unseen —
-    # the live "3->49.3% . 2->40.8%" monotonicity violation.
+    # a monotonicity violation observed on hardware where a stratum's displayed
+    # best fell as k decreased (e.g. "3->49.3% . 2->40.8%").
     #
     # Fix: circuit-score a WIDENED window = the top W by product_score
     # (W = max(top_n*5, 25)) PLUS, guaranteed regardless of rank, the
     # prefix-child of every higher stratum's already-selected winner (the
     # monotonicity anchors — the cascade already generated them, so they live
     # in this pool). Then rank the scored window by lqs_circuit (None sinks)
-    # and slice to top_n. With no circuit scorer the pre-A2 product-sliced
-    # shape is preserved byte-for-byte.
+    # and slice to top_n. With no circuit scorer the product-sliced shape is
+    # preserved byte-for-byte (the historical default, before circuit scoring).
     strata = {}
     # higher_winners: (chain_fs, ancillas) of every selected entry in a higher
     # stratum, so stratum k can pull in each one's k-prefix child as an anchor.
@@ -574,7 +575,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                             key=lambda kv: kv[1]['product_score'], reverse=True)
 
         if circuit_score_fn is None:
-            # Byte-compatible pre-A2 path: product slice, no lqs_circuit.
+            # Byte-compatible product-only path: product slice, no lqs_circuit.
             if diversity_threshold is None:
                 entries = [e for _, e in by_product[:top_n]]
             else:
@@ -613,7 +614,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                            else 0.0,
                            e['product_score']),
             reverse=True)
-        # (D1) Diversity quota: reserve later slots for different-region
+        # Diversity quota: reserve later slots for different-region
         # layouts (Jaccard <= threshold), applied AFTER the displayed-metric
         # ranking, BEFORE rank numbering. None → exact top-N slice.
         if diversity_threshold is None:
@@ -637,7 +638,7 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         'n_candidates_scored': n_candidates_scored,
         'excluded_qubits': excluded_sorted,
         'per_stratum': per_stratum,
-        # (K3) The ACTUAL VF2 cap, so the truncation banner can name it
+        # The ACTUAL VF2 cap, so the truncation banner can name it
         # ("truncated at 2000 mappings") instead of n_raw_embeddings, and
         # per_stratum[k]['truncated'] says WHICH strata hit it.
         'mapping_cap': cap,

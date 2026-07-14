@@ -1,4 +1,4 @@
-"""S3 — shuffled VF2 search order kills the geographic-prefix truncation bias.
+"""Shuffled VF2 search order kills the geographic-prefix truncation bias.
 
 Deterministic, offline, real VF2. Two identical blocks on one chip:
   * block A (ids 0..23)  — NOISY  (readout/gate error 0.06)
@@ -69,7 +69,7 @@ def _qubits(e):
     return set(e['alpha']) | set(e['beta']) | set(e['ancillas'])
 
 
-# ── t1: natural order misses the clean region; the shuffle finds it ─────────
+# ── natural order misses the clean region; the shuffle finds it ─────────
 
 def test_shuffle_reaches_a_region_natural_order_truncates_past():
     nat = _sweep(None)
@@ -88,7 +88,7 @@ def test_shuffle_reaches_a_region_natural_order_truncates_past():
     assert shuf_best['product_score'] > nat_best['product_score'] + 1e-6
 
 
-# ── t2: seed=None is the pinned natural-order (byte-compat) path ────────────
+# ── seed=None is the pinned natural-order (byte-compat) path ────────────
 
 def test_seed_none_is_natural_order_and_deterministic():
     a = _sweep(None)
@@ -104,7 +104,7 @@ def test_seed_none_is_natural_order_and_deterministic():
     assert _qubits(_best(a, 1)).isdisjoint(CLEAN)
 
 
-# ── t3: same seed → identical results (reproducibility) ─────────────────────
+# ── same seed → identical results (reproducibility) ─────────────────────
 
 def test_same_seed_is_reproducible():
     a = _sweep(SEED)
@@ -117,7 +117,7 @@ def test_same_seed_is_reproducible():
         assert [e['ancillas'] for e in ea] == [e['ancillas'] for e in eb]
 
 
-# ── t4: shuffled results still name REAL chip ids (no relabel leakage) ──────
+# ── shuffled results still name REAL chip ids (no relabel leakage) ──────
 
 def test_shuffle_recovers_physical_ids():
     shuf = _sweep(SEED)

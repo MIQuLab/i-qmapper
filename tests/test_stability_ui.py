@@ -81,7 +81,7 @@ def _build(monkeypatch, *, history=False, spawn=_sync_spawn,
     return b
 
 
-# ── t1: availability gating ─────────────────────────────────────────────────
+# ── availability gating ─────────────────────────────────────────────────
 
 def test_checkbox_disabled_without_history(monkeypatch):
     b = _build(monkeypatch, history=False)
@@ -95,7 +95,7 @@ def test_checkbox_enabled_with_history(monkeypatch):
     assert b.chk_stability_filter.tooltip                      # non-empty
 
 
-# ── t2: filter ON routes to sweep_with_stability with the controls' args ────
+# ── filter ON routes to sweep_with_stability with the controls' args ────
 
 def test_filter_on_calls_sweep_with_stability(monkeypatch):
     b = _build(monkeypatch, history=True)
@@ -121,7 +121,7 @@ def test_filter_on_calls_sweep_with_stability(monkeypatch):
     assert plain == []                                         # plain NOT called
 
 
-# ── t3: the three banner states ─────────────────────────────────────────────
+# ── the three banner states ─────────────────────────────────────────────
 
 def test_banner_states(monkeypatch):
     b = _build(monkeypatch, history=True)
@@ -147,7 +147,7 @@ def test_banner_states(monkeypatch):
     assert 'filter skipped' in b.lbl_lucj_stability.value
 
 
-# ── t4: scan rows carry stability badges ────────────────────────────────────
+# ── scan rows carry stability badges ────────────────────────────────────
 
 def test_scan_stability_badges(monkeypatch):
     b = _build(monkeypatch, history=True)
@@ -180,7 +180,7 @@ def test_scan_stability_badges(monkeypatch):
     assert 'n/a (no cached history)' in table                  # fresh → n/a
 
 
-# ── t5: filter OFF keeps the plain sweep path ───────────────────────────────
+# ── filter OFF keeps the plain sweep path ───────────────────────────────
 
 def test_filter_off_uses_plain_sweep(monkeypatch):
     b = _build(monkeypatch, history=True)
@@ -199,7 +199,7 @@ def test_filter_off_uses_plain_sweep(monkeypatch):
     assert b.lbl_lucj_stability.value == ""                    # no banner
 
 
-# ── F3: banner counts N volatile + M outlier from the metadata ──────────────
+# ── banner counts N volatile + M outlier from the metadata ──────────────
 
 def test_banner_counts_volatile_and_outlier(monkeypatch):
     b = _build(monkeypatch, history=True)
@@ -230,7 +230,7 @@ def test_banner_no_outlier_suffix_when_floor_empty(monkeypatch):
     assert 'filtered 2 volatile qubits' in v and 'outlier' not in v
 
 
-# ── t5: _scan_filtered per-backend isolation + both badge paths ─────────────
+# ── _scan_filtered per-backend isolation + both badge paths ─────────────
 
 def test_scan_filtered_per_backend_isolation(monkeypatch):
     b = _build(monkeypatch, history=True)

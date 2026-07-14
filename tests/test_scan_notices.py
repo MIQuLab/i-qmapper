@@ -1,4 +1,4 @@
-"""Headless tests for in-UI scan notices (N1 cap note, N2 capture, N3 no-leak).
+"""Headless tests for in-UI scan notices (cap note, capture, no-leak).
 
 Offline: data layer stubbed, scan monkeypatched, spawn+marshal synchronous.
 """
@@ -82,7 +82,7 @@ def _all_html(box):
     return " ".join(c.value for c in box.children if isinstance(c, HTML))
 
 
-# ── t1: k-capped row note from metadata ─────────────────────────────────────
+# ── k-capped row note from metadata ─────────────────────────────────────
 
 def test_k_capped_row_note(monkeypatch):
     b = _build(monkeypatch)
@@ -104,7 +104,7 @@ def test_k_not_capped_no_note(monkeypatch):
     assert 'k capped' not in _all_html(b.scan_results_box)
 
 
-# ── t2: warning capture → grouped, deduplicated notices ─────────────────────
+# ── warning capture → grouped, deduplicated notices ─────────────────────
 
 def test_notices_capture_and_dedup(monkeypatch):
     b = _build(monkeypatch)
@@ -129,7 +129,7 @@ def test_notices_capture_and_dedup(monkeypatch):
     assert 'ibm_a' in html                         # grouped under the backend
 
 
-# ── t3: finally-restoration (done AND error paths) ──────────────────────────
+# ── finally-restoration (done AND error paths) ──────────────────────────
 
 def test_logger_restored_after_scan(monkeypatch):
     b = _build(monkeypatch)
@@ -150,7 +150,7 @@ def test_logger_restored_after_scan(monkeypatch):
     assert lg.propagate == p0
 
 
-# ── t4: empty notices → no section ──────────────────────────────────────────
+# ── empty notices → no section ──────────────────────────────────────────
 
 def test_no_notices_section_when_empty(monkeypatch):
     b = _build(monkeypatch)

@@ -1,4 +1,4 @@
-"""Temporal-anchoring audit fixes (F1/F2/F3): the SELECTED calibration date
+"""Temporal-anchoring audit fixes: the SELECTED calibration date
 must govern all scoring in one search.
 
   * t1 — epoch consistency: when a past date is active, the sweep's pre-rank
@@ -18,7 +18,7 @@ from qpu_mapper.stability_filter import (
 )
 
 
-# ── t2: the volatility window anchors to the selected date (engine) ─────────
+# ── the volatility window anchors to the selected date (engine) ─────────
 
 def _divergent_history(n_qubits=48):
     """30 daily snapshots. q3 spikes EARLY (07-05, inside [.. ,07-14]); q5
@@ -164,7 +164,7 @@ def _build(monkeypatch, *, past_date=None):
     return b, state
 
 
-# ── t1: pre-rank props == circuit-score arrays (one epoch) ──────────────────
+# ── pre-rank props == circuit-score arrays (one epoch) ──────────────────
 
 def test_prerank_uses_selected_date_not_live_props(monkeypatch):
     b, state = _build(monkeypatch, past_date='2026-07-01 08:00:00')
@@ -183,7 +183,7 @@ def test_prerank_uses_selected_date_not_live_props(monkeypatch):
     assert pr.readout_error(7) == state.qubit_props_data['readout_error'][7]
 
 
-# ── t3: the scan header names the epoch mix on a past date ──────────────────
+# ── the scan header names the epoch mix on a past date ──────────────────
 
 def test_scan_header_notes_epoch_mix_on_past_date(monkeypatch):
     b, state = _build(monkeypatch, past_date='2026-07-01 08:00:00')

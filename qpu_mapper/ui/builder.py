@@ -324,7 +324,7 @@ class MapperUIBuilder:
             lucj_multi_dropdowns=self._lucj_multi_dropdowns,
             refresh=self._refresh, get_export=self._get_export, update_view=lambda: self._update_view(),
             chk_line_only=self.chk_line_only,
-            # Multi-QPU scan (B2/B3/B4).
+            # Multi-QPU scan.
             btn_scan_qpus=self.btn_scan_qpus,
             chk_scan_other_families=self.chk_scan_other_families,
             btn_scan_clear=self.btn_scan_clear,
@@ -333,7 +333,7 @@ class MapperUIBuilder:
             scan_spawn_bg=default_spawn_bg,
             scan_marshal=marshal_to_main,
             inter_qpu_handoff=self._inter_qpu_handoff,
-            # Stability filter (V1/V2/V3).
+            # Stability filter.
             chk_stability_filter=self.chk_stability_filter,
             rb_stability_window=self.rb_stability_window_auto,
             ft_stability_threshold=self.ft_stability_threshold,
@@ -1227,7 +1227,7 @@ class MapperUIBuilder:
             style={'description_width': '110px'},
             tooltip='Sweep all counts from max down to this floor '
                     '(0 = auto)')
-        # (K4) How many candidates to keep/show per ancilla count. Wired to the
+        # How many candidates to keep/show per ancilla count. Wired to the
         # sweep's top_n through _sweep_kwargs_from_ui, so the scan inherits it.
         self.lucj_top_n = BoundedIntText(
             value=3, min=1, max=25,
@@ -1235,7 +1235,7 @@ class MapperUIBuilder:
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
             tooltip='candidates shown per ancilla count')
-        # (S4) Advanced: the VF2 mapping cap. Raise to trade time for
+        # Advanced: the VF2 mapping cap. Raise to trade time for
         # exhaustiveness (default matches auto_lucj._MAX_RAW_VF2_MAPPINGS).
         self.lucj_search_cap = BoundedIntText(
             value=2000, min=100, max=20000, step=500,
@@ -1254,7 +1254,7 @@ class MapperUIBuilder:
             layout=W,
             tooltip='adds a direct search per k — complete but slower; '
                     'off = fast derivation from k_max only')
-        # (D2) Region diversity in the top-N slice. Default OFF.
+        # Region diversity in the top-N slice. Default OFF.
         self.chk_lucj_diverse = Checkbox(
             value=False,
             description='Prefer diverse regions',
@@ -1283,7 +1283,7 @@ class MapperUIBuilder:
             style={'description_width': '90px'},
             tooltip='Volatility score = max/median − 1; higher threshold = '
                     'more tolerant (fewer qubits excluded)')
-        # (F3) Quality floor: also exclude STABLY-terrible qubits — current
+        # Quality floor: also exclude STABLY-terrible qubits — current
         # readout outliers the volatility score is blind to. σ from device mean.
         self.ft_stability_floor = BoundedFloatText(
             value=3.0, min=0.0, max=20.0, step=0.5,

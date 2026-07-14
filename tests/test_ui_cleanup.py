@@ -66,7 +66,7 @@ def _build(monkeypatch):
     return b
 
 
-# ── t1: local block renders ABOVE the scan block ────────────────────────────
+# ── local block renders ABOVE the scan block ────────────────────────────
 
 def test_local_block_above_scan(monkeypatch):
     b = _build(monkeypatch)
@@ -80,7 +80,7 @@ def test_local_block_above_scan(monkeypatch):
     assert any('📍 This backend (ibm_here)' in h for h in headers)
 
 
-# ── t2: clear resets everything and re-arms the button ──────────────────────
+# ── clear resets everything and re-arms the button ──────────────────────
 
 def test_clear_scan_results(monkeypatch):
     b = _build(monkeypatch)
@@ -122,7 +122,7 @@ def test_new_scan_auto_clears(monkeypatch):
     assert list(b.scan_results_box.children) != first + first
 
 
-# ── t3: staged banner appears on stage, cleared on connect ──────────────────
+# ── staged banner appears on stage, cleared on connect ──────────────────
 
 class _Stub:
     def __init__(self, **attrs):
@@ -181,7 +181,7 @@ def test_staged_banner_then_cleared_on_connect():
     assert 'staged' not in ctx.lbl_qpu2_status.value
 
 
-# ── t4: label disambiguation in the detail + dropdown ───────────────────────
+# ── label disambiguation in the detail + dropdown ───────────────────────
 
 def test_label_disambiguation(monkeypatch):
     b = _build(monkeypatch)
