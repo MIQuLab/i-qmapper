@@ -423,7 +423,8 @@ def setup_lucj_callbacks(ctx):
                 window_days=rb_stability_window.value,
                 threshold=ft_stability_threshold.value,
                 min_bridges=kwargs['min_bridges'], top_n=kwargs['top_n'],
-                mapping_cap=kwargs['mapping_cap'], today=anchor)
+                mapping_cap=kwargs['mapping_cap'], today=anchor,
+                quality_sigma=_floor_sigma())
             _render_stability_banner(res.get('stability'), norb, anchor=anchor)
             # The frozen stability engine can't take circuit_score_fn — fill
             # circuit-level LQS on its survivors here (A2).
@@ -559,7 +560,15 @@ def setup_lucj_callbacks(ctx):
     chk_stability_filter = ctx.chk_stability_filter
     rb_stability_window = ctx.rb_stability_window
     ft_stability_threshold = ctx.ft_stability_threshold
+    ft_stability_floor = ctx.ft_stability_floor
     stability_ctrl_box = ctx.stability_ctrl_box
+
+    def _floor_sigma():
+        """(F3) Quality-floor σ from the UI; 0 → None (floor off). Read at
+        each sweep_with_stability call site (like window/threshold), so the
+        local sweep and the scan share it by construction."""
+        v = getattr(ft_stability_floor, 'value', None)
+        return v if (v and v > 0) else None
     lbl_lucj_stability = ctx.lbl_lucj_stability
     chk_scan_stability = ctx.chk_scan_stability
 
@@ -599,12 +608,15 @@ def setup_lucj_callbacks(ctx):
                 f"{esc(str(stab.get('n_excluded_initial')))} "
                 f"(most-volatile still excluded)</div>")
         else:
-            n = len(stab.get('excluded_final', []))
+            total = len(stab.get('excluded_final', []))
+            m_floor = stab.get('n_floor_excluded', 0)      # (F3) outliers
+            n_vol = total - m_floor
+            floor_txt = f" + {esc(str(m_floor))} outlier" if m_floor else ""
             lbl_lucj_stability.value = (
                 f"<div style='font-size:13px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-                f"margin:3px 0;'>🛡 filtered {esc(str(n))} volatile qubits "
-                f"(window {_window_txt()})</div>")
+                f"margin:3px 0;'>🛡 filtered {esc(str(n_vol))} volatile"
+                f"{floor_txt} qubits (window {_window_txt()})</div>")
 
     def _cached_history_for(backend_name):
         """Assemble a per-backend history dict from the DISK CACHE ONLY (no
@@ -693,6 +705,7 @@ def setup_lucj_callbacks(ctx):
         kwargs = _sweep_kwargs_from_ui()
         window = rb_stability_window.value
         threshold = ft_stability_threshold.value
+        floor_sigma = _floor_sigma()          # (F3) scan inherits the floor
         results = []
         n_scanned = n_failed = n_skipped = 0
         for t in eligible:
@@ -711,7 +724,8 @@ def setup_lucj_callbacks(ctx):
                         threshold=threshold,
                         min_bridges=kwargs['min_bridges'],
                         top_n=kwargs['top_n'],
-                        mapping_cap=kwargs['mapping_cap'])
+                        mapping_cap=kwargs['mapping_cap'],
+                        quality_sigma=floor_sigma)
                     stab = res.get('stability', {'available': False})
                 else:
                     res = sweep_ancilla_layouts(norb, backend, props, **kwargs)

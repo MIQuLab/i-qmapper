@@ -12,7 +12,8 @@ import rustworkx
 
 from qpu_mapper.ancilla_sweep import sweep_ancilla_layouts
 from qpu_mapper.stability_filter import (
-    compute_qubit_volatility, select_excluded, sweep_with_stability,
+    compute_qubit_volatility, select_excluded, select_quality_floor,
+    sweep_with_stability,
 )
 
 
@@ -167,3 +168,99 @@ def test_metadata_and_truncation_propagation():
     assert st['available'] is True
     assert st['excluded_final'] == sorted(st['excluded_final'])
     assert res['excluded_qubits'] == sorted(res['excluded_qubits'])
+
+
+# ── F1/F2: quality floor — stably-terrible qubits volatility is blind to ────
+
+class _OutlierProps:
+    """Current props where qubit 24 is a stable device outlier (~73× the
+    rest); everything else uniform. Volatility (history) can't see this."""
+    def readout_error(self, q):
+        return 0.73 if q == 24 else 0.01
+
+    def gate_error(self, name, edge):
+        return 0.005
+
+
+def test_quality_floor_excludes_stably_terrible_not_volatility():
+    backend = _make_backend()
+    hist = _history({})                      # perfectly flat → volatility 0
+    res = sweep_with_stability(8, backend, _OutlierProps(), hist,
+                               window_days=14, threshold=1.0, min_bridges=1,
+                               quality_sigma=3.0)
+    st = res['stability']
+    assert st['floor_qubits'] == [24]        # the outlier
+    assert st['n_floor_excluded'] == 1
+    assert 24 in st['excluded_final']
+    # Volatility alone (floor off) leaves the stably-terrible qubit untouched.
+    res_off = sweep_with_stability(8, backend, _OutlierProps(), hist,
+                                   window_days=14, threshold=1.0, min_bridges=1,
+                                   quality_sigma=None)
+    assert 24 not in res_off['stability'].get('excluded_final', [])
+
+
+def test_select_quality_floor_is_the_c1_outlier_rule():
+    # Flat device with one 3σ+ outlier at index 5.
+    arr = [0.01] * 20
+    arr[5] = 0.5
+    assert select_quality_floor({'readout_error': arr}, sigma=3.0) == [5]
+    assert select_quality_floor(arr, sigma=3.0) == [5]        # bare array too
+    assert select_quality_floor(arr, sigma=50.0) == []        # loosen → none
+    assert select_quality_floor([0.01] * 5) == []             # < min samples
+
+
+def _single_block_backend():
+    """One 24-qubit block (ids 0..23) — the ONLY host, so pruning a chain
+    qubit genuinely breaks the fit and forces the relax valve."""
+    edges = []
+    _build_block(0, edges)
+    g = rustworkx.PyDiGraph()
+    for i in range(24):
+        g.add_node(i)
+    for u, v in edges:
+        g.add_edge(u, v, None)
+    return SimpleNamespace(coupling_map=SimpleNamespace(graph=g),
+                           operation_names=['cz', 'sx', 'rz', 'x'])
+
+
+class _BridgeOutlierProps:
+    """Current outlier at bridge qubit 20 (excludable without breaking the
+    chain); everything else uniform."""
+    def readout_error(self, q):
+        return 0.73 if q == 20 else 0.01
+
+    def gate_error(self, name, edge):
+        return 0.005
+
+
+def test_relax_readmits_volatility_before_floor():
+    backend = _single_block_backend()
+    # Top-row qubits 5,6 are volatile (chain-critical); bridge 20 is a CURRENT
+    # outlier (non-critical). Excluding {5,6,20} breaks the top chain → relax.
+    # The valve must re-admit the volatility qubits (5,6) and NEVER re-admit
+    # the floor qubit 20 — a stably-terrible qubit is the last thing back.
+    hist = _history({5: 0.06, 6: 0.055}, n_qubits=24)
+    res = sweep_with_stability(8, backend, _BridgeOutlierProps(), hist,
+                               window_days=14, threshold=1.0, min_bridges=1,
+                               quality_sigma=3.0)
+    st = res['stability']
+    assert st['relaxed'] is True
+    assert st['floor_qubits'] == [20]
+    assert 20 in st['excluded_final']                 # floor never re-admitted
+    assert not ({5, 6} <= set(st['excluded_final']))  # volatility re-admitted
+    assert st['n_readmitted'] >= 1
+    assert res['strata']                              # sweep succeeded
+
+
+def test_quality_sigma_none_is_byte_compatible():
+    backend = _make_backend()
+    hist = _history({3: 0.06, 2: 0.055})
+    res = sweep_with_stability(8, backend, _OutlierProps(), hist,
+                               window_days=14, threshold=1.0, min_bridges=1,
+                               quality_sigma=None)
+    st = res['stability']
+    assert 'n_floor_excluded' not in st and 'floor_qubits' not in st
+    # Exactly the volatility-only exclusion; the current outlier is ignored.
+    vol = compute_qubit_volatility(hist, 14)
+    assert set(st['excluded_final']) == set(select_excluded(vol, threshold=1.0))
+    assert 24 not in st['excluded_final']

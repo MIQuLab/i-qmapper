@@ -197,3 +197,76 @@ def test_filter_off_uses_plain_sweep(monkeypatch):
     assert plain == [1]                                        # plain sweep used
     assert sws == []                                          # filter engine untouched
     assert b.lbl_lucj_stability.value == ""                    # no banner
+
+
+# ── F3: banner counts N volatile + M outlier from the metadata ──────────────
+
+def test_banner_counts_volatile_and_outlier(monkeypatch):
+    b = _build(monkeypatch, history=True)
+    monkeypatch.setattr(
+        "qpu_mapper.stability_filter.sweep_with_stability",
+        lambda *a, **k: _canned_res({
+            'available': True, 'relaxed': False,
+            'excluded_final': [1, 2, 3, 4, 5],       # 5 total
+            'n_floor_excluded': 2, 'floor_qubits': [4, 5],
+            'window_days': 14}))
+    b.chk_stability_filter.value = True
+    b.btn_lucj_run.click()
+    v = b.lbl_lucj_stability.value
+    assert 'filtered 3 volatile + 2 outlier qubits' in v     # 5 − 2 floor = 3
+
+
+def test_banner_no_outlier_suffix_when_floor_empty(monkeypatch):
+    b = _build(monkeypatch, history=True)
+    monkeypatch.setattr(
+        "qpu_mapper.stability_filter.sweep_with_stability",
+        lambda *a, **k: _canned_res({
+            'available': True, 'relaxed': False,
+            'excluded_final': [1, 2], 'n_floor_excluded': 0,
+            'floor_qubits': [], 'window_days': 14}))
+    b.chk_stability_filter.value = True
+    b.btn_lucj_run.click()
+    v = b.lbl_lucj_stability.value
+    assert 'filtered 2 volatile qubits' in v and 'outlier' not in v
+
+
+# ── t5: _scan_filtered per-backend isolation + both badge paths ─────────────
+
+def test_scan_filtered_per_backend_isolation(monkeypatch):
+    b = _build(monkeypatch, history=True)
+    b.chk_stability_filter.value = True
+    b.chk_scan_stability.value = True
+    # ibm_c (the MIDDLE target) blows up during history assembly; the loop
+    # must survive so ibm_b (after it) still completes.
+    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+        {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
+        {'name': 'ibm_c', 'family': 'Heron', 'eligible': True, 'reason': None},
+        {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
+    from qpu_mapper import data
+    monkeypatch.setattr(data, 'list_known_calibrations', lambda name, date=None:
+                        [{'last_update': '2026-07-05 08:00:00'}]
+                        if name in ('ibm_a', 'ibm_c') else [])
+
+    def _load(name, ts):
+        if name == 'ibm_c':
+            raise RuntimeError('cache read exploded')
+        return ({'readout_error': [0.01] * 8}, {'cz_error': [0.001] * 7})
+    monkeypatch.setattr(data, '_load_calibration', _load)
+
+    filt = dict(_canned_res({'available': True, 'relaxed': False,
+                             'excluded_final': [3, 4], 'window_days': 14}))
+    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+                        lambda *a, **k: filt)
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: _canned_res(None))
+    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+                        lambda state: (lambda backend: SimpleNamespace(
+                            vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
+
+    b.btn_scan_qpus.click()
+    table = b.scan_results_box.children[0].value
+    # (a) isolation: ibm_c's raise became an error row, loop not killed.
+    assert 'cache read exploded' in table
+    # (b) both badge paths: cached → filtered, fresh → n/a.
+    assert '🛡 −2 qubits' in table                  # ibm_a cached → filtered
+    assert 'n/a (no cached history)' in table        # ibm_b (after ibm_c) fresh

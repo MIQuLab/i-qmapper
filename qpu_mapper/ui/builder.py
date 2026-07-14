@@ -336,6 +336,7 @@ class MapperUIBuilder:
             chk_stability_filter=self.chk_stability_filter,
             rb_stability_window=self.rb_stability_window_auto,
             ft_stability_threshold=self.ft_stability_threshold,
+            ft_stability_floor=self.ft_stability_floor,
             stability_ctrl_box=self.stability_ctrl_box,
             lbl_lucj_stability=self.lbl_lucj_stability,
             chk_scan_stability=self.chk_scan_stability,
@@ -1274,9 +1275,19 @@ class MapperUIBuilder:
             style={'description_width': '90px'},
             tooltip='Volatility score = max/median − 1; higher threshold = '
                     'more tolerant (fewer qubits excluded)')
-        # Window + threshold row, revealed only when the filter is on.
+        # (F3) Quality floor: also exclude STABLY-terrible qubits — current
+        # readout outliers the volatility score is blind to. σ from device mean.
+        self.ft_stability_floor = BoundedFloatText(
+            value=3.0, min=0.0, max=20.0, step=0.5,
+            description='Quality floor:', layout=Layout(width='230px'),
+            style={'description_width': '90px'},
+            tooltip='Exclude qubits whose CURRENT readout error is more than '
+                    'this many σ above the device mean (0 = off). Catches '
+                    'consistently-bad qubits, not just volatile ones.')
+        # Window + threshold + floor row, revealed only when the filter is on.
         self.stability_ctrl_box = VBox(
-            [self.rb_stability_window_auto, self.ft_stability_threshold])
+            [self.rb_stability_window_auto, self.ft_stability_threshold,
+             self.ft_stability_floor])
         self.stability_ctrl_box.layout.display = 'none'
         self.lbl_lucj_stability = HTML("")
         # Scan sub-option: filter each scanned backend with CACHED history only.
