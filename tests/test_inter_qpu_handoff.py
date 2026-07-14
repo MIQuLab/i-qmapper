@@ -185,3 +185,38 @@ def test_same_backend_applies_without_reconnect(monkeypatch):
     d = repaints[-1].layouts_data[0]
     assert d['alpha'] == ['3'] and d['beta'] == ['4'] and d['ancilla'] == ['5']
     assert 'Applied to already-connected' in ctx.lbl_qpu2_status.value
+
+
+# ── batch handoff: a LIST of candidates applies to C1..Cn on QPU-2 ──────────
+
+def test_batch_handoff_applies_all_circuits(monkeypatch):
+    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    captured = {}
+
+    def _fake_build(s2, is_secondary=False, return_widgets=False):
+        captured['s2'] = s2
+        s2.qubit_ids = [str(i) for i in range(8)]
+        s2.edges_list = [(0, 1)]
+        fig = SimpleNamespace()
+        fig_box2 = SimpleNamespace(children=[SimpleNamespace(),
+                                             SimpleNamespace(), fig])
+        full_ui = SimpleNamespace(children=[SimpleNamespace(), fig_box2])
+        w2 = SimpleNamespace(plot_w_slider=SimpleNamespace(value=0),
+                             plot_h_slider=SimpleNamespace(value=0))
+        return (full_ui, fig, w2) if return_widgets else (full_ui, fig)
+
+    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+                        lambda b, n: (object(), None))
+    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+                        lambda b: ([], 'chip'))
+    monkeypatch.setattr("qpu_mapper.ui.build_mapper_ui", _fake_build)
+
+    ctx, state = _ctx(spawn=_sync_spawn, backend_calls=[])
+    setup_inter_qpu(ctx)
+    batch = [{'alpha': [0], 'beta': [1], 'ancillas': [2]},
+             {'alpha': [3], 'beta': [4], 'ancillas': [5]}]
+    ctx.handoff_cell[0]('ibm_k', batch)              # LIST → batch handoff
+
+    s2 = captured['s2']
+    assert s2.layouts_data[0]['alpha'] == ['0'] and s2.layouts_data[0]['ancilla'] == ['2']
+    assert s2.layouts_data[1]['alpha'] == ['3'] and s2.layouts_data[1]['ancilla'] == ['5']

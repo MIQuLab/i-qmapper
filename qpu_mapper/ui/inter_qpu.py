@@ -263,12 +263,7 @@ def setup_inter_qpu(ctx):
     # ── remote-candidate handoff (scan → inter-QPU) ─────────
     handoff_cell = getattr(ctx, 'handoff_cell', None)
 
-    def _apply_candidate_to_state(s2, candidate):
-        """Pre-load a scan-selected candidate onto QPU-2's layout state so
-        the secondary map renders it from its first paint. Called BEFORE
-        build_mapper_ui(s2), so no qubit-id filtering is possible yet — the
-        candidate's qubits are valid ids for that backend by construction."""
-        d = s2.layouts_data[0]
+    def _apply_one_to_slot(d, candidate):
         d['alpha'] = []; d['beta'] = []; d['other'] = []
         d['qubits'] = []; d['ancilla'] = []; d['styles'] = {}
         defs = d['defaults']
@@ -283,6 +278,17 @@ def setup_inter_qpu(ctx):
             for q in d[role]:
                 d['styles'][q] = {'fill': fills[role], 'line': line,
                                   'width': 2, 'text_color': '#000000'}
+
+    def _apply_candidate_to_state(s2, candidate):
+        """Pre-load scan-selected candidate(s) onto QPU-2's layout state so the
+        secondary map renders from its first paint. A single candidate lands on
+        C1; a LIST (a multi-circuit batch) lands on C1..Cn, one per slot — the
+        list form is what the batch-scan handoff sends."""
+        cands = candidate if isinstance(candidate, (list, tuple)) else [candidate]
+        for i, cand in enumerate(cands):
+            d = s2.layouts_data.get(i)
+            if d is not None:
+                _apply_one_to_slot(d, cand)
 
     def stage_remote_candidate(backend_name, candidate):
         """Scan-side entry point: reveal the inter-QPU panel, prefill the

@@ -314,7 +314,11 @@ class MapperUIBuilder:
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
             lucj_multi_ancillas=self.lucj_multi_ancillas,
-            btn_lucj_multi=self.btn_lucj_multi, lbl_lucj_multi=self.lbl_lucj_multi,
+            btn_lucj_multi=self.btn_lucj_multi,
+            btn_lucj_multi_sweep=self.btn_lucj_multi_sweep,
+            btn_scan_batch=self.btn_scan_batch,
+            scan_batch_box=self.scan_batch_box,
+            lbl_lucj_multi=self.lbl_lucj_multi,
             lucj_multi_detail_box=self.lucj_multi_detail_box,
             num_circuits=self.num_circuits, intra_qpu_mode=self.intra_qpu_mode, dd_mode=self.dd_mode,
             lucj_all_layouts=self._lucj_all_layouts,
@@ -1283,19 +1287,20 @@ class MapperUIBuilder:
             style={'description_width': '90px'},
             tooltip='Volatility score = max/median − 1; higher threshold = '
                     'more tolerant (fewer qubits excluded)')
-        # Quality floor: also exclude STABLY-terrible qubits — current
-        # readout outliers the volatility score is blind to. σ from device mean.
+        # Quality floor: always-on factory guard — exclude qubits whose CURRENT
+        # readout error is a device outlier (> σ above the mean), from EVERY
+        # search path (single / multi / scan), independent of the volatility
+        # filter. Defined here but mounted in the always-visible Auto section.
         self.ft_stability_floor = BoundedFloatText(
             value=3.0, min=0.0, max=20.0, step=0.5,
             description='Quality floor:', layout=Layout(width='230px'),
-            style={'description_width': '90px'},
-            tooltip='Exclude qubits whose CURRENT readout error is more than '
-                    'this many σ above the device mean (0 = off). Catches '
-                    'consistently-bad qubits, not just volatile ones.')
-        # Window + threshold + floor row, revealed only when the filter is on.
+            style={'description_width': '110px'},
+            tooltip='Always on: exclude qubits whose CURRENT readout error is '
+                    'more than this many σ above the device mean (0 = off). '
+                    'Applies to single, multi and scan searches.')
+        # Window + threshold row, revealed only when the volatility filter is on.
         self.stability_ctrl_box = VBox(
-            [self.rb_stability_window_auto, self.ft_stability_threshold,
-             self.ft_stability_floor])
+            [self.rb_stability_window_auto, self.ft_stability_threshold])
         self.stability_ctrl_box.layout.display = 'none'
         self.lbl_lucj_stability = HTML("")
         # Scan sub-option: filter each scanned backend with CACHED history only.
@@ -1346,7 +1351,10 @@ class MapperUIBuilder:
         self.lucj_multi_ancillas = Text(
             value='', description='ancilla per circuit:',
             placeholder='blank = use Ancilla above; or e.g. 2, 2  (-1 = auto)',
-            layout=W, style={'description_width': 'initial'})
+            layout=W, style={'description_width': 'initial'},
+            tooltip='Legacy Generate: exact bridge count per circuit. '
+                    'Sweep (🧺): per-circuit min ancillas (floor); '
+                    'blank = engine default.')
         # Buffer qubits: tiny range 0-5, numeric input is more direct.
         self.lucj_buffer_slider = BoundedIntText(
             value=1, min=0, max=5,
@@ -1356,6 +1364,18 @@ class MapperUIBuilder:
         self.btn_lucj_multi = Button(
             description='🤖 Generate Multi-Circuit',
             button_style='success', layout=W)
+        # Sweep-based multi-circuit: greedy auto-best per circuit with a
+        # per-circuit override dropdown (uses the ancilla sweep + buffer).
+        self.btn_lucj_multi_sweep = Button(
+            description='🧺 Generate Multi-Circuit (sweep)',
+            button_style='info', layout=W)
+        # Batch scan: run the whole multi-circuit batch on every compatible QPU.
+        self.btn_scan_batch = Button(
+            description='🌐 Scan batch on all QPUs',
+            button_style='info', layout=W,
+            tooltip='Place the full multi-circuit batch on every eligible '
+                    'backend and rank by batch fidelity')
+        self.scan_batch_box = VBox([])
         self.lbl_lucj_multi = HTML("")
         # Populated dynamically with per-circuit dropdowns when the
         # user clicks btn_lucj_multi.
@@ -1740,6 +1760,7 @@ class MapperUIBuilder:
             self.lucj_chk_score,
             self.chk_deep_search,
             self.chk_lucj_diverse,
+            self.ft_stability_floor,
             self.chk_stability_filter,
             self.stability_ctrl_box,
             self.lbl_lucj_stability,
@@ -1772,8 +1793,11 @@ class MapperUIBuilder:
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
             self.btn_lucj_multi,
+            self.btn_lucj_multi_sweep,
+            self.btn_scan_batch,
             self.lbl_lucj_multi,
             self.lucj_multi_detail_box,
+            self.scan_batch_box,
         ], layout=Layout(padding='6px'))
 
     def _build_export_view(self):
