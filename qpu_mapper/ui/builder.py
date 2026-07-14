@@ -307,6 +307,7 @@ class MapperUIBuilder:
             lucj_min_ancilla=self.lucj_min_ancilla, lucj_top_n=self.lucj_top_n,
             lucj_search_cap=self.lucj_search_cap,
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
+            chk_lucj_diverse=self.chk_lucj_diverse,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
             dd_lucj_layout=self.dd_lucj_layout,
@@ -1253,6 +1254,13 @@ class MapperUIBuilder:
             layout=W,
             tooltip='adds a direct search per k — complete but slower; '
                     'off = fast derivation from k_max only')
+        # (D2) Region diversity in the top-N slice. Default OFF.
+        self.chk_lucj_diverse = Checkbox(
+            value=False,
+            description='Prefer diverse regions',
+            layout=W,
+            tooltip='reserve top-N slots for layouts from different chip '
+                    'regions (Jaccard > 0.8 = same region)')
         self.btn_lucj_run = Button(
             description='🤖 Generate LUCJ Layout',
             button_style='success', layout=W)
@@ -1731,6 +1739,7 @@ class MapperUIBuilder:
             self.lucj_search_cap,
             self.lucj_chk_score,
             self.chk_deep_search,
+            self.chk_lucj_diverse,
             self.chk_stability_filter,
             self.stability_ctrl_box,
             self.lbl_lucj_stability,

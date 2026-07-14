@@ -120,6 +120,62 @@ def _stable_seed(*parts) -> int:
     return int(digest[:8], 16)
 
 
+def _entry_qubit_set(entry):
+    """Full physical qubit footprint of a candidate: alpha ∪ beta ∪ ancillas."""
+    return frozenset(entry['alpha']) | frozenset(entry['beta']) \
+        | frozenset(entry['ancillas'])
+
+
+def _jaccard(a, b):
+    """|A ∩ B| / |A ∪ B| — 0 for two empty sets (no overlap to speak of)."""
+    union = a | b
+    if not union:
+        return 0.0
+    return len(a & b) / len(union)
+
+
+def _select_with_diversity(ranked, top_n, threshold):
+    """Quota-balanced top_n slice (user-approved option B).
+
+    ``ranked`` is a best-first list of entries. The first ceil(top_n/2) slots
+    are the best entries ABSOLUTELY (unchanged). Each remaining slot is filled
+    with the best not-yet-picked entry whose Jaccard similarity
+    (``_jaccard`` over the full qubit set) to EVERY already-selected entry is
+    ``<= threshold`` — i.e. from a genuinely different chip region. If the
+    scored window holds no such candidate, it falls back to the next best
+    (similar) entry, so we never return fewer than ``min(top_n, len(ranked))``
+    — diversity is a preference, not a constraint.
+
+    Marks each returned entry: ``entry['diverse'] = True`` iff it was chosen
+    for dissimilarity (the UI badges those), else ``False``.
+    """
+    n = min(top_n, len(ranked))
+    if n <= 0:
+        return []
+    half = (top_n + 1) // 2                      # ceil(top_n / 2)
+    selected = list(ranked[:half])
+    for e in selected:
+        e['diverse'] = False
+    sel_sets = [_entry_qubit_set(e) for e in selected]
+    remaining = list(ranked[half:])
+    while len(selected) < n and remaining:
+        pick = None
+        for i, cand in enumerate(remaining):
+            cs = _entry_qubit_set(cand)
+            if all(_jaccard(cs, s) <= threshold for s in sel_sets):
+                pick = i
+                break
+        if pick is None:                         # no dissimilar candidate left
+            cand = remaining.pop(0)              # fall back to next best
+            cand['diverse'] = False
+        else:
+            cand = remaining.pop(pick)
+            cand['diverse'] = True
+        selected.append(cand)
+        sel_sets.append(_entry_qubit_set(cand))
+    return selected
+
+
 def _safe_readout(props, qubit):
     """Readout error for `qubit`, NaN/None -> penalty (mirrors lightweight)."""
     try:
@@ -148,7 +204,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                           min_bridges=None, top_n=3,
                           mapping_cap=None, exclude_qubits=None,
                           circuit_score_fn=None, hybrid=True,
-                          shuffle_seed=_AUTO_SHUFFLE) -> dict:
+                          shuffle_seed=_AUTO_SHUFFLE,
+                          diversity_threshold=None) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -191,6 +248,17 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             ``k`` (still per-stratum, still reproducible; for tests). Physical
             qubit ids ride in node data and are recovered order-independently
             via ``_key_to_phys`` — no relabel leakage.
+        diversity_threshold: when a float in (0, 1), rebalance each stratum's
+            top_n for REGION diversity (D1). After the displayed-metric
+            ranking, the first ceil(top_n/2) slots keep the best entries
+            absolutely; each remaining slot takes the best entry whose Jaccard
+            similarity — ``|A∩B|/|A∪B|`` over the full qubit set (alpha ∪ beta ∪
+            ancillas) — to EVERY already-selected entry is ``<= threshold``
+            (0.8 ⇒ >0.8 is "same region, variant"). If the scored window has no
+            dissimilar candidate, it falls back to the next best (never fewer
+            than ``min(top_n, pool)``). Diversity-selected entries are tagged
+            ``entry['diverse'] = True``. ``None`` (default) → the exact top_n
+            slice, byte-compatible (no ``diverse`` key added).
         hybrid: when True (default), each stratum k' < k_max_effective is the
             UNION of (a) the derived prefix candidates AND (b) a DIRECT VF2 at
             the k' template on the same (possibly pruned) graph. Derivation
@@ -507,7 +575,11 @@ def sweep_ancilla_layouts(norb, backend, props, *,
 
         if circuit_score_fn is None:
             # Byte-compatible pre-A2 path: product slice, no lqs_circuit.
-            entries = [e for _, e in by_product[:top_n]]
+            if diversity_threshold is None:
+                entries = [e for _, e in by_product[:top_n]]
+            else:
+                entries = _select_with_diversity(
+                    [e for _, e in by_product], top_n, diversity_threshold)
             for rank, entry in enumerate(entries, start=1):
                 entry['rank_in_stratum'] = rank
             strata[k] = entries
@@ -541,7 +613,13 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                            else 0.0,
                            e['product_score']),
             reverse=True)
-        entries = window[:top_n]
+        # (D1) Diversity quota: reserve later slots for different-region
+        # layouts (Jaccard <= threshold), applied AFTER the displayed-metric
+        # ranking, BEFORE rank numbering. None → exact top-N slice.
+        if diversity_threshold is None:
+            entries = window[:top_n]
+        else:
+            entries = _select_with_diversity(window, top_n, diversity_threshold)
         for rank, entry in enumerate(entries, start=1):
             entry['rank_in_stratum'] = rank
         strata[k] = entries

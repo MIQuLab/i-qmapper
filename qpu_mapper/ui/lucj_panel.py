@@ -106,6 +106,7 @@ def setup_lucj_callbacks(ctx):
     lucj_search_cap = ctx.lucj_search_cap
     lucj_chk_score = ctx.lucj_chk_score
     chk_deep_search = ctx.chk_deep_search
+    chk_lucj_diverse = ctx.chk_lucj_diverse
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
     lbl_lucj_trunc = ctx.lbl_lucj_trunc
@@ -345,6 +346,8 @@ def setup_lucj_callbacks(ctx):
             'top_n': top_val if (top_val and top_val >= 1) else 3,
             'hybrid': chk_deep_search.value,
             'mapping_cap': cap_val if (cap_val and cap_val >= 1) else None,
+            # (D2) 0.8 default when ON; None → exact top-N (byte-compatible).
+            'diversity_threshold': 0.8 if chk_lucj_diverse.value else None,
         }
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
@@ -450,8 +453,10 @@ def setup_lucj_callbacks(ctx):
             for entry in strata[k]:
                 pct, is_tmpl = _entry_lqs_pct(entry)
                 suffix = " (template)" if is_tmpl else ""
+                alt = " · alt region" if entry.get('diverse') else ""   # (D2)
                 dd_opts.append((
-                    f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}",
+                    f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
+                    f"{alt}",
                     len(flat),
                 ))
                 flat.append(entry)
@@ -793,7 +798,8 @@ def setup_lucj_callbacks(ctx):
         k = len(entry['ancillas'])
         pct, is_tmpl = _entry_lqs_pct(entry)
         suffix = " (template)" if is_tmpl else ""
-        return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
+        alt = " · alt region" if entry.get('diverse') else ""    # (D2)
+        return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}{alt}"
 
     def _render_targets(targets):
         rows = []

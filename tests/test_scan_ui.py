@@ -317,6 +317,7 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     b.lucj_min_ancilla.value = 2
     b.lucj_top_n.value = 7                           # (K4) non-default top_n
     b.lucj_search_cap.value = 5000                   # (S4) non-default cap
+    b.chk_lucj_diverse.value = True                 # (D2) non-default diversity
 
     b.btn_lucj_run.click()                          # local sweep
     local_kw = calls[-1]
@@ -324,12 +325,13 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     b.btn_scan_qpus.click()                         # scan (per-target)
     scan_kw = calls[0]
 
-    keys = ('min_bridges', 'top_n', 'hybrid', 'mapping_cap')
+    keys = ('min_bridges', 'top_n', 'hybrid', 'mapping_cap', 'diversity_threshold')
     assert {k: local_kw.get(k) for k in keys} == {k: scan_kw.get(k) for k in keys}
     assert scan_kw['hybrid'] is False               # honored, not the engine default
-    # (K4/S4) Show-top and Search-cap reach BOTH paths — parity by construction.
+    # (K4/S4/D2) Show-top, Search-cap, diversity reach BOTH paths — parity.
     assert local_kw['top_n'] == 7 and scan_kw['top_n'] == 7
     assert local_kw['mapping_cap'] == 5000 and scan_kw['mapping_cap'] == 5000
+    assert local_kw['diversity_threshold'] == 0.8 and scan_kw['diversity_threshold'] == 0.8
 
 
 # ── P2: active backend skipped-with-reference (never re-searched) ───────────

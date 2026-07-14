@@ -277,3 +277,30 @@ def test_sweep_mode_label():
                           2: {'n_direct': 0, 'n_derived': 3},
                           1: {'n_direct': 0, 'n_derived': 4}}}
     assert _sweep_mode_label(dv) == 'derived-only'
+
+
+# ── D2: diverse entries get a "· alt region" dropdown-label suffix ──────────
+
+def test_diverse_entry_label_suffix(builder, monkeypatch):
+    def _fake(*a, **k):
+        def e(anc, prod, diverse):
+            return {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+                    'ancillas': anc, 'bridge_slots': tuple(range(0, 4 * len(anc), 4)),
+                    'product_score': prod, 'additive_score': 0.5,
+                    'lqs_circuit': prod, 'rank_in_stratum': 1, 'source': 'derived',
+                    'diverse': diverse}
+        return {
+            'strata': {2: [dict(e([4, 5], 0.30, False), rank_in_stratum=1),
+                           dict(e([6, 7], 0.28, True), rank_in_stratum=2)]},
+            'k_max_effective': 2, 'min_bridges': 2, 'vf2_truncated': False,
+            'n_raw_embeddings': 5, 'n_candidates_scored': 5,
+            'per_stratum': {2: {'n_direct': 0, 'n_derived': 2,
+                                'truncated': False, 'shuffled': False}},
+            'mapping_cap': 2000,
+        }
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", _fake)
+    b = builder
+    b.btn_lucj_run.click()
+    labels = _labels(b.dd_lucj_layout)
+    assert any('· alt region' in lab for lab in labels)          # the diverse one
+    assert sum('· alt region' in lab for lab in labels) == 1     # only it
