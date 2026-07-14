@@ -184,3 +184,69 @@ def test_scan_skips_ineligible_targets(monkeypatch):
     assert called == []                          # sweep never invoked
     assert out['n_skipped'] == 1 and out['n_scanned'] == 0
     assert out['results'][0]['sweep'] is None
+
+
+# ── U1/U3: sweep_fn injection hook — the ONE loop, a pluggable sweep ────────
+
+def test_sweep_fn_injected_per_target_with_isolation():
+    """t-new-1: sweep_fn is called per eligible target with the forwarded
+    kwargs, and the shared loop keeps per-backend isolation (one raise → error
+    row, the others complete)."""
+    calls = []
+
+    def fake_sweep(norb, backend, props, *, min_bridges=None, top_n=3):
+        calls.append((backend.name, min_bridges, top_n))
+        if backend.name == 'bad':
+            raise RuntimeError('boom')
+        return _canned_sweep({1: [{'product_score': 0.5}]})
+
+    backends = {n: SimpleNamespace(name=n) for n in ('good', 'bad', 'good2')}
+    targets = [{'name': n, 'family': 'Heron', 'eligible': True}
+               for n in ('good', 'bad', 'good2')]
+    out = scan_qpus(targets, 6, get_backend=lambda n: backends[n],
+                    get_props=lambda b: object(),
+                    min_bridges=2, top_n=5, sweep_fn=fake_sweep)
+
+    assert len(calls) == 3                                   # per eligible target
+    assert all(mb == 2 and tn == 5 for _, mb, tn in calls)  # kwargs forwarded
+    rows = {r['name']: r for r in out['results']}
+    assert rows['bad']['error'] == 'boom' and rows['bad']['sweep'] is None
+    assert rows['good']['sweep'] is not None                # isolation held
+    assert rows['good2']['sweep'] is not None
+    assert out['n_failed'] == 1 and out['n_scanned'] == 2
+
+
+def test_sweep_fn_none_uses_sweep_ancilla_layouts(monkeypatch):
+    """sweep_fn=None (default) is byte-compatible: the built-in sweep runs."""
+    seen = []
+    monkeypatch.setattr(
+        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        lambda norb, b, p, **k: seen.append(k) or _canned_sweep({1: [{'product_score': 0.4}]}))
+    out = scan_qpus([{'name': 'a', 'family': 'H', 'eligible': True}], 6,
+                    get_backend=lambda n: SimpleNamespace(name=n),
+                    get_props=lambda b: object(), min_bridges=1, top_n=3)
+    assert seen == [{'min_bridges': 1, 'top_n': 3}]          # exactly today's call
+    assert out['results'][0]['best_lqs'] == 0.4
+
+
+def test_filtered_and_unfiltered_same_row_schema():
+    """t-new-3: injecting a stability-carrying sweep_fn does not change the
+    result schema — the stability block rides inside `sweep`, the rows stay
+    identical to the plain path."""
+    def plain(norb, backend, props, *, min_bridges=None, top_n=3):
+        return _canned_sweep({1: [{'product_score': 0.5}]})
+
+    def filtered(norb, backend, props, *, min_bridges=None, top_n=3):
+        s = _canned_sweep({1: [{'product_score': 0.5}]})
+        s['stability'] = {'available': True, 'excluded_final': [1]}
+        return s
+
+    tgts = [{'name': 'a', 'family': 'Heron', 'eligible': True}]
+    bk = lambda n: SimpleNamespace(name=n)
+    out_u = scan_qpus(tgts, 6, bk, lambda b: object(), sweep_fn=plain)
+    out_f = scan_qpus(tgts, 6, bk, lambda b: object(), sweep_fn=filtered)
+
+    assert set(out_u) == set(out_f) == {
+        'results', 'n_scanned', 'n_failed', 'n_skipped'}
+    ku = set(out_u['results'][0]); kf = set(out_f['results'][0])
+    assert ku == kf == {'name', 'family', 'sweep', 'best_lqs', 'best_k', 'error'}

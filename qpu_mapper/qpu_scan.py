@@ -166,7 +166,7 @@ def _best_from_sweep(sweep):
 
 
 def scan_qpus(targets, norb, get_backend, get_props, *,
-              min_bridges=None, top_n=3, progress_cb=None):
+              min_bridges=None, top_n=3, progress_cb=None, sweep_fn=None):
     """Run the ancilla sweep on each target backend, isolating failures.
 
     Args:
@@ -178,10 +178,23 @@ def scan_qpus(targets, norb, get_backend, get_props, *,
             free of service/network specifics and makes it testable).
         get_props: ``backend -> props`` (injected; MUST be wired by 3b to the
             cache-aware ``data.py`` path).
-        min_bridges, top_n: forwarded to ``sweep_ancilla_layouts``.
+        min_bridges, top_n: forwarded to the sweep.
         progress_cb: optional ``callable(name, status, detail)`` with status in
             ``'start' | 'ok' | 'skipped' | 'error'``. Exceptions raised by the
             callback are swallowed — progress reporting must never break a scan.
+        sweep_fn: optional ``callable(norb, backend, props, *, min_bridges,
+            top_n) -> sweep_dict`` used INSTEAD OF ``sweep_ancilla_layouts`` per
+            eligible target. ``None`` (default) is byte-compatible with the
+            historical behaviour (calls ``sweep_ancilla_layouts`` directly).
+            When provided, the ONE isolation / progress / best-LQS-ranking loop
+            below is reused unchanged — the injected function decides only WHAT
+            sweep runs (e.g. a ``sweep_with_stability`` closure that assembles
+            per-backend cached history and applies the volatility + quality-
+            floor filter). It must return the same sweep-dict shape (a
+            ``strata`` map, optionally an extra ``stability`` block the caller
+            post-processes); any extra metadata it stashes rides along on the
+            returned ``sweep``. A per-target exception it raises is caught here
+            like any other, becoming that backend's error row.
 
     Returns::
 
@@ -197,6 +210,7 @@ def scan_qpus(targets, norb, get_backend, get_props, *,
     # Lazy import so tests can monkeypatch the module attribute, and so this
     # module stays import-light for the list_scan_targets-only callers.
     from .ancilla_sweep import sweep_ancilla_layouts
+    _sweep = sweep_fn if sweep_fn is not None else sweep_ancilla_layouts
 
     def _emit(name, status, detail=''):
         if progress_cb is None:
@@ -229,7 +243,7 @@ def scan_qpus(targets, norb, get_backend, get_props, *,
         try:
             backend = get_backend(name)
             props = get_props(backend)
-            sweep = sweep_ancilla_layouts(
+            sweep = _sweep(
                 norb, backend, props,
                 min_bridges=min_bridges, top_n=top_n)
         except Exception as exc:

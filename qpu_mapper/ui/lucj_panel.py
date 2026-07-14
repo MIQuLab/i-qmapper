@@ -692,76 +692,60 @@ def setup_lucj_callbacks(ctx):
                                          "k=%d: %s", r['name'], k, exc)
 
     def _scan_backends(eligible, norb, get_backend, get_props, use_filter):
-        """The SINGLE handler-side scan path. Per target it calls the sweep
-        with EXACTLY _sweep_kwargs_from_ui() — the same params as the local
-        sweep (incl. hybrid) — so scan and local can't diverge (P1). When
-        use_filter is on and the backend has CACHED history, it routes through
-        sweep_with_stability instead. Not qpu_scan.scan_qpus, which is frozen
-        and can't forward hybrid; this mirrors its contract (per-backend
-        isolation, progress_cb, best_lqs sort) plus stability + vintage.
+        """The SINGLE handler-side scan path (U2). The per-backend isolation /
+        progress / best-LQS ranking loop lives ONCE, in qpu_scan.scan_qpus; we
+        inject a ``sweep_fn`` closure that carries the only handler-specific
+        parts: the SAME params as the local sweep (_sweep_kwargs_from_ui, incl.
+        hybrid & cap — so scan and local can't diverge, P1) plus, when the
+        filter is on and the backend has CACHED history, the volatility +
+        quality-floor filter via sweep_with_stability. The stability block the
+        closure attaches to each sweep is lifted to the row level afterwards so
+        the badges render unchanged.
         """
+        from .. import qpu_scan
         from ..ancilla_sweep import sweep_ancilla_layouts
         from ..stability_filter import sweep_with_stability
         kwargs = _sweep_kwargs_from_ui()
         window = rb_stability_window.value
         threshold = ft_stability_threshold.value
         floor_sigma = _floor_sigma()          # (F3) scan inherits the floor
-        results = []
-        n_scanned = n_failed = n_skipped = 0
-        for t in eligible:
-            name = t.get('name') if isinstance(t, dict) else t
-            family = t.get('family') if isinstance(t, dict) else None
-            _on_scan_progress(name, 'start', 'fetching calibration…')
-            try:
-                backend = get_backend(name)
-                props = get_props(backend)
-                hist = _cached_history_for(name) if use_filter else None
-                if hist:
-                    # sweep_with_stability (frozen) can't take hybrid; it uses
-                    # the engine default. Forward min_bridges/top_n/mapping_cap.
-                    res = sweep_with_stability(
-                        norb, backend, props, hist, window_days=window,
-                        threshold=threshold,
-                        min_bridges=kwargs['min_bridges'],
-                        top_n=kwargs['top_n'],
-                        mapping_cap=kwargs['mapping_cap'],
-                        quality_sigma=floor_sigma)
-                    stab = res.get('stability', {'available': False})
-                else:
-                    res = sweep_ancilla_layouts(norb, backend, props, **kwargs)
-                    stab = ({'available': False, 'reason': 'no cached history'}
-                            if use_filter else None)
-            except Exception as exc:
-                n_failed += 1
-                results.append({'name': name, 'family': family, 'sweep': None,
-                                'best_lqs': None, 'best_k': None,
-                                'error': str(exc),
-                                'stability': ({'available': False}
-                                              if use_filter else None)})
-                _on_scan_progress(name, 'error', str(exc))
-                continue
-            best_lqs, best_k = None, None
-            for k, entries in res['strata'].items():
-                for e in entries:
-                    if best_lqs is None or e['product_score'] > best_lqs:
-                        best_lqs, best_k = e['product_score'], k
-            if best_lqs is None:
-                n_skipped += 1
-                results.append({'name': name, 'family': family, 'sweep': res,
-                                'best_lqs': None, 'best_k': None,
-                                'error': None, 'stability': stab})
-                _on_scan_progress(name, 'skipped', 'no candidates')
-                continue
-            n_scanned += 1
-            results.append({'name': name, 'family': family, 'sweep': res,
-                            'best_lqs': best_lqs, 'best_k': best_k,
-                            'error': None, 'stability': stab})
-            _on_scan_progress(name, 'ok', f'best LQS {best_lqs * 100:.1f}%')
-        ranked = [r for r in results if r['best_lqs'] is not None]
-        rest = [r for r in results if r['best_lqs'] is None]
-        ranked.sort(key=lambda r: r['best_lqs'], reverse=True)
-        return {'results': ranked + rest, 'n_scanned': n_scanned,
-                'n_failed': n_failed, 'n_skipped': n_skipped}
+
+        def _sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
+            # min_bridges/top_n arrive from scan_qpus (they equal kwargs); the
+            # shared UI source also supplies hybrid & mapping_cap.
+            name = getattr(backend, 'name', None)
+            hist = _cached_history_for(name) if (use_filter and name) else None
+            if hist:
+                res = sweep_with_stability(
+                    norb, backend, props, hist, window_days=window,
+                    threshold=threshold, min_bridges=kwargs['min_bridges'],
+                    top_n=kwargs['top_n'], mapping_cap=kwargs['mapping_cap'],
+                    quality_sigma=floor_sigma)
+            else:
+                res = sweep_ancilla_layouts(norb, backend, props, **kwargs)
+                res['stability'] = ({'available': False,
+                                     'reason': 'no cached history'}
+                                    if use_filter else None)
+            return res
+
+        def _progress(name, status, detail=''):
+            # Preserve the pre-U2 'start' detail (scan_qpus emits it empty).
+            if status == 'start' and not detail:
+                detail = 'fetching calibration…'
+            _on_scan_progress(name, status, detail)
+
+        result = qpu_scan.scan_qpus(
+            eligible, norb, get_backend, get_props,
+            min_bridges=kwargs['min_bridges'], top_n=kwargs['top_n'],
+            progress_cb=_progress, sweep_fn=_sweep_fn)
+
+        # Lift each sweep's stability block to the row level (badges read
+        # r['stability']); error rows (sweep=None) reflect filter availability.
+        for r in result['results']:
+            sweep = r.get('sweep')
+            r['stability'] = (sweep.get('stability') if sweep is not None
+                              else ({'available': False} if use_filter else None))
+        return result
 
     _scan = {'progress': {}, 'order': []}
     _STATUS_ICON = {'start': '⏳', 'ok': '✓', 'skipped': '·', 'error': '✗'}

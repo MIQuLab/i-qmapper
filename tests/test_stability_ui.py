@@ -59,7 +59,7 @@ def _build(monkeypatch, *, history=False, spawn=_sync_spawn,
     state.active_backend = object()
     state.active_backend_name = "stub"
     state.active_chip = "stub_chip"
-    state.active_service = SimpleNamespace(backend=lambda n: object())
+    state.active_service = SimpleNamespace(backend=lambda n: SimpleNamespace(name=n))
     state.available_backends = ["ibm_a", "ibm_b"]
     state.props_warning = None
     state.initial_props = object()
