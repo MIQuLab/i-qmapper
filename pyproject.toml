@@ -9,8 +9,8 @@ description = "Interactive, noise-aware QPU layout mapper for Jupyter Lab"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
-    { name = "Kenneth M. Merz Jr", email = "kmerz1@gmail.com", email = "merzk@ccf.org" }
-    { name = "Milana Bazayeva", email = "m.bazayeva@gmail.com", email = "bazayem@ccf.org" },
+    { name = "Kenneth M. Merz Jr", email = "kmerz1@gmail.com"},
+    { name = "Milana Bazayeva", email = "m.bazayeva@gmail.com" },
 ]
 keywords = ["quantum", "qiskit", "qpu", "layout", "visualization"]
 classifiers = [
