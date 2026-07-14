@@ -90,9 +90,19 @@ def setup_inter_qpu(ctx):
     # this function — no other UI code reads them.
     _state2 = [None]              # SessionState for QPU 2
     _fig2 = [None]                # FigureWidget for QPU 2
+    _w2 = [None]                  # WidgetsRef for QPU 2 (for refresh_plot repaint)
     _sidebar2 = [None]            # QPU 2 sidebar VBox
     _zoom2 = [None]               # QPU 2 zoom toolbar
     _dispose2 = [None]            # callable that unobserves all QPU 2 widgets
+    _connect_in_flight = [False]  # (O4) race guard: one auto-connect at a time
+
+    # (O2) Background runner for the ONE-CLICK auto-connect. The Connect-QPU2
+    # button handler is SYNCHRONOUS + network-touching; the scan pattern
+    # (default_spawn_bg + marshalled on_done/on_error) keeps the kernel
+    # responsive. Injectable via ctx for headless tests.
+    _spawn_bg = getattr(ctx, 'spawn_bg', None)
+    if _spawn_bg is None:
+        from ..async_util import default_spawn_bg as _spawn_bg
     _pre_inter_fig_size = [None, None]  # (width, height) before toggling on
     _qpu_toggle = [None]          # ToggleButtons for QPU1/QPU2 sidebar swap
     _pending_handoff = [None]     # (backend_name, candidate) staged from a scan pick
@@ -298,24 +308,31 @@ def setup_inter_qpu(ctx):
             with contextlib.suppress(Exception):
                 _qpu2_content_box[0].children = [HTML(staged_html)]
 
+    # (O2) The scan handoff now triggers ONE-CLICK connect (stage + auto-
+    # connect), defined after the connect handler below. Bound via a trampoline
+    # so this assignment can precede _auto_connect's definition.
     if handoff_cell is not None:
-        handoff_cell[0] = stage_remote_candidate
+        handoff_cell[0] = lambda bn, cand: _auto_connect(bn, cand)
 
     # ── Connect-QPU2 handler ────────────────────────────────────
     def _on_connect_qpu2(b):
+        # Returns None on success, or an error STRING on failure — so the
+        # one-click auto path (O2) can tell whether to fall back to staged.
+        # The button's on_click ignores the return, so its behaviour is
+        # unchanged.
         backend_name = dd_backend_qpu2.value
         if not backend_name:
             lbl_qpu2_status.value = (
                 "<span style='font-size:15px;color:#e74c3c;'>"
                 "Select a backend</span>"
             )
-            return
+            return 'Select a backend'
         if state.active_service is None:
             lbl_qpu2_status.value = (
                 "<span style='font-size:15px;color:#e74c3c;'>"
                 "No service connected</span>"
             )
-            return
+            return 'No service connected'
 
         lbl_qpu2_status.value = (
             f"<span style='font-size:15px;color:#e67e22;'>"
@@ -378,6 +395,7 @@ def setup_inter_qpu(ctx):
 
             _state2[0] = s2
             _fig2[0] = f2
+            _w2[0] = w2                 # (O4) kept for same-backend repaint
             _sidebar2[0] = sidebar2
             _zoom2[0] = zoom2_bar
             # Disposer: walk the full widget tree (sidebar + fig_box) and
@@ -440,8 +458,73 @@ def setup_inter_qpu(ctx):
                 f"<span style='font-size:15px;color:#e74c3c;'>"
                 f"❌ {esc(str(e))}</span>"
             )
+            return str(e)
 
     btn_connect_qpu2.on_click(_on_connect_qpu2)
+
+    # ── O2/O3/O4: one-click auto-connect on a scan-candidate pick ───────
+    def _staged_with_error(backend_name, candidate, err):
+        """(O3) Failure → back to today's STAGED state (re-stage so a manual
+        Connect re-applies the candidate) plus an esc()'d one-line error. The
+        user loses nothing; one click recovers."""
+        stage_remote_candidate(backend_name, candidate)
+        lbl_qpu2_status.value = lbl_qpu2_status.value + (
+            f"<div style='font-size:13px;color:#e74c3c;margin:2px 0;'>"
+            f"❌ auto-connect failed: {esc(str(err))}</div>")
+
+    def _auto_connect(backend_name, candidate):
+        """The scan handoff hook (replaces bare staging): stage, then drive the
+        SAME Connect-QPU2 handler automatically. Idempotent + race-guarded."""
+        # Always stage first (reveal panel, prefill dropdown, preload candidate,
+        # staged banner) — identical to the pre-O2 behaviour and the fallback.
+        stage_remote_candidate(backend_name, candidate)
+
+        # (O4) Same backend already connected as QPU-2 → skip the reconnect,
+        # just apply the candidate and repaint. _state2[0] holds the connected
+        # QPU-2 SessionState.
+        s2 = _state2[0]
+        if (s2 is not None
+                and getattr(s2, 'active_backend_name', None) == backend_name):
+            _pending_handoff[0] = None
+            with contextlib.suppress(Exception):
+                _apply_candidate_to_state(s2, candidate)
+                if _fig2[0] is not None and _w2[0] is not None:
+                    from .. import plot as _plot
+                    _plot.refresh_plot(_fig2[0], s2, _w2[0])
+            lbl_qpu2_status.value = (
+                f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+                f"margin:3px 0;'>✅ Applied to already-connected "
+                f"<b>{esc(str(backend_name))}</b>.</div>")
+            return
+
+        # (O4) A connect already in flight → the staging above is enough;
+        # don't launch a second connect.
+        if _connect_in_flight[0]:
+            return
+
+        _connect_in_flight[0] = True
+        btn_connect_qpu2.disabled = True          # disable the manual trigger too
+        lbl_qpu2_status.value = (
+            f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
+            f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
+            f"margin:3px 0;font-weight:bold;'>📡 connecting "
+            f"{esc(str(backend_name))}…</div>")
+
+        def _finish():
+            _connect_in_flight[0] = False
+            btn_connect_qpu2.disabled = False
+
+        def _done(err):
+            _finish()
+            if err:               # handler swallowed the exception, returned it
+                _staged_with_error(backend_name, candidate, err)
+
+        def _error(exc):          # handler itself raised unexpectedly
+            _finish()
+            _staged_with_error(backend_name, candidate, exc)
+
+        _spawn_bg(lambda: _on_connect_qpu2(None), on_done=_done, on_error=_error)
 
     # Expose the label-refresh hook so ui.backend_switch can call it after a
     # backend switch (the switcher has no other handle on this closure).

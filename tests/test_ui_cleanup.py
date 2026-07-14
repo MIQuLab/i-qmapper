@@ -159,6 +159,7 @@ def _inter_ctx():
         qpu2_sidebar_box=_Stub(children=[]), qpu2_fig_box=_Stub(children=[]),
         full_ui=_Stub(children=[]),
         handoff_cell=[None],
+        spawn_bg=_sync_spawn,      # deterministic one-click auto-connect
     )
     return ctx, state
 
