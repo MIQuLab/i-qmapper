@@ -36,27 +36,33 @@ def _resolve_main_loop_scheduler():
     same thread the kernel runs on.
 
     Resolution order:
-      1. tornado IOLoop (classic notebook + most JupyterLab kernels)
-      2. asyncio event loop (asyncio-native kernels)
-      3. inline fallback (run on the worker thread, original behaviour)
+      1. a RUNNING event loop → tornado IOLoop (classic notebook + most
+         JupyterLab kernels), else asyncio call_soon_threadsafe
+      2. inline fallback (run on the worker thread, original behaviour)
+
+    We gate on a *running* loop via ``asyncio.get_running_loop()`` FIRST.
+    That call never warns; ``tornado.ioloop.IOLoop.current()`` (and the
+    ``asyncio.get_event_loop()`` it wraps) emits Python ≥3.10's "There is no
+    current event loop" DeprecationWarning when called with no loop running —
+    the headless-test case. With no running loop the correct scheduler is the
+    inline fallback anyway (a non-running loop's ``add_callback`` would never
+    fire), so we must never reach that deprecated path.
     """
+    import asyncio
     try:
-        from tornado.ioloop import IOLoop
-        loop = IOLoop.current()
-        return lambda cb: loop.add_callback(cb)
-    except Exception:
-        _log.debug("tornado IOLoop unavailable", exc_info=True)
-    try:
-        import asyncio
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is not None:
         try:
-            aloop = asyncio.get_running_loop()
-        except RuntimeError:
-            aloop = None
-        if aloop is not None:
-            return lambda cb: aloop.call_soon_threadsafe(cb)
-    except Exception:
-        _log.debug("asyncio event loop unavailable", exc_info=True)
-    # No event loop available — run inline on the worker thread.
+            from tornado.ioloop import IOLoop
+            loop = IOLoop.current()          # safe: a loop is running
+            return lambda cb: loop.add_callback(cb)
+        except Exception:
+            _log.debug("tornado IOLoop unavailable", exc_info=True)
+        return lambda cb: running.call_soon_threadsafe(cb)
+    # No running event loop (headless tests, or kernel loop not yet started) —
+    # run inline on the worker thread (original fallback behaviour).
     return lambda cb: cb()
 
 

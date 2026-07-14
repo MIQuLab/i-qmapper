@@ -122,3 +122,68 @@ def test_callback_exception_is_contained(_scheduler_isolation):
     # logs it and returns.
     for cb in queued:
         cb()
+
+
+# ── Zero-warnings guard: the scheduler resolver must never trip tornado's
+#    "There is no current event loop" DeprecationWarning in a headless
+#    context (no running loop) — the regression that put 1 warning back in
+#    the suite after the calibration-epoch merge. ───────────────────────────
+
+def _install_warning_tornado(monkeypatch):
+    """Inject a fake tornado.ioloop whose IOLoop.current() emits the exact
+    deprecation, so we can assert our resolver does NOT reach it with no
+    running loop — independent of whether real tornado is installed."""
+    import sys
+    import types
+    import warnings as _w
+
+    class _IOLoop:
+        @staticmethod
+        def current():
+            # Faithful to real tornado: the deprecation fires ONLY when there
+            # is no running loop (IOLoop.current() → asyncio.get_event_loop()).
+            import asyncio as _a
+            try:
+                _a.get_running_loop()
+            except RuntimeError:
+                _w.warn("There is no current event loop", DeprecationWarning)
+            return types.SimpleNamespace(add_callback=lambda cb: cb())
+
+    tornado = types.ModuleType("tornado")
+    ioloop = types.ModuleType("tornado.ioloop")
+    ioloop.IOLoop = _IOLoop
+    tornado.ioloop = ioloop
+    monkeypatch.setitem(sys.modules, "tornado", tornado)
+    monkeypatch.setitem(sys.modules, "tornado.ioloop", ioloop)
+
+
+def test_resolver_no_deprecation_without_running_loop(monkeypatch):
+    import warnings
+    import asyncio
+    _install_warning_tornado(monkeypatch)
+    # Guarantee no current/running loop in this thread.
+    monkeypatch.setattr(asyncio, "get_running_loop",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no loop")))
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        sched = async_util._resolve_main_loop_scheduler()
+    assert [str(x.message) for x in rec] == []      # tornado never touched
+    ran = []
+    sched(lambda: ran.append(1))                    # inline fallback runs cb
+    assert ran == [1]
+
+
+def test_resolver_uses_loop_scheduler_when_running(monkeypatch):
+    """With a running loop the tornado path IS taken (real tornado does not
+    warn in that case). Proves the fix didn't disable marshaling."""
+    import asyncio
+    _install_warning_tornado(monkeypatch)
+
+    async def _main():
+        return async_util._resolve_main_loop_scheduler()
+
+    sched = asyncio.run(_main())
+    # Not the inline fallback: the tornado IOLoop scheduler was selected.
+    delivered = []
+    sched(lambda: delivered.append(1))
+    assert delivered == [1]
