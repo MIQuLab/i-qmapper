@@ -95,6 +95,13 @@ class MapperUIBuilder:
         reach the Fig Width/Height sliders directly instead of walking the
         tree by description). ``self.widgets_ref`` is always populated.
         """
+        # Capture the kernel main loop + main-thread identity HERE — build()
+        # runs on the main thread inside the running loop (live cell execution),
+        # which is the only place asyncio.get_running_loop() succeeds. Workers
+        # then schedule their paint onto THIS captured loop instead of resolving
+        # (and inline-running) on themselves. Idempotent; no-op headless.
+        from ..async_util import init_main_loop
+        init_main_loop()
         ui_hbox, _ = self._run_pipeline()
         self.ui_hbox = ui_hbox
         if return_widgets:

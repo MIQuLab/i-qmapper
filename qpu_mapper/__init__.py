@@ -16,6 +16,14 @@ from .mapper import launch_mapper
 
 def run():
     """Launch the QPU Mapper UI (sidebar layout)."""
+    # Capture the kernel main loop HERE — run() is called from a notebook cell,
+    # which is GUARANTEED to be the main thread with the kernel loop up. This is
+    # the earliest, most reliable capture point; later build() calls are
+    # capture-once + main-only, so they never overwrite it (e.g. the secondary
+    # build re-entering build() must not clobber this with a worker/None value).
+    from .async_util import init_main_loop
+    init_main_loop()
+
     def _on_connect(vendor, backend_name, backend, chip,
                     props, props_warning, ansatz,
                     service, available_backends):

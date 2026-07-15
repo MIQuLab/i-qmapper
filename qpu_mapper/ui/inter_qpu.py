@@ -96,10 +96,9 @@ def setup_inter_qpu(ctx):
     _dispose2 = [None]            # callable that unobserves all QPU 2 widgets
     _connect_in_flight = [False]  # race guard: one auto-connect at a time
 
-    # Background runner for the ONE-CLICK auto-connect. The Connect-QPU2
-    # button handler is SYNCHRONOUS + network-touching; the scan pattern
-    # (default_spawn_bg + marshalled on_done/on_error) keeps the kernel
-    # responsive. Injectable via ctx for headless tests.
+    # Background runner for the ONE-CLICK auto-connect: the network fetch runs
+    # on a worker; default_spawn_bg marshals the completion (the PAINT) back
+    # onto the kernel main loop. Injectable via ctx for headless tests.
     _spawn_bg = getattr(ctx, 'spawn_bg', None)
     if _spawn_bg is None:
         from ..async_util import default_spawn_bg as _spawn_bg
@@ -320,34 +319,38 @@ def setup_inter_qpu(ctx):
     if handoff_cell is not None:
         handoff_cell[0] = lambda bn, cand: _auto_connect(bn, cand)
 
-    # ── Connect-QPU2 handler ────────────────────────────────────
-    def _on_connect_qpu2(b):
-        # Returns None on success, or an error STRING on failure — so the
-        # one-click auto path can tell whether to fall back to staged.
-        # The button's on_click ignores the return, so its behaviour is
-        # unchanged.
-        backend_name = dd_backend_qpu2.value
-        if not backend_name:
-            lbl_qpu2_status.value = (
-                "<span style='font-size:15px;color:#e74c3c;'>"
-                "Select a backend</span>"
-            )
-            return 'Select a backend'
-        if state.active_service is None:
-            lbl_qpu2_status.value = (
-                "<span style='font-size:15px;color:#e74c3c;'>"
-                "No service connected</span>"
-            )
-            return 'No service connected'
+    # ── Connect-QPU2: worker-safe FETCH + main-thread PAINT ──────
+    # Every ipywidgets / plotly FigureWidget mutation (build_mapper_ui,
+    # _apply_candidate_to_state, refresh_plot, mounting into
+    # qpu2_fig_box) MUST run on the kernel's main thread. A FigureWidget
+    # mutated from a background worker sends its comm messages on a
+    # non-kernel thread and the browser channel silently drops them —
+    # the map paints nothing (no error, no exception). This is why the
+    # one-click auto-connect produced an empty QPU-2 map while the manual
+    # button (which runs in the widget-callback = main thread) always
+    # worked. So we fetch (network only, no widgets) on the worker and
+    # marshal the PAINT back to the main loop via default_spawn_bg's
+    # on_done, matching the "marshal background work back before touching
+    # any widget" rule the rest of the codebase already follows.
+    def _connect_qpu2_fetch(backend_name):
+        """Worker-safe: backend handle + properties + coord resolution.
+        Touches NO widgets. Returns the device bundle or raises (the
+        caller surfaces the error)."""
+        from ..connection import _check_properties
+        from ..constants import resolve_coords
+        new_backend = state.active_service.backend(backend_name)
+        props, props_warn = _check_properties(new_backend, backend_name)
+        new_coords, chip_label = resolve_coords(new_backend)
+        return new_backend, props, props_warn, new_coords, chip_label
 
-        lbl_qpu2_status.value = (
-            f"<span style='font-size:15px;color:#e67e22;'>"
-            f"⏳ Connecting {esc(backend_name)}...</span>"
-        )
+    def _connect_qpu2_paint(backend_name, fetched):
+        """Main-thread ONLY: build the full secondary UI, apply any staged
+        candidate, repaint, and mount the QPU-2 figure. Returns None on
+        success or an error STRING on failure (so the auto path can fall
+        back to staged)."""
+        new_backend, props, props_warn, new_coords, chip_label = fetched
         try:
-            from ..connection import _check_properties
-            from ..constants import resolve_coords
-            # Late import to avoid the ui ↔ ui.inter_qpu cycle that would
+            # Late import to avoid the ui <-> ui.inter_qpu cycle that would
             # otherwise trigger at module load time.
             from . import build_mapper_ui
 
@@ -357,12 +360,6 @@ def setup_inter_qpu(ctx):
             s2.active_ansatz = state.active_ansatz
             s2.current_colorscale = state.current_colorscale
             s2.active_vendor = 'IBM'
-
-            new_backend = state.active_service.backend(backend_name)
-            props, props_warn = _check_properties(new_backend, backend_name)
-
-            new_coords, chip_label = resolve_coords(new_backend)
-
             s2.active_backend = new_backend
             s2.active_backend_name = backend_name
             s2.active_chip = chip_label
@@ -372,25 +369,19 @@ def setup_inter_qpu(ctx):
 
             # Build the FULL secondary UI — feature-parity with QPU 1.
             # build_mapper_ui internally calls _load_device_graph which
-            # populates s2.x_coord / qubit_ids / edges_list from props,
-            # so we don't need to call data_mod.generate_device_data
-            # ahead of time anymore.
+            # populates s2.x_coord / qubit_ids / edges_list from props.
             full_ui_2, f2, w2 = build_mapper_ui(
                 s2, is_secondary=True, return_widgets=True)
 
             # If this connect was staged from a scan pick for THIS backend,
-            # paint the chosen candidate now — AFTER the build. Applying it
-            # before build_mapper_ui was a silent no-op: _load_device_graph
-            # calls state.clear_all_layouts(), wiping any pre-loaded slot, so
-            # the candidate never reached the first paint. Apply post-clear and
-            # repaint the figure so it shows on the very first view.
+            # paint the chosen candidate now — AFTER the build (which calls
+            # clear_all_layouts()).
             pend = _pending_handoff[0]
             paint_err = None
             if pend is not None and pend[0] == backend_name:
                 # Narrow try (was a blanket suppress): a candidate-paint failure
-                # must never crash the connect, but it must NOT be hidden either
-                # — last night's empty-map survived precisely because it was
-                # swallowed. Log it and surface it on the QPU-2 status below.
+                # must never crash the connect, but it must NOT be hidden either.
+                # Log it and surface it on the QPU-2 status below.
                 try:
                     _apply_candidate_to_state(s2, pend[1])
                     from .. import plot as _plot
@@ -400,16 +391,10 @@ def setup_inter_qpu(ctx):
                     _log.warning("QPU-2 candidate paint failed for %s: %s",
                                  backend_name, _pe, exc_info=True)
                 _pending_handoff[0] = None
-            # Top-level shape: HBox([ui_sidebar, fig_box]).
-            # fig_box.children = (lbl_fig1, zoom_bar, fig).
-            #
-            # We only re-parent `sidebar2`, `zoom2_bar`, and `f2` into the
-            # inter-QPU layout. `lbl_fig1` (children[0] of fig_box2) and
-            # `fig_box2` itself are left orphan inside `full_ui_2` — they
-            # are never displayed (full_ui_2 has no parent), but we keep
-            # a reference via the `_dispose2` lambda below so the disposer
-            # walks them and clears any observers when inter-QPU is
-            # toggled off.
+
+            # Re-parent sidebar2 / zoom2_bar / f2 into the inter-QPU layout;
+            # lbl_fig1 + fig_box2 stay orphan inside full_ui_2 (never displayed,
+            # kept only so _dispose2 can unobserve them on toggle-off).
             sidebar2 = full_ui_2.children[0]
             fig_box2 = full_ui_2.children[1]
             zoom2_bar = fig_box2.children[1]
@@ -419,12 +404,8 @@ def setup_inter_qpu(ctx):
             _w2[0] = w2                 # kept for same-backend repaint
             _sidebar2[0] = sidebar2
             _zoom2[0] = zoom2_bar
-            # Disposer: walk the full widget tree (sidebar + fig_box) and
-            # unobserve_all on each descendant. The tree has ~300 widgets
-            # so a generic walker is more robust than enumerating them.
             _dispose2[0] = lambda: _walk_unobserve_all(full_ui_2)
 
-            # Place QPU2 sidebar in the switchable content
             if _qpu2_content_box[0] is not None:
                 _qpu2_content_box[0].children = [sidebar2]
             if _qpu_toggle[0] is not None:
@@ -444,25 +425,12 @@ def setup_inter_qpu(ctx):
                 f"📡 {esc(backend_name)}</div>"
             )
             qpu2_fig_box.children = [lbl_fig2, zoom2_bar, f2]
-            # Match inter-QPU fig size by setting the QPU 2 sliders —
-            # their observers (wired by build_mapper_ui) propagate the
-            # value to f2.update_layout for us. Without this, the sliders
-            # in the QPU 2 sidebar stayed at 1700/1650 (default) while
-            # f2 was shrunk to 1200/1400, so the next slider drag would
-            # snap f2 back to the wrong size.
-            # QPU2's fig-size sliders come from its WidgetsRef now — no
-            # fragile description-string tree-walk that breaks silently if a
-            # slider label is renamed. These are the same slider objects
-            # mounted in sidebar2, so setting .value fires their observers
-            # (wired by build_mapper_ui) and resizes f2.
+            # Match inter-QPU fig size via the QPU 2 sliders (their observers
+            # propagate to f2.update_layout).
             w2.plot_w_slider.value = 1200
             w2.plot_h_slider.value = 1400
 
-            # All interpolated values come from external/IBM data (backend
-            # name, chip label, props warnings, calibration label) and a
-            # session-loaded session file could carry adversarial strings
-            # via state restore — escape every one of them before they hit
-            # the HTML widget.
+            # Escape every externally-sourced string before it hits the widget.
             lbl_qpu2_status.value = (
                 f"<div style='font-size:15px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
@@ -478,12 +446,47 @@ def setup_inter_qpu(ctx):
                 lbl_qpu2_status.value += (
                     f"<div style='font-size:13px;color:#e67e22;margin:2px 0;'>"
                     f"⚠ candidate paint failed: {esc(str(paint_err))}</div>")
+            return None
         except Exception as e:
             lbl_qpu2_status.value = (
                 f"<span style='font-size:15px;color:#e74c3c;'>"
                 f"❌ {esc(str(e))}</span>"
             )
             return str(e)
+
+    # ── Connect-QPU2 handler (manual button entry) ──────────────
+    def _on_connect_qpu2(b):
+        # Manual path: validate, then fetch + paint INLINE on the main
+        # thread (the widget-callback context that has always worked live).
+        # Returns None on success, or an error STRING on failure — so the
+        # one-click auto path can tell whether to fall back to staged.
+        backend_name = dd_backend_qpu2.value
+        if not backend_name:
+            lbl_qpu2_status.value = (
+                "<span style='font-size:15px;color:#e74c3c;'>"
+                "Select a backend</span>"
+            )
+            return 'Select a backend'
+        if state.active_service is None:
+            lbl_qpu2_status.value = (
+                "<span style='font-size:15px;color:#e74c3c;'>"
+                "No service connected</span>"
+            )
+            return 'No service connected'
+
+        lbl_qpu2_status.value = (
+            f"<span style='font-size:15px;color:#e67e22;'>"
+            f"⏳ Connecting {esc(backend_name)}...</span>"
+        )
+        try:
+            fetched = _connect_qpu2_fetch(backend_name)
+        except Exception as e:                       # noqa: BLE001 - surfaced
+            lbl_qpu2_status.value = (
+                f"<span style='font-size:15px;color:#e74c3c;'>"
+                f"❌ {esc(str(e))}</span>"
+            )
+            return str(e)
+        return _connect_qpu2_paint(backend_name, fetched)
 
     btn_connect_qpu2.on_click(_on_connect_qpu2)
 
@@ -550,16 +553,22 @@ def setup_inter_qpu(ctx):
             _connect_in_flight[0] = False
             btn_connect_qpu2.disabled = False
 
-        def _done(err):
+        # default_spawn_bg marshals on_done / on_error onto the kernel main
+        # loop, so _paint runs on the MAIN thread even though the fetch ran on
+        # a worker — the whole point of the split. The paint (build + apply +
+        # refresh + mount) must never touch a FigureWidget off-thread.
+        def _paint(fetched):      # runs on the main loop (marshalled)
             _finish()
-            if err:               # handler swallowed the exception, returned it
+            err = _connect_qpu2_paint(backend_name, fetched)
+            if err:               # paint reported a failure string
                 _staged_with_error(backend_name, candidate, err)
 
-        def _error(exc):          # handler itself raised unexpectedly
+        def _error(exc):          # the worker fetch itself raised
             _finish()
             _staged_with_error(backend_name, candidate, exc)
 
-        _spawn_bg(lambda: _on_connect_qpu2(None), on_done=_done, on_error=_error)
+        _spawn_bg(lambda: _connect_qpu2_fetch(backend_name),
+                  on_done=_paint, on_error=_error)
 
     # Expose the label-refresh hook so ui.backend_switch can call it after a
     # backend switch (the switcher has no other handle on this closure).

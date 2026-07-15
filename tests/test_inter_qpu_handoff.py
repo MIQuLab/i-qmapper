@@ -2,6 +2,7 @@
 AND auto-connects QPU 2, with graceful fallback, race guards, and a same-backend
 shortcut. Headless: the network-touching connect deps are stubbed.
 """
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -155,7 +156,8 @@ def test_in_flight_guard_no_double_connect(monkeypatch):
 
     assert len(queued) == 1                          # only ONE connect launched
     assert calls == []                               # nothing has run yet
-    # Draining the single queued connect runs the path exactly once.
+    # Draining the single queued connect (fetch on the "worker", paint via the
+    # marshalled on_done) runs the path exactly once.
     fn, done, _ = queued[0]
     done(fn())
     assert calls == ['ibm_k']
@@ -253,10 +255,11 @@ def _assert_base_map(fig, n):
     assert isinstance(col, (list, tuple)) and len(col) == n, "node colours missing"
 
 
-def _primary_with_stubs(monkeypatch):
+def _primary_with_stubs(monkeypatch, spawn=_sync_spawn):
     """A built primary MapperUIBuilder with device/network deps stubbed so the
     REAL secondary build_mapper_ui runs on connect. Returns (b, capture) where
-    capture records the connected s2/fig via a build wrapper."""
+    capture records the connected s2/fig via a build wrapper. `spawn` is wired
+    BEFORE build so setup_inter_qpu captures it."""
     import numpy as np
 
     def _fake_device(state, vendor, chip, date, prefetched_props=None):
@@ -272,7 +275,7 @@ def _primary_with_stubs(monkeypatch):
     monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
                         lambda b: ([(i, 0) for i in range(8)], 'chip'))
     import qpu_mapper.async_util as au
-    monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
+    monkeypatch.setattr(au, 'default_spawn_bg', spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
 
     from qpu_mapper.state import SessionState
@@ -359,3 +362,43 @@ def test_batch_handoff_keeps_base_map_real_build(monkeypatch):
     # Both circuits landed on QPU-2 state.
     assert cap['s2'].layouts_data[0]['ancilla'] == ['2']
     assert cap['s2'].layouts_data[1]['ancilla'] == ['5']
+
+
+# ── L4: paint runs ON THE MAIN THREAD (never a worker) ──────────────────────
+#    plotly FigureWidget mutations from a worker thread are silently dropped by
+#    the comm channel → empty map live. The scan handoff hook fires on the main
+#    thread, so the auto-connect does the build + apply + refresh SYNCHRONOUSLY
+#    there — like the manual Connect button that renders correctly live.
+
+def test_paint_runs_on_main_thread(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
+    import qpu_mapper.ui as ui_pkg
+    inner = ui_pkg.build_mapper_ui
+    build_threads = []
+
+    def _wrap(s2, is_secondary=False, return_widgets=False):
+        build_threads.append(threading.current_thread())
+        return inner(s2, is_secondary=is_secondary, return_widgets=return_widgets)
+    monkeypatch.setattr(ui_pkg, 'build_mapper_ui', _wrap)
+
+    b._inter_qpu_handoff[0]('ibm_k', {'alpha': [0], 'beta': [1], 'ancillas': [2]})
+
+    # The QPU-2 figure was built on the MAIN thread (not a worker) and painted.
+    assert build_threads == [threading.main_thread()]
+    _assert_base_map(cap['fig'], 8)
+
+
+def test_continuation_failure_falls_back_to_staged(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
+    import qpu_mapper.ui as ui_pkg
+
+    def _boom_build(*a, **k):
+        raise RuntimeError('build boom')
+    monkeypatch.setattr(ui_pkg, 'build_mapper_ui', _boom_build)
+
+    b._inter_qpu_handoff[0]('ibm_k', {'alpha': [0], 'beta': [1], 'ancillas': [2]})
+
+    status = b.lbl_qpu2_status.value
+    assert 'staged' in status                            # fell back to staged
+    assert 'build boom' in status                        # error surfaced, not hidden
+    assert b.btn_connect_qpu2.disabled is False          # trigger re-enabled
