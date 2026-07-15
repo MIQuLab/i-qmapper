@@ -534,13 +534,30 @@ def refresh_plot(fig, state, widgets_ref):
         # place on the first refresh. (We used .uid first, but
         # FigureWidget regenerates .uid; .meta is preserved.)
         q_trace = _trace_by_meta(fig, _META_QUBITS)
-        if q_trace is not None:
+        # Node markers must never diverge from the state being painted. The
+        # per-node text / color / line arrays are all sized to n_q; if we wrote
+        # them while leaving q_trace.x/y at a STALE length, the markers would
+        # keep old positions but receive empty color/text → invisible nodes,
+        # edges still drawn ("edges but no nodes"). So (a) rewrite x/y from the
+        # SAME state (state.x_coord/y_coord) in the same update, and (b) if the
+        # state carries no qubits (or coords don't cover them), refuse to empty
+        # a populated trace — leave it intact and warn loudly instead.
+        coords_ok = (n_q > 0
+                     and len(state.x_coord) >= n_q and len(state.y_coord) >= n_q)
+        if q_trace is not None and coords_ok:
+            q_trace.x = tuple(float(state.x_coord[i]) for i in range(n_q))
+            q_trace.y = tuple(float(state.y_coord[i]) for i in range(n_q))
             q_trace.mode = 'markers+text' if w.show_numbers.value else 'markers'
             q_trace.hoverinfo = 'text' if is_err else 'none'
             q_trace.text = tuple(str(state.qubit_ids[i]) for i in range(n_q)) if w.show_numbers.value else tuple('' for _ in range(n_q))
             q_trace.hovertext = tuple(h_text)
             q_trace.marker.update(color=list(colors), size=int(w.size_slider.value), line=dict(color=list(l_colors), width=list(l_widths)))
             q_trace.update(textfont=dict(color=list(text_colors), size=int(w.font_size_slider.value)))
+        elif q_trace is not None:
+            _log.warning(
+                "refresh_plot: %d qubit_ids vs %d/%d coords — leaving the "
+                "existing qubit trace intact (edges-but-no-nodes guard).",
+                n_q, len(state.x_coord), len(state.y_coord))
 
         fig.layout.paper_bgcolor = 'white'; fig.layout.plot_bgcolor = 'white'; fig.layout.font.color = 'black'
         _update_colorbars(fig, state, q_arr, g_arr, q_prop_key, g_prop_key, q_label, g_label, is_err, _is_delta)

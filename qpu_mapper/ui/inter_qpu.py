@@ -385,11 +385,20 @@ def setup_inter_qpu(ctx):
             # the candidate never reached the first paint. Apply post-clear and
             # repaint the figure so it shows on the very first view.
             pend = _pending_handoff[0]
+            paint_err = None
             if pend is not None and pend[0] == backend_name:
-                with contextlib.suppress(Exception):
+                # Narrow try (was a blanket suppress): a candidate-paint failure
+                # must never crash the connect, but it must NOT be hidden either
+                # — last night's empty-map survived precisely because it was
+                # swallowed. Log it and surface it on the QPU-2 status below.
+                try:
                     _apply_candidate_to_state(s2, pend[1])
                     from .. import plot as _plot
                     _plot.refresh_plot(f2, s2, w2)
+                except Exception as _pe:            # noqa: BLE001 - reported below
+                    paint_err = _pe
+                    _log.warning("QPU-2 candidate paint failed for %s: %s",
+                                 backend_name, _pe, exc_info=True)
                 _pending_handoff[0] = None
             # Top-level shape: HBox([ui_sidebar, fig_box]).
             # fig_box.children = (lbl_fig1, zoom_bar, fig).
@@ -465,6 +474,10 @@ def setup_inter_qpu(ctx):
                 f"{'<br>📅 ' + esc(s2.calibration_data_label or '') if s2.calibration_data_label else ''}"
                 f"</div>"
             )
+            if paint_err is not None:
+                lbl_qpu2_status.value += (
+                    f"<div style='font-size:13px;color:#e67e22;margin:2px 0;'>"
+                    f"⚠ candidate paint failed: {esc(str(paint_err))}</div>")
         except Exception as e:
             lbl_qpu2_status.value = (
                 f"<span style='font-size:15px;color:#e74c3c;'>"
@@ -498,16 +511,26 @@ def setup_inter_qpu(ctx):
         if (s2 is not None
                 and getattr(s2, 'active_backend_name', None) == backend_name):
             _pending_handoff[0] = None
-            with contextlib.suppress(Exception):
+            # Narrow try (was a blanket suppress): repaint failures are logged
+            # and surfaced, not hidden — see the first-connect path.
+            paint_err = None
+            try:
                 _apply_candidate_to_state(s2, candidate)
                 if _fig2[0] is not None and _w2[0] is not None:
                     from .. import plot as _plot
                     _plot.refresh_plot(_fig2[0], s2, _w2[0])
+            except Exception as _pe:                # noqa: BLE001 - reported below
+                paint_err = _pe
+                _log.warning("QPU-2 same-backend repaint failed for %s: %s",
+                             backend_name, _pe, exc_info=True)
             lbl_qpu2_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>✅ Applied to already-connected "
-                f"<b>{esc(str(backend_name))}</b>.</div>")
+                f"<b>{esc(str(backend_name))}</b>.</div>"
+                + ("" if paint_err is None else
+                   f"<div style='font-size:13px;color:#e67e22;margin:2px 0;'>"
+                   f"⚠ candidate paint failed: {esc(str(paint_err))}</div>"))
             return
 
         # A connect already in flight → the staging above is enough;

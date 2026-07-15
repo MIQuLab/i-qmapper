@@ -155,7 +155,6 @@ def setup_lucj_callbacks(ctx):
     lbl_lucj_multi_notices = ctx.lbl_lucj_multi_notices
     lucj_multi_detail_box = ctx.lucj_multi_detail_box
 
-    num_circuits = ctx.num_circuits
     set_num_circuits = ctx.set_num_circuits  # count change w/o full view rebuild
     intra_qpu_mode = ctx.intra_qpu_mode
 
@@ -1553,16 +1552,30 @@ def setup_lucj_callbacks(ctx):
             _on_multi_override(i, flat[idx])
         return _cb
 
+    def _multi_override_sort_key(e):
+        """Order override alternatives by the DISPLAYED metric: circuit LQS
+        descending, template (no lqs_circuit) entries sink below all scored
+        ones, product_score breaks ties. So the dropdown reads best→worst and
+        the preselected chosen sits at/near the top — not mid-list by stratum."""
+        lqs = e.get('lqs_circuit')
+        return (0 if lqs is not None else 1,
+                -(lqs if lqs is not None else 0.0),
+                -(e.get('product_score') or 0.0))
+
     def _build_multi_override_dropdowns(result):
         _multi_sweep['dropdowns'] = {}
         widgets = []
         for c in result['circuits']:
             i = c['circuit_idx']
+            # Flatten across strata, then rank by the displayed metric (best
+            # first) — labels keep "k=… · #… · LQS …%" so no info is lost.
+            entries = sorted(
+                (e for k in c['strata'] for e in c['strata'][k]),
+                key=_multi_override_sort_key)
             flat, opts = [], []
-            for k in sorted(c['strata'].keys(), reverse=True):
-                for e in c['strata'][k]:
-                    opts.append((_entry_label(e), len(flat)))
-                    flat.append(e)
+            for e in entries:
+                opts.append((_entry_label(e), len(flat)))
+                flat.append(e)
             if not opts:
                 continue
             chosen_idx = next((j for j, e in enumerate(flat)
@@ -1764,13 +1777,6 @@ def setup_lucj_callbacks(ctx):
             label_fn=_label, detail_fn=_detail, open_ok_fn=_open_ok,
             payload_fn=_payload,
             disabled_tip='batch does not fully fit on this backend')
-
-    def _batch_handoff(backend_name, chosen_list):
-        hook = inter_qpu_handoff[0] if inter_qpu_handoff else None
-        if hook is None:
-            return
-        with contextlib.suppress(Exception):
-            hook(backend_name, chosen_list)          # list → batch handoff
 
     def _on_scan_batch(b):
         if state.active_backend is None:

@@ -228,16 +228,35 @@ def test_batch_handoff_applies_all_circuits(monkeypatch):
 #    This drives the REAL build (only the device/network deps are stubbed) and
 #    proves the candidate both LANDS on QPU-2 state AND reaches the figure.
 
+def _qubit_trace(fig):
+    from qpu_mapper.plot import _META_QUBITS
+    return next((tr for tr in fig.data
+                 if getattr(tr, 'meta', None) == _META_QUBITS), None)
+
+
 def _qubit_marker_colors(fig):
     """The per-qubit marker colour array from the figure (len == n_qubits)."""
-    for tr in fig.data:
-        mc = getattr(getattr(tr, 'marker', None), 'color', None)
-        if isinstance(mc, (list, tuple)) and len(mc) == 8:
-            return list(mc)
-    return []
+    qt = _qubit_trace(fig)
+    col = getattr(getattr(qt, 'marker', None), 'color', None) if qt else None
+    return list(col) if isinstance(col, (list, tuple)) else []
 
 
-def test_first_connect_paints_candidate_real_build(monkeypatch):
+def _assert_base_map(fig, n):
+    """The QPU-2 DEVICE map must have n qubit markers WITH index labels AND
+    per-node colours — never edges-on-empty-cells. Pins the D-class 'bare
+    edges, no nodes, no labels' failure so it can never regress silently."""
+    qt = _qubit_trace(fig)
+    assert qt is not None, "qubit node trace missing entirely"
+    assert qt.x is not None and len(qt.x) == n, f"node positions: {qt.x}"
+    assert qt.text is not None and len(qt.text) == n, "node index labels missing"
+    col = getattr(qt.marker, 'color', None)
+    assert isinstance(col, (list, tuple)) and len(col) == n, "node colours missing"
+
+
+def _primary_with_stubs(monkeypatch):
+    """A built primary MapperUIBuilder with device/network deps stubbed so the
+    REAL secondary build_mapper_ui runs on connect. Returns (b, capture) where
+    capture records the connected s2/fig via a build wrapper."""
     import numpy as np
 
     def _fake_device(state, vendor, chip, date, prefetched_props=None):
@@ -274,7 +293,6 @@ def test_first_connect_paints_candidate_real_build(monkeypatch):
     b = MapperUIBuilder(state)
     b.build()
 
-    # Capture the connected QPU-2 state + figure by wrapping the REAL build.
     import qpu_mapper.ui as ui_pkg
     real = ui_pkg.build_mapper_ui
     cap = {}
@@ -284,6 +302,11 @@ def test_first_connect_paints_candidate_real_build(monkeypatch):
         cap['s2'], cap['fig'] = s2, res[1]
         return res
     monkeypatch.setattr(ui_pkg, 'build_mapper_ui', _wrap)
+    return b, cap
+
+
+def test_first_connect_paints_candidate_real_build(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
 
     cand = {'alpha': [0, 1], 'beta': [2, 3], 'ancillas': [4], 'lqs_circuit': 0.54}
     b._inter_qpu_handoff[0]('ibm_k', cand)
@@ -292,9 +315,47 @@ def test_first_connect_paints_candidate_real_build(monkeypatch):
     d = cap['s2'].layouts_data[0]
     assert d['alpha'] == ['0', '1'] and d['beta'] == ['2', '3'] and d['ancilla'] == ['4']
     assert d['styles']                                    # per-qubit paint styles set
-    # (b) figure RECEIVED the layout — the 5 candidate qubits are painted, not
-    # the unpainted white; an untouched qubit stays white (specificity).
+    # (b) the DEVICE map itself drew — nodes + labels present (not edges-only).
+    _assert_base_map(cap['fig'], 8)
+    # (c) the candidate reached the figure — its 5 qubits painted, others white.
     colors = _qubit_marker_colors(cap['fig'])
-    assert len(colors) == 8
     assert all(colors[i] != '#ffffff' for i in (0, 1, 2, 3, 4))   # painted
     assert colors[7] == '#ffffff'                                  # untouched
+
+
+# ── D3: the base device map is present on ALL THREE paint entry points ──────
+
+def test_same_backend_repaint_keeps_base_map(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
+    b._inter_qpu_handoff[0]('ibm_k', {'alpha': [0], 'beta': [1], 'ancillas': [2]})
+    fig = cap['fig']
+    _assert_base_map(fig, 8)                              # after first connect
+
+    # Same backend again → in-place repaint (no rebuild). Base map must survive.
+    b._inter_qpu_handoff[0]('ibm_k', {'alpha': [5], 'beta': [6], 'ancillas': [7]})
+    _assert_base_map(fig, 8)                              # still nodes + labels
+    colors = _qubit_marker_colors(fig)
+    assert colors[5] != '#ffffff' and colors[7] != '#ffffff'   # new candidate painted
+    assert colors[0] == '#ffffff'                              # old selection cleared
+
+
+def test_manual_connect_no_candidate_keeps_base_map(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
+    # A connect with an EMPTY batch (no candidate to apply) still must draw the
+    # full device map — nodes + labels — exactly like a manual Connect QPU 2.
+    b._inter_qpu_handoff[0]('ibm_k', [])
+    _assert_base_map(cap['fig'], 8)
+    colors = _qubit_marker_colors(cap['fig'])
+    assert all(c == '#ffffff' for c in colors)           # unpainted default nodes
+
+
+def test_batch_handoff_keeps_base_map_real_build(monkeypatch):
+    b, cap = _primary_with_stubs(monkeypatch)
+    batch = [{'alpha': [0], 'beta': [1], 'ancillas': [2]},
+             {'alpha': [3], 'beta': [4], 'ancillas': [5]}]
+    b._inter_qpu_handoff[0]('ibm_k', batch)              # LIST → batch handoff
+    # Base device map intact (nodes + labels + colours) after a batch paint.
+    _assert_base_map(cap['fig'], 8)
+    # Both circuits landed on QPU-2 state.
+    assert cap['s2'].layouts_data[0]['ancilla'] == ['2']
+    assert cap['s2'].layouts_data[1]['ancilla'] == ['5']

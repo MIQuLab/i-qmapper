@@ -130,6 +130,54 @@ def test_multi_sweep_happy_path(monkeypatch):
     assert b.btn_lucj_multi_sweep.disabled is False   # re-armed
 
 
+# ── override dropdown ranks best→worst by LQS, not by stratum order ─────────
+
+def test_override_dropdown_sorted_best_first(monkeypatch):
+    import re
+    b, state = _build(monkeypatch)
+    # k=2 stratum has a LOWER LQS than k=1 — stratified order (k desc) would put
+    # the worse candidate first. The dropdown must instead read best→worst.
+    e_k2 = _entry([4, 5], 0.40, lqs=0.40, rank=1)
+    e_k1a = _entry([4], 0.66, lqs=0.65, rank=1)          # the chosen best
+    e_k1b = _entry([5], 0.55, lqs=0.55, rank=2)
+    c0 = _circuit(0, e_k1a, {2: [e_k2], 1: [e_k1a, e_k1b]})
+    result = {'circuits': [c0], 'total_product': 0.65,
+              'total_lqs_circuit': 0.65, 'placed_qubits': [],
+              'buffer_qubits_used': [], 'failed_at': None, '_context': {}}
+    _patch_engine(monkeypatch, result)
+
+    b.lucj_multi_norbs.value = '8'
+    b.btn_lucj_multi_sweep.click()
+
+    dds = _dropdowns(b.lucj_multi_detail_box)
+    assert len(dds) == 1
+    labels = [o[0] for o in dds[0].options]
+    pcts = [float(re.search(r'LQS ([\d.]+)%', l).group(1)) for l in labels]
+    assert pcts == [65.0, 55.0, 40.0]                    # descending, best first
+    assert dds[0].value == 0                             # chosen best preselected
+    assert 'LQS 65.0%' in labels[0]
+
+
+def test_override_template_entries_sink(monkeypatch):
+    b, state = _build(monkeypatch)
+    # A scored entry (lqs_circuit) must rank ABOVE a template one (no
+    # lqs_circuit) even if the template's product_score is higher.
+    scored = _entry([4], 0.30, lqs=0.30, rank=1)         # scored 30%
+    templ = _entry([5], 0.90, rank=2)                    # template, no lqs
+    c0 = _circuit(0, scored, {1: [templ, scored]})
+    result = {'circuits': [c0], 'total_product': 0.30,
+              'total_lqs_circuit': 0.30, 'placed_qubits': [],
+              'buffer_qubits_used': [], 'failed_at': None, '_context': {}}
+    _patch_engine(monkeypatch, result)
+
+    b.lucj_multi_norbs.value = '8'
+    b.btn_lucj_multi_sweep.click()
+
+    labels = [o[0] for o in _dropdowns(b.lucj_multi_detail_box)[0].options]
+    assert 'template' in labels[1].lower()               # template sinks below
+    assert 'template' not in labels[0].lower()           # scored ranks first
+
+
 # ── override — replan_from(result, 0, alt) re-applies + updates summary ──
 
 def test_multi_sweep_override(monkeypatch):
