@@ -77,9 +77,17 @@ def _patch_engine(monkeypatch, sweep_fn):
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
 
+def _walk(node):
+    yield node
+    for ch in getattr(node, 'children', []):
+        yield from _walk(ch)
+
+
 def _all_html(box):
+    # Recurse: the comparison table now lives inside a toggled VBox (behind the
+    # '📊 Show comparison table' checkbox), so k-cap notes are nested.
     from ipywidgets import HTML
-    return " ".join(c.value for c in box.children if isinstance(c, HTML))
+    return " ".join(w.value for w in _walk(box) if isinstance(w, HTML))
 
 
 # ── k-capped row note from metadata ─────────────────────────────────────
@@ -122,7 +130,7 @@ def test_notices_capture_and_dedup(monkeypatch):
 
     b.btn_scan_qpus.click()
     html = _all_html(b.scan_results_box)
-    assert '⚠ notices (3)' in html                # 3 total records
+    assert 'notices' in html and '>3</span>' in html   # loud header + count badge
     assert 'stale cache housekeeping ×2' in html   # deduped with count
     assert 'other notice' in html                  # the singleton (no ×)
     assert 'other notice ×' not in html
@@ -157,4 +165,4 @@ def test_no_notices_section_when_empty(monkeypatch):
     _patch_targets(monkeypatch)
     _patch_engine(monkeypatch, lambda *a, **k: _sweep())
     b.btn_scan_qpus.click()
-    assert '⚠ notices' not in _all_html(b.scan_results_box)
+    assert 'notices' not in _all_html(b.scan_results_box)

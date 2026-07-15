@@ -7,7 +7,7 @@ a `ctx` SimpleNamespace with shared UI state and widgets.
 import contextlib
 import logging
 
-from ipywidgets import Button, Dropdown, HTML
+from ipywidgets import Button, Dropdown, HBox, HTML, Layout
 
 from ..constants import hex_to_rgba
 from ..html_safe import esc
@@ -91,6 +91,36 @@ class _ScanNoticeCapture(logging.Handler):
             pass
 
 
+@contextlib.contextmanager
+def _capture_qpu_notices(context_getter):
+    """Capture WARNING+ records off the 'qpu_mapper' logger for the duration of
+    a sweep and stop them leaking under the notebook cell (propagate=False).
+    Attaches the handler in the try; restores BOTH the handler and propagate in
+    finally, so a raising sweep can't leave the logger muted or double-handled.
+    Yields the handler — read `handler.records` (a list of (context, message))
+    after (or inside) the block.
+
+    Shared by every sweep path: the multi-QPU scan, the local single sweep, and
+    the multi-circuit sweep + replan. Restoration is the try/finally guarantee
+    the tests pin."""
+    logger = logging.getLogger('qpu_mapper')
+    orig_propagate = logger.propagate
+    handler = _ScanNoticeCapture(context_getter)
+    try:
+        logger.addHandler(handler)
+        logger.propagate = False
+    except Exception:
+        pass
+    try:
+        yield handler
+    finally:
+        try:
+            logger.removeHandler(handler)
+            logger.propagate = orig_propagate
+        except Exception:
+            pass
+
+
 def setup_lucj_callbacks(ctx):
     """Wire all LUCJ-related callbacks. Called from ui.py after widget creation."""
 
@@ -110,6 +140,7 @@ def setup_lucj_callbacks(ctx):
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
     lbl_lucj_trunc = ctx.lbl_lucj_trunc
+    lbl_lucj_notices = ctx.lbl_lucj_notices
     dd_lucj_layout = ctx.dd_lucj_layout
     lbl_lucj_detail = ctx.lbl_lucj_detail
 
@@ -121,9 +152,11 @@ def setup_lucj_callbacks(ctx):
     btn_scan_batch = ctx.btn_scan_batch
     scan_batch_box = ctx.scan_batch_box
     lbl_lucj_multi = ctx.lbl_lucj_multi
+    lbl_lucj_multi_notices = ctx.lbl_lucj_multi_notices
     lucj_multi_detail_box = ctx.lucj_multi_detail_box
 
     num_circuits = ctx.num_circuits
+    set_num_circuits = ctx.set_num_circuits  # count change w/o full view rebuild
     intra_qpu_mode = ctx.intra_qpu_mode
 
     _lucj_all_layouts = ctx.lucj_all_layouts
@@ -231,23 +264,22 @@ def setup_lucj_callbacks(ctx):
                       f"<span style='color:#888;'>{scale}; internal ranking "
                       f"sum {entry['additive_score']:.4f}, "
                       f"{esc(str(entry.get('source', '')))}</span>")
-            anc = ', '.join(str(q) for q in entry['ancillas'])
+            # Compact counts only — the placed qubit ids live on the map and in
+            # the Export tab, so the detail panel need not dump index lists.
+            counts = (f"α={len(entry['alpha'])} β={len(entry['beta'])} "
+                      f"Anc={len(entry['ancillas'])}")
             lbl_lucj_detail.value = (
                 f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
                 f"border-radius:4px;border:1px solid #dee2e6;margin:3px 0;'>"
-                f"{header}<br>"
-                f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
-                f"β: {', '.join(str(q) for q in entry['beta'])}<br>"
-                f"ancillas: {anc}</div>"
+                f"{header}<br>{counts}</div>"
             )
         else:
             sc = f"{entry['score']:.4f}" if entry['score'] is not None else "N/A"
+            counts = f"α={len(entry['alpha'])} β={len(entry['beta'])}"
             lbl_lucj_detail.value = (
                 f"<div style='font-size:14px;background:#f8f9fa;padding:6px 8px;"
                 f"border-radius:4px;border:1px solid #dee2e6;margin:3px 0;'>"
-                f"<b>#{entry['rank']}</b> (err={sc})<br>"
-                f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
-                f"β: {', '.join(str(q) for q in entry['beta'])}</div>"
+                f"<b>#{entry['rank']}</b> (err={sc})<br>{counts}</div>"
             )
     # The LQS shown here is the circuit-level score — the same number
     # the Estimated Layout-Quality box reports. '(template)' flags the
@@ -323,6 +355,18 @@ def setup_lucj_callbacks(ctx):
             return None
         ts = getattr(state, 'point_timestamp', None)
         return ts[:10] if isinstance(ts, str) and len(ts) >= 10 else None
+
+    def _local_scored_vintage():
+        """Provenance stamp for the LOCAL Auto sweep, mirroring the scan
+        detail's 'live · HH:MM'. A selected PAST date → 'scored on <date>';
+        otherwise the live fetch moment → 'scored on live · HH:MM'. Makes the
+        two-moments-two-numbers reality visible so a scan-vs-local mismatch
+        reads as calibration drift, not a bug. esc()'d value."""
+        anchor = _selected_date_anchor()
+        if anchor:
+            return f"scored on {esc(anchor)}"
+        from datetime import datetime as _dt
+        return f"scored on live · {_dt.now().strftime('%H:%M')}"
 
     def _local_scoring_props():
         """Pre-rank on the SAME epoch as the C1 circuit-score — the
@@ -518,11 +562,15 @@ def setup_lucj_callbacks(ctx):
             cap = _k_cap_phrase(norb, res.get('k_max_effective'))
             cap_txt = f" · {esc(cap)}" if cap else ""
             mode_txt = f" · {esc(_sweep_mode_label(res))}"
+            # Provenance stamp — mirrors the scan detail's 'live · HH:MM' so the
+            # user can SEE this number and a scan row's number were taken at
+            # DIFFERENT moments (calibration drift), not that one is wrong.
+            vin_txt = f" · {_local_scored_vintage()}"
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
-                f"{cap_txt}</div>")
+                f"{cap_txt}{vin_txt}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
@@ -545,14 +593,20 @@ def setup_lucj_callbacks(ctx):
         btn_lucj_run.description = '⏳ Generating...'
         lbl_lucj_status.value = ""
         lbl_lucj_trunc.value = ""
+        lbl_lucj_notices.value = ""
         try:
             requested_ancillas = lucj_ancilla_dd.value
-            # Exact count picked (>= 0) → legacy single-count search,
-            # unchanged. 'Auto' (-1) → stratified sweep (new default).
-            if requested_ancillas is not None and requested_ancillas >= 0:
-                _generate_legacy(norb, requested_ancillas)
-            else:
-                _generate_sweep(norb)
+            # Capture WARNING+ off 'qpu_mapper' for the sweep so bridge/VF2
+            # notices land in the loud notices bar, not under the cell.
+            with _capture_qpu_notices(
+                    lambda: state.active_backend_name or 'local sweep') as handler:
+                # Exact count picked (>= 0) → legacy single-count search,
+                # unchanged. 'Auto' (-1) → stratified sweep (new default).
+                if requested_ancillas is not None and requested_ancillas >= 0:
+                    _generate_legacy(norb, requested_ancillas)
+                else:
+                    _generate_sweep(norb)
+            lbl_lucj_notices.value = _notices_html(handler.records)
         except Exception as e:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e74c3c;background:#fdedec;padding:6px 10px;"
@@ -875,18 +929,46 @@ def setup_lucj_callbacks(ctx):
         alt = " · alt region" if entry.get('diverse') else ""    # region-diversity flag
         return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}{alt}"
 
+    def _short_reason(reason):
+        """Map a full ineligibility reason to a compact form for the one-line
+        summary (the full string lives in the line's tooltip)."""
+        r = str(reason or '')
+        if r.startswith('current backend'):
+            return 'current'
+        if r.startswith('different family'):
+            lo, hi = r.find('('), r.rfind(')')
+            return r[lo + 1:hi] if 0 <= lo < hi else 'other family'
+        if r.startswith('needs'):
+            return 'too small'
+        if r.startswith('family unknown'):
+            return 'unknown family'
+        return r or 'skipped'
+
     def _render_targets(targets):
-        rows = []
-        for t in targets:
-            if t['eligible']:
-                rows.append(f"<span style='color:#1e8449;'>"
-                            f"{esc(str(t['name']))} ✓</span>")
-            else:
-                rows.append(f"<span style='color:#999;'>{esc(str(t['name']))} "
-                            f"— {esc(str(t['reason']))}</span>")
+        # One compact line: eligible names joined by ' · ' (+ count), then the
+        # skipped ones after an em-dash with a SHORT reason. The full per-
+        # backend reasons ride in the title tooltip.
+        elig = [t for t in targets if t['eligible']]
+        skip = [t for t in targets if not t['eligible']]
+        skip_txt = ', '.join(
+            f"{esc(str(t['name']))} ({esc(_short_reason(t.get('reason')))})"
+            for t in skip)
+        if elig:
+            names = ' · '.join(esc(str(t['name'])) for t in elig)
+            line = f"<b>Targets:</b> {names} ({len(elig)})"
+            if skip:
+                line += f" — skipped: {skip_txt}"
+        else:
+            line = "<b>Targets:</b> none"
+            if skip:
+                line += f" — {skip_txt}"
+        tip = esc(' | '.join(
+            (f"{t['name']}: eligible" if t['eligible']
+             else f"{t['name']}: {t.get('reason')}")
+            for t in targets))
         scan_results_box.children = [HTML(
-            "<div style='font-size:13px;margin:3px 0;'><b>Targets:</b><br>"
-            + "<br>".join(rows) + "</div>")]
+            f"<div title='{tip}' style='font-size:13px;margin:3px 0;'>"
+            f"{line}</div>")]
 
     def _stage_handoff(backend_name, candidate):
         hook = inter_qpu_handoff[0] if inter_qpu_handoff else None
@@ -908,165 +990,195 @@ def setup_lucj_callbacks(ctx):
             return "<span style='color:#999;'>—</span>"
         return f"<span style='color:#1e8449;'>{esc(str(vintage))}</span>"
 
+    def _best_scan_entry(sweep):
+        """The single-scan candidate to hand off for a QPU: the entry with the
+        highest displayed metric (lqs_circuit, else product_score)."""
+        best, best_v = None, None
+        for entries in sweep.get('strata', {}).values():
+            for e in entries:
+                v = e.get('lqs_circuit')
+                if v is None:
+                    v = e['product_score']
+                if best is None or v > best_v:
+                    best, best_v = e, v
+        return best
+
+    def _scan_best_lqs(r):
+        """The single-scan display metric quoted EVERYWHERE for a backend:
+        the MAX circuit LQS (lqs_circuit) across ALL its strata, ignoring None
+        (annotation failed). Falls back to the product heuristic — flagged
+        '(template)' — only when NOTHING was circuit-scored. Returns
+        (value, is_template) so the comparison-table cell, the selector label
+        and the detail line all quote the SAME number (previously the label
+        quoted best_lqs = max product_score, diverging from the lqs_circuit
+        table/detail)."""
+        sweep = r.get('sweep') or {}
+        lqs_vals = [e['lqs_circuit']
+                    for entries in sweep.get('strata', {}).values()
+                    for e in entries if e.get('lqs_circuit') is not None]
+        if lqs_vals:
+            return max(lqs_vals), False
+        return (r.get('best_lqs') or 0.0), True
+
+    def _scan_best_lqs_str(r):
+        """`_scan_best_lqs` formatted as the display percent string."""
+        val, is_tmpl = _scan_best_lqs(r)
+        return f"{val * 100.0:.1f}%{' (template)' if is_tmpl else ''}"
+
+    def _scan_selector(rows, *, label_fn, detail_fn, open_ok_fn, payload_fn,
+                       disabled_tip):
+        """One Dropdown over scan rows (already ranked) + one detail line + one
+        '🔗 open on QPU 2' button. Selecting a row updates the detail; the open
+        button is disabled (with a tooltip) for rows that cannot be opened
+        (errors, or a batch that does not fully fit)."""
+        opts = [(label_fn(r), i) for i, r in enumerate(rows)]
+        if not opts:
+            return []
+        dd = Dropdown(options=opts, value=0, description='QPU:', layout=W,
+                      style={'description_width': '40px'})
+        det = HTML("")
+        btn = Button(description='🔗 open on QPU 2', button_style='',
+                     layout=Layout(width='180px'))
+
+        def _sync(idx):
+            r = rows[idx]
+            det.value = detail_fn(r)
+            ok = open_ok_fn(r)
+            btn.disabled = not ok
+            btn.tooltip = '' if ok else disabled_tip
+
+        dd.observe(lambda ch: ch['new'] is not None and _sync(ch['new']),
+                   names='value')
+
+        def _open(_b):
+            if dd.value is None:
+                return
+            r = rows[dd.value]
+            if not open_ok_fn(r):
+                return
+            payload = payload_fn(r)
+            if payload is not None:
+                _stage_handoff(r['name'], payload)   # single candidate OR list
+
+        btn.on_click(_open)
+        _sync(0)
+        return [dd, det, HBox([btn], layout=Layout(align_items='center'))]
+
+    def _scan_detail_line2(r):
+        """Second detail line — the per-backend data the removed comparison
+        table used to carry: stability badge · k-cap phrase · calibration
+        vintage. Segments that don't apply are omitted; '' when none apply.
+        All dynamic values are esc()'d inside the reused helpers / here."""
+        segs = []
+        badge = _stability_badge(r)                 # already-styled, esc'd HTML
+        if badge:
+            segs.append(badge)
+        cap = _k_cap_phrase(_scan.get('norb', 0),
+                            (r.get('sweep') or {}).get('k_max_effective'))
+        if cap:
+            segs.append(f"<span style='color:#e67e22;'>{esc(cap)}</span>")
+        vintage = r.get('vintage')
+        if vintage:
+            segs.append(_vintage_cell(vintage))     # styled 'live · <time>'
+        return " · ".join(segs)
+
     def _render_results(scan_result):
         results = scan_result['results']
-        head = ("<table style='font-size:13px;border-collapse:collapse;'>"
-                "<tr style='background:#eaf2f8;'>"
-                "<th style='padding:3px 8px;text-align:left;'>QPU</th>"
-                "<th style='padding:3px 8px;'>family</th>"
-                "<th style='padding:3px 8px;'>best LQS</th>"
-                "<th style='padding:3px 8px;'>k</th>"
-                "<th style='padding:3px 8px;'>cands</th>"
-                "<th style='padding:3px 8px;'>stability</th>"
-                "<th style='padding:3px 8px;'>calib</th></tr>")
-        body = []
-        # Active backend reference row — greyed, quotes the LOCAL number,
-        # never re-searched. Keeps the cross-QPU reference point at zero cost.
-        active = _scan.get('active')
-        if active:
-            lb = _local_best_lqs[0]
-            lqs_ref = (f"{lb * 100.0:.1f}% (local)" if lb is not None
-                       else "run Auto above")
-            body.append(
-                f"<tr style='color:#888;background:#f0f0f0;'>"
-                f"<td style='padding:3px 8px;'>📍 {esc(str(active['name']))}</td>"
-                f"<td style='padding:3px 8px;text-align:center;'>"
-                f"{esc(str(active['family'] or '?'))}</td>"
-                f"<td style='padding:3px 8px;text-align:center;'>"
-                f"{esc(lqs_ref)}</td>"
-                f"<td colspan='4' style='padding:3px 8px;'>current backend — "
-                f"see local results above</td></tr>")
-        for r in results:
-            name = esc(str(r['name']))
-            fam = esc(str(r['family'] or '?'))
-            badge = _stability_badge(r)
-            vcell = _vintage_cell(r.get('vintage'))
-            if r['error']:
-                body.append(
-                    f"<tr style='color:#999;background:#f7f7f7;'>"
-                    f"<td style='padding:3px 8px;'>{name}</td>"
-                    f"<td style='padding:3px 8px;'>{fam}</td>"
-                    f"<td colspan='5' style='padding:3px 8px;'>✗ "
-                    f"{esc(str(r['error']))}</td></tr>")
-            elif r['best_lqs'] is None:
-                body.append(
-                    f"<tr style='color:#999;'>"
-                    f"<td style='padding:3px 8px;'>{name}</td>"
-                    f"<td style='padding:3px 8px;'>{fam}</td>"
-                    f"<td colspan='3' style='padding:3px 8px;'>no candidates"
-                    f"</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{badge}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{vcell}</td></tr>")
-            else:
-                # Summary best-LQS = MAX circuit LQS over ALL entries,
-                # ignoring None (annotation failed) and NOT just the k_max
-                # stratum #1 — quoting k_max quoted its 0.0 dead-edge wall
-                # while lower strata were fine. Fall back to the
-                # product heuristic (flagged) only when NOTHING was scored.
-                lqs_vals = [e['lqs_circuit']
-                            for _entries in r['sweep']['strata'].values()
-                            for e in _entries
-                            if e.get('lqs_circuit') is not None]
-                if lqs_vals:
-                    lqs = esc(f"{max(lqs_vals) * 100.0:.1f}%")
-                else:
-                    lqs = esc(f"{r['best_lqs'] * 100.0:.1f}% (template)")
-                ncand = sum(len(v) for v in r['sweep']['strata'].values())
-                cap = _k_cap_phrase(_scan.get('norb', 0),
-                                    r['sweep'].get('k_max_effective'))
-                cap_html = (f"<br><span style='color:#e67e22;'>{esc(cap)}</span>"
-                            if cap else "")
-                body.append(
-                    f"<tr><td style='padding:3px 8px;'>{name}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>{fam}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>{lqs}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{esc(str(r['best_k']))}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{esc(str(ncand))}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{badge}{cap_html}</td>"
-                    f"<td style='padding:3px 8px;text-align:center;'>"
-                    f"{vcell}</td></tr>")
-        children = [HTML(head + "".join(body) + "</table>")]
+        children = []
 
         # when a PAST date is active locally, the local backend was scored
         # on that date but remote backends are scored LIVE — say so, no silent
         # mixing.
         _anchor = _selected_date_anchor()
         if _anchor:
-            children.insert(0, HTML(
+            children.append(HTML(
                 f"<div style='font-size:12px;color:#b9770e;background:#fef9e7;"
                 f"padding:3px 8px;border-radius:4px;border:1px solid #fdebd0;"
                 f"margin:0 0 4px;'>⏱ local backend scored on "
                 f"{esc(_anchor)}; remote backends on live calibrations</div>"))
 
-        # Per-QPU stratified dropdowns (same label format as single-circuit).
-        for r in results:
-            sweep = r.get('sweep')
-            if not sweep:
-                continue
-            strata = sweep['strata']
-            flat, dd_opts = [], []
-            for k in sorted(strata.keys(), reverse=True):
-                for entry in strata[k]:
-                    dd_opts.append((_entry_label(entry), len(flat)))
-                    flat.append(entry)
-            if not dd_opts:
-                continue
-            children.append(HTML(
-                f"<div style='font-weight:bold;margin:6px 0 2px;font-size:13px;'>"
-                f"{esc(str(r['name']))} — {_format_best_per_k(strata)}</div>"))
-            dd = Dropdown(options=dd_opts, value=None, description='Layout:',
-                          layout=W, style={'description_width': '50px'})
-            det = HTML("")
+        # ONE QPU selector — the ONLY results UI now (the comparison table is
+        # gone; its per-backend columns moved into the detail's second line).
+        # Pick a backend, see its best-per-k detail + stability/cap/calib, open
+        # its best candidate on QPU 2. Rows keep the scan_qpus ranking; errored
+        # / no-candidate rows are selectable but their open button is disabled.
+        def _single_label(r):
+            name = esc(str(r['name']))
+            if r.get('error'):
+                return f"{name} — ✗ error"
+            if r.get('best_lqs') is None:
+                return f"{name} — no candidates"
+            return f"{name} — {_scan_best_lqs_str(r)}"   # max lqs_circuit, tmpl fbk
 
-            def _make_cb(qpu_name, flatlist, detail_lbl):
-                def _cb(change):
-                    idx = change['new']
-                    if idx is None or idx >= len(flatlist):
-                        return
-                    entry = flatlist[idx]
-                    detail_lbl.value = (
-                        f"<div style='font-size:13px;background:#f8f9fa;"
-                        f"padding:4px 6px;border-radius:3px;margin:2px 0;'>"
-                        f"α: {esc(', '.join(str(q) for q in entry['alpha']))}<br>"
-                        f"β: {esc(', '.join(str(q) for q in entry['beta']))}<br>"
-                        f"ancillas: "
-                        f"{esc(', '.join(str(q) for q in entry['ancillas']))}"
-                        f"</div>")
-                    # Drive the inter-QPU panel — NEVER touch C1 / current layout.
-                    _stage_handoff(qpu_name, entry)
-                return _cb
-            dd.observe(_make_cb(r['name'], flat, det), names='value')
-            children.extend([dd, det])
+        def _single_detail(r):
+            box = ("<div style='font-size:13px;background:#f8f9fa;padding:4px 6px;"
+                   "border-radius:3px;margin:2px 0;'>")
+            if r.get('error'):
+                return box + f"✗ {esc(str(r['error']))}</div>"
+            sweep = r.get('sweep') or {}
+            strata = sweep.get('strata', {})
+            if not strata or r.get('best_lqs') is None:
+                return box + "no candidates</div>"
+            best = _best_scan_entry(sweep)
+            counts = (f"α={len(best['alpha'])} β={len(best['beta'])} "
+                      f"Anc={len(best['ancillas'])}") if best else ""
+            # line 1 (as before): per-k bests + counts.
+            line1 = f"{esc(_format_best_per_k(strata))}<br>{counts}"
+            # line 2 (rescued from the table): stability · cap · calib.
+            line2 = _scan_detail_line2(r)
+            line2_html = f"<br>{line2}" if line2 else ""
+            return box + f"{line1}{line2_html}</div>"
+
+        selector = _scan_selector(
+            results,
+            label_fn=_single_label,
+            detail_fn=_single_detail,
+            open_ok_fn=lambda r: not r.get('error') and r.get('best_lqs') is not None,
+            payload_fn=lambda r: _best_scan_entry(r.get('sweep') or {}),
+            disabled_tip='no candidates to open on QPU 2')
+        children.extend(selector)
 
         scan_results_box.children = children
 
-    def _append_notices(notices):
-        # Collapsible "⚠ notices (N)" under the results table:
-        # deduplicated messages (message → ×count), grouped by backend
-        # context. Hidden when empty.
+    def _notices_html(notices):
+        """The LOUD "⚠ notices" widget HTML — an amber warning bar with a count
+        badge (Y-pass styling), clearly clickable, expanding to the grouped,
+        deduplicated messages (message → ×count, grouped by backend context).
+        `notices` is a list of (context, message) tuples. Returns '' when empty
+        so callers can hide the widget. Shared by scan, local and multi."""
         if not notices:
-            return
+            return ""
         from collections import OrderedDict
         groups = OrderedDict()
-        for ctx, msg in notices:
-            groups.setdefault(ctx, OrderedDict())
-            groups[ctx][msg] = groups[ctx].get(msg, 0) + 1
+        for bctx, msg in notices:
+            groups.setdefault(bctx, OrderedDict())
+            groups[bctx][msg] = groups[bctx].get(msg, 0) + 1
         parts = []
-        for ctx, msgs in groups.items():
-            parts.append(f"<b>{esc(str(ctx))}</b>")
+        for bctx, msgs in groups.items():
+            parts.append(f"<b>{esc(str(bctx))}</b>")
             for msg, cnt in msgs.items():
                 suffix = f" ×{cnt}" if cnt > 1 else ""
                 parts.append(f"&nbsp;&nbsp;{esc(msg)}{esc(suffix)}")
-        html = (
-            f"<details style='margin:6px 0;font-size:12px;color:#666;'>"
-            f"<summary>⚠ notices ({len(notices)})</summary>"
-            f"<div style='padding:4px 8px;'>" + "<br>".join(parts) + "</div>"
+        # LOUD collapsed header: an amber warning bar with a count badge,
+        # clearly clickable. Expanded content keeps the small grey styling.
+        return (
+            f"<details style='margin:8px 0;'>"
+            f"<summary style='cursor:pointer;list-style:none;font-size:14px;"
+            f"font-weight:bold;color:#9c6500;background:#fff3cd;"
+            f"border:1px solid #ffe08a;border-left:4px solid #f0ad4e;"
+            f"border-radius:4px;padding:6px 10px;'>&#9888; notices "
+            f"<span style='background:#f0ad4e;color:#ffffff;border-radius:10px;"
+            f"padding:1px 8px;font-size:12px;'>{len(notices)}</span>"
+            f"</summary>"
+            f"<div style='padding:4px 8px;font-size:12px;color:#666;'>"
+            + "<br>".join(parts) + "</div>"
             f"</details>")
+
+    def _append_notices(notices):
+        # Collapsible loud notices under the scan results. Hidden when empty.
+        html = _notices_html(notices)
+        if not html:
+            return
         scan_results_box.children = list(scan_results_box.children) + [HTML(html)]
 
     def _on_scan_done(payload):
@@ -1130,30 +1242,16 @@ def setup_lucj_callbacks(ctx):
                            and chk_scan_stability.value)
 
         def _work():
-            # Capture WARNING+ off 'qpu_mapper' for the scan's
-            # duration and stop them leaking under the cell (propagate=False).
-            # Attach in try, restore BOTH in finally (done + error paths).
-            logger = logging.getLogger('qpu_mapper')
-            orig_propagate = logger.propagate
-            handler = _ScanNoticeCapture(lambda: _scan.get('current') or 'general')
-            try:
-                logger.addHandler(handler)
-                logger.propagate = False
-            except Exception:
-                pass
-            try:
+            # Capture WARNING+ off 'qpu_mapper' for the scan's duration and stop
+            # them leaking under the cell — the same context every sweep uses.
+            with _capture_qpu_notices(
+                    lambda: _scan.get('current') or 'general') as handler:
                 # One scan path, one param source — forwards hybrid.
                 result = _scan_backends(eligible, norb, get_backend,
                                         get_props, use_scan_filter)
                 # Circuit-level LQS per backend — one scale everywhere.
                 _annotate_scan_circuit_lqs(result, get_backend, get_props)
                 return (result, list(handler.records))
-            finally:
-                try:
-                    logger.removeHandler(handler)
-                    logger.propagate = orig_propagate
-                except Exception:
-                    pass
         scan_spawn_bg(_work, on_done=_on_scan_done, on_error=_on_scan_error)
 
     btn_scan_qpus.on_click(_on_scan_click)
@@ -1222,8 +1320,10 @@ def setup_lucj_callbacks(ctx):
             )
 
             if not intra_qpu_mode.value and len(norb_list) > 1:
-                intra_qpu_mode.value = True
-            num_circuits.value = len(norb_list)
+                intra_qpu_mode.value = True     # OFF→ON reveal: legitimate rebuild
+            # Same treatment as the sweep path: targeted count refresh, no
+            # visible Auto-view rebuild (results render in place below).
+            set_num_circuits(len(norb_list))
 
             state.push_undo()
             for res in results:
@@ -1268,8 +1368,7 @@ def setup_lucj_callbacks(ctx):
                     lbl.value = (
                         f"<div style='font-size:14px;background:#f8f9fa;padding:4px 6px;"
                         f"border-radius:3px;border:1px solid #dee2e6;margin:2px 0;'>"
-                        f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
-                        f"β: {', '.join(str(q) for q in entry['beta'])}</div>")
+                        f"α={len(entry['alpha'])} β={len(entry['beta'])}</div>")
 
                 _show_detail(cands[0], lbl_circ)
 
@@ -1335,7 +1434,8 @@ def setup_lucj_callbacks(ctx):
                 f"{ancilla_warning}<br>"
                 f"<span style='font-size:14px;color:#555;'>Use dropdowns below to switch layouts per circuit.</span></div>")
 
-            ctx.update_view()
+            # No ctx.update_view(): the count refresh is targeted (above) and
+            # the detail widgets / summary render into persistent widgets.
 
         except Exception as e:
             lbl_lucj_multi.value = (
@@ -1405,8 +1505,10 @@ def setup_lucj_callbacks(ctx):
         if not circuits:
             return
         if not intra_qpu_mode.value and len(circuits) > 1:
-            intra_qpu_mode.value = True
-        num_circuits.value = len(circuits)
+            intra_qpu_mode.value = True     # OFF→ON reveal: legitimate rebuild
+        # Count change from our own apply → targeted refresh, no view rebuild
+        # (the Multi results below render in place; no flicker).
+        set_num_circuits(len(circuits))
         state.push_undo()
         for c in circuits:
             _apply_multi_candidate(c['circuit_idx'], c['chosen'])
@@ -1500,13 +1602,17 @@ def setup_lucj_callbacks(ctx):
 
         def _work():
             from ..multi_sweep import replan_from
-            return replan_from(result, i, choice)
+            with _capture_qpu_notices(lambda: f'replan C{i + 1}') as handler:
+                new_result = replan_from(result, i, choice)
+            return (new_result, list(handler.records))
 
-        def _done(new_result):
+        def _done(payload):
+            new_result, records = payload
             _multi_sweep['result'] = new_result
             _apply_multi_sweep(new_result)
             _multi_sweep['replan_in_flight'] = False
             _render_multi_sweep_output(new_result)   # rebuilds dropdowns (enabled)
+            lbl_lucj_multi_notices.value = _notices_html(records)
 
         def _err(exc):
             _multi_sweep['replan_in_flight'] = False
@@ -1540,6 +1646,7 @@ def setup_lucj_callbacks(ctx):
         btn_lucj_multi_sweep.disabled = True
         btn_lucj_multi_sweep.description = '⏳ Sweeping...'
         lbl_lucj_multi.value = ""
+        lbl_lucj_multi_notices.value = ""
         kwargs = _sweep_kwargs_from_ui()
         excl = _multi_stability_exclusions()
         scoring_props = _local_scoring_props()
@@ -1547,25 +1654,30 @@ def setup_lucj_callbacks(ctx):
 
         def _reset_btn():
             btn_lucj_multi_sweep.disabled = False
-            btn_lucj_multi_sweep.description = '🧺 Generate Multi-Circuit (sweep)'
+            btn_lucj_multi_sweep.description = '🧺 Generate Multi-Circuit'
 
         def _work():
             from ..multi_sweep import sweep_multi_circuits
-            return sweep_multi_circuits(
-                norbs, state.active_backend, scoring_props,
-                min_bridges=min_bridges_list, top_n=kwargs['top_n'],
-                buffer_qubits=buffer, exclude_qubits=excl,
-                mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
-                diversity_threshold=kwargs['diversity_threshold'],
-                circuit_score_fn=_circuit_score)
+            with _capture_qpu_notices(lambda: 'multi sweep') as handler:
+                result = sweep_multi_circuits(
+                    norbs, state.active_backend, scoring_props,
+                    min_bridges=min_bridges_list, top_n=kwargs['top_n'],
+                    buffer_qubits=buffer, exclude_qubits=excl,
+                    mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
+                    diversity_threshold=kwargs['diversity_threshold'],
+                    circuit_score_fn=_circuit_score)
+            return (result, list(handler.records))
 
-        def _done(result):
+        def _done(payload):
+            result, records = payload
             _reset_btn()
             _multi_sweep['result'] = result
-            _apply_multi_sweep(result)
-            _render_multi_sweep_output(result)
-            with contextlib.suppress(Exception):
-                ctx.update_view()
+            _apply_multi_sweep(result)          # targeted count refresh (no rebuild)
+            _render_multi_sweep_output(result)  # summary + dropdowns in place
+            lbl_lucj_multi_notices.value = _notices_html(records)
+            # No ctx.update_view() here: _apply_multi_sweep already did the
+            # targeted refresh + _refresh()/_get_export(), and the Multi results
+            # render into persistent widgets — a full rebuild would only flicker.
 
         def _err(exc):
             _reset_btn()
@@ -1601,50 +1713,57 @@ def setup_lucj_callbacks(ctx):
             return m, False
         return (res.get('total_product') or 0.0), True
 
-    def _batch_ks(res):
-        return ', '.join(f"k={len(c['chosen']['ancillas'])}"
-                         for c in res.get('circuits', []))
+    def _batch_line_html(res):
+        """Compact per-QPU line: 'C1: k=3 · 72.2% | batch: 72.2%'. A circuit
+        that could not fit is labeled inline ('Ci: does not fit'); '(template)'
+        marks a product-only metric."""
+        parts = []
+        for c in res.get('circuits', []):
+            ch = c['chosen']
+            pct, is_tmpl = _entry_lqs_pct(ch)
+            tmpl = ' (template)' if is_tmpl else ''
+            parts.append(f"C{c['circuit_idx'] + 1}: k={len(ch['ancillas'])} "
+                         f"· {pct}{tmpl}")
+        fa = res.get('failed_at')
+        if fa is not None:
+            parts.append(f"C{fa + 1}: does not fit")
+        m, is_tmpl = _batch_metric(res)
+        parts.append(f"batch: {m * 100.0:.1f}%{' (template)' if is_tmpl else ''}")
+        return ' | '.join(parts)
 
     def _render_batch_results(scan_result):
-        head = ("<table style='font-size:13px;border-collapse:collapse;'>"
-                "<tr style='background:#eaf2f8;'>"
-                "<th style='padding:3px 8px;text-align:left;'>QPU</th>"
-                "<th style='padding:3px 8px;'>batch LQS</th>"
-                "<th style='padding:3px 8px;'>per-circuit k</th>"
-                "<th style='padding:3px 8px;'>fit</th></tr>")
-        rows, detail_widgets = [], []
-        for r in scan_result['results']:
+        # ONE QPU selector over the scan_qpus-ranked batches: pick a backend,
+        # see its per-circuit detail, open the whole batch on QPU 2. A batch
+        # that does not fully fit is selectable but not openable.
+        def _label(r):
             name = esc(str(r['name']))
             if r.get('error'):
-                rows.append(
-                    f"<tr style='color:#999;background:#f7f7f7;'><td "
-                    f"style='padding:3px 8px;'>{name}</td><td colspan='3' "
-                    f"style='padding:3px 8px;'>✗ {esc(str(r['error']))}</td></tr>")
-                continue
+                return f"{name} — ✗ error"
+            m, is_tmpl = _batch_metric(r.get('sweep') or {})
+            return (f"{name} — batch {m * 100.0:.1f}%"
+                    f"{' (template)' if is_tmpl else ''}")
+
+        def _detail(r):
+            box = ("<div style='font-size:13px;background:#f8f9fa;padding:4px 6px;"
+                   "border-radius:3px;margin:2px 0;'>")
+            if r.get('error'):
+                return box + f"✗ {esc(str(r['error']))}</div>"
+            return box + f"{esc(_batch_line_html(r.get('sweep') or {}))}</div>"
+
+        def _open_ok(r):
             res = r.get('sweep') or {}
-            m, is_tmpl = _batch_metric(res)
-            lqs = f"{m * 100.0:.1f}%{' (template)' if is_tmpl else ''}"
-            fa = res.get('failed_at')
-            fit = ('<span style="color:#1e8449;">ok</span>' if fa is None
-                   else f"<span style='color:#e67e22;'>failed_at={fa}</span>")
-            rows.append(
-                f"<tr><td style='padding:3px 8px;'>{name}</td>"
-                f"<td style='padding:3px 8px;text-align:center;'>{esc(lqs)}</td>"
-                f"<td style='padding:3px 8px;text-align:center;'>{esc(_batch_ks(res))}</td>"
-                f"<td style='padding:3px 8px;text-align:center;'>{fit}</td></tr>")
-            # Per-QPU expandable detail + a one-click handoff button.
-            if res.get('circuits'):
-                detail_widgets.append(HTML(
-                    f"<div style='font-size:13px;font-weight:bold;margin:6px 0 2px;'>"
-                    f"{name} — {esc(_multi_summary_html(res))}</div>"))
-                btn = Button(description=f'📡 open {r["name"]} on QPU 2',
-                             layout=W, button_style='')
-                chosen = [c['chosen'] for c in res['circuits']]
-                nm = r['name']
-                btn.on_click(lambda _b, nm=nm, ch=chosen: _batch_handoff(nm, ch))
-                detail_widgets.append(btn)
-        table = HTML(head + "".join(rows) + "</table>")
-        scan_batch_box.children = [table] + detail_widgets
+            return (not r.get('error') and bool(res.get('circuits'))
+                    and res.get('failed_at') is None)
+
+        def _payload(r):
+            res = r.get('sweep') or {}
+            return [c['chosen'] for c in res.get('circuits', [])]
+
+        scan_batch_box.children = _scan_selector(
+            scan_result['results'],
+            label_fn=_label, detail_fn=_detail, open_ok_fn=_open_ok,
+            payload_fn=_payload,
+            disabled_tip='batch does not fully fit on this backend')
 
     def _batch_handoff(backend_name, chosen_list):
         hook = inter_qpu_handoff[0] if inter_qpu_handoff else None
@@ -1800,8 +1919,7 @@ def setup_lucj_callbacks(ctx):
                         label.value = (
                             f"<div style='font-size:14px;background:#f8f9fa;padding:4px 6px;"
                             f"border-radius:3px;border:1px solid #dee2e6;margin:2px 0;'>"
-                            f"α: {', '.join(str(q) for q in entry['alpha'])}<br>"
-                            f"β: {', '.join(str(q) for q in entry['beta'])}</div>")
+                            f"α={len(entry['alpha'])} β={len(entry['beta'])}</div>")
                         if ci < len(_lucj_multi_norbs_list) - 1:
                             _reoptimize_downstream(ci)
                     return _cb

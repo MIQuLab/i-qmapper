@@ -127,6 +127,38 @@ def _dropdowns(children):
     return [c for c in children if isinstance(c, Dropdown)]
 
 
+def _walk(node):
+    yield node
+    for ch in getattr(node, 'children', []):
+        yield from _walk(ch)
+
+
+def _selector(b):
+    from ipywidgets import Dropdown
+    return next(w for w in b.scan_results_box.children if isinstance(w, Dropdown))
+
+
+def _labels(b):
+    """The scan selector's dropdown option labels (name — best%)."""
+    return [lbl for lbl, _ in _selector(b).options]
+
+
+def _detail(b, i):
+    """Select row i in the selector and return its rendered detail HTML."""
+    from ipywidgets import HTML
+    dd = _selector(b)
+    dd.value = i
+    ch = list(b.scan_results_box.children)
+    di = ch.index(dd)
+    return next(w.value for w in ch[di + 1:] if isinstance(w, HTML))
+
+
+def _detail_by_name(b, name):
+    dd = _selector(b)
+    idx = next(i for lbl, i in dd.options if name in lbl)
+    return _detail(b, idx)
+
+
 # ── happy path — table sorted, dropdowns, button re-enabled ─────────────────
 
 def test_scan_happy_path(monkeypatch):
@@ -135,10 +167,11 @@ def test_scan_happy_path(monkeypatch):
     b.btn_scan_qpus.click()
 
     children = b.scan_results_box.children
-    table_html = children[0].value
-    assert table_html.index('ibm_b') < table_html.index('ibm_a')   # sorted
-    assert '60.0%' in table_html and '40.0%' in table_html
-    assert len(_dropdowns(children)) == 2                           # per success
+    # The per-QPU blocks are ONE selector dropdown, ranked (best first).
+    assert len(_dropdowns(children)) == 1
+    labels = _labels(b)
+    assert labels[0].startswith('ibm_b') and 'ibm_a' in labels[1]   # sorted
+    assert '60.0%' in labels[0] and '40.0%' in labels[1]            # best% in label
     assert b.btn_scan_qpus.disabled is False
 
 
@@ -167,10 +200,12 @@ def test_scan_failed_row_escaped(monkeypatch):
         'ibm_c': RuntimeError('boom <x>')})
     b.btn_scan_qpus.click()
 
-    table_html = b.scan_results_box.children[0].value
-    assert 'color:#999' in table_html
-    assert 'boom &lt;x&gt;' in table_html
-    assert '<x>' not in table_html
+    # The errored backend is a selectable row; its label + detail name the
+    # esc()'d error (no raw angle brackets leak into HTML).
+    assert any('ibm_c' in lbl and '✗ error' in lbl for lbl in _labels(b))
+    detail = _detail_by_name(b, 'ibm_c')
+    assert 'boom &lt;x&gt;' in detail
+    assert '<x>' not in detail
 
 
 # ── handoff — selecting a remote candidate stages it ────────────────────────
@@ -182,13 +217,19 @@ def test_scan_handoff_on_select(monkeypatch):
     b._inter_qpu_handoff[0] = lambda name, cand: staged.append((name, cand))
 
     b.btn_scan_qpus.click()
-    dds = _dropdowns(b.scan_results_box.children)
-    dds[0].value = 0                                # ibm_b top candidate
+    # Select the top QPU in the selector, then click its "open on QPU 2" button.
+    from ipywidgets import Button, HBox
+    sel = _dropdowns(b.scan_results_box.children)[0]
+    sel.value = 0                                   # ibm_b (top-ranked)
+    btns = [c for w in b.scan_results_box.children
+            for c in (w.children if isinstance(w, HBox) else [w])
+            if isinstance(c, Button)]
+    btns[0].click()
 
     assert len(staged) == 1
     name, cand = staged[0]
     assert name == 'ibm_b'
-    assert cand['ancillas'] == [4, 5]              # flat[0] = k=2 entry
+    assert cand['ancillas'] == [4, 5]              # the QPU's best (k=2) candidate
 
 
 # ── sweep mode greys the score checkbox ────────────────────────────────
@@ -220,7 +261,7 @@ def test_scan_circuit_lqs_annotated(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     _patch_scan(monkeypatch)                        # stub props score → circuit LQS
     b.btn_scan_qpus.click()
-    assert '(template)' not in b.scan_results_box.children[0].value
+    assert not any('(template)' in lbl for lbl in _labels(b))
 
 
 def test_scan_template_suffix_only_on_failure(monkeypatch):
@@ -229,7 +270,7 @@ def test_scan_template_suffix_only_on_failure(monkeypatch):
     _patch_scan(monkeypatch, props={'ibm_b': _StubProps(None), 'ibm_a': _StubProps(None),
                                     'ibm_c': _StubProps(None)})
     b.btn_scan_qpus.click()
-    assert '(template)' in b.scan_results_box.children[0].value
+    assert any('(template)' in lbl for lbl in _labels(b))
 
 
 # ── vintage renders 'live · <fetch time>' (no stale badge) ───────────
@@ -240,9 +281,9 @@ def test_scan_live_vintage(monkeypatch):
                                     'ibm_a': _StubProps(0.4, 'live · 09:30'),
                                     'ibm_c': _StubProps(0.0, 'live · 09:30')})
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert 'live · 09:30' in table
-    assert 'stale calib' not in table          # stale-badge path removed
+    detail = _detail(b, 0)                      # calib vintage on detail line 2
+    assert 'live · 09:30' in detail
+    assert 'stale calib' not in detail          # stale-badge path removed
 
 
 # ── a fetch failure → honest error row, others complete ──────────────
@@ -264,9 +305,8 @@ def test_scan_fetch_failure_error_row(monkeypatch):
     monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props", get_props)
 
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert 'network down' in table             # ibm_a → honest error row
-    assert 'live · 09:30' in table             # ibm_b completed
+    assert 'network down' in _detail_by_name(b, 'ibm_a')   # honest error row
+    assert 'live · 09:30' in _detail_by_name(b, 'ibm_b')   # ibm_b completed
 
 
 # ── stability filter still reads the cache for HISTORY ────────────────
@@ -351,10 +391,10 @@ def test_active_backend_skipped_with_reference(monkeypatch):
 
     b.btn_scan_qpus.click()
     assert 'stub' not in swept                       # active never swept
-    table = b.scan_results_box.children[0].value
-    assert '📍 stub' in table
-    assert 'current backend' in table
-    assert 'run Auto above' in table                 # no local sweep yet → hint
+    # (The removed comparison table used to render a greyed '📍 <active>'
+    # reference row; that row is gone with the table. The skip behaviour — the
+    # active backend is never re-swept — is what still matters and is pinned.)
+    assert 'stub' not in [lbl.split(' —')[0] for lbl in _labels(b)]  # not a row
 
 
 # ── scan honors the hybrid checkbox ─────────────────────────────────────
@@ -379,8 +419,8 @@ def test_scan_honors_hybrid_checkbox(monkeypatch):
 
 def _scan_html(b):
     from ipywidgets import HTML
-    return " ".join(c.value for c in b.scan_results_box.children
-                    if isinstance(c, HTML))
+    return " ".join(w.value for w in _walk(b.scan_results_box)
+                    if isinstance(w, HTML))
 
 
 def _patch_one_target(monkeypatch, sweep, props_obj):
@@ -402,9 +442,8 @@ def test_annotation_failure_is_none_not_zero(monkeypatch):
     _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _RaiseProps())
 
     b.btn_scan_qpus.click()
-    html = _scan_html(b)
-    assert '(template)' in html                     # None → template, not 0.0%
-    assert 'circuit score unavailable' in html      # failure named in notices
+    assert any('(template)' in lbl for lbl in _labels(b))   # None → template
+    assert 'circuit score unavailable' in _scan_html(b)     # named in notices
 
 
 def test_genuine_zero_renders_as_zero(monkeypatch):
@@ -417,9 +456,9 @@ def test_genuine_zero_renders_as_zero(monkeypatch):
     _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _ZeroProps())
 
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert '0.0%' in table                          # genuine zero shown as 0.0%
-    assert '(template)' not in table                # 0.0 is a real score
+    # Genuine zero shows as 0.0% in the per-k detail; not flagged (template).
+    assert '0.0%' in _detail(b, 0)
+    assert not any('(template)' in lbl for lbl in _labels(b))
 
 
 def test_summary_best_is_max_over_non_none(monkeypatch):
@@ -433,6 +472,6 @@ def test_summary_best_is_max_over_non_none(monkeypatch):
     _patch_one_target(monkeypatch, _sweep(0.60, 0.50), _VaryProps())
 
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert '62.0%' in table                         # summary = max, NOT the
-    assert not table.split('ibm_a')[1].startswith('0.0')   # k_max 0.0 wall
+    label = _labels(b)[0]
+    assert '62.0%' in label                          # summary/label = max, NOT
+    assert '— 0.0%' not in label                     # the k_max 0.0 wall

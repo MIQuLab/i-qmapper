@@ -220,3 +220,81 @@ def test_batch_handoff_applies_all_circuits(monkeypatch):
     s2 = captured['s2']
     assert s2.layouts_data[0]['alpha'] == ['0'] and s2.layouts_data[0]['ancilla'] == ['2']
     assert s2.layouts_data[1]['alpha'] == ['3'] and s2.layouts_data[1]['ancilla'] == ['5']
+
+
+# ── PAINT-PATH regression: the REAL build wipes layouts mid-connect ──────────
+#    build_mapper_ui → _load_device_graph → state.clear_all_layouts(). A
+#    candidate applied BEFORE the build was silently wiped and never painted.
+#    This drives the REAL build (only the device/network deps are stubbed) and
+#    proves the candidate both LANDS on QPU-2 state AND reaches the figure.
+
+def _qubit_marker_colors(fig):
+    """The per-qubit marker colour array from the figure (len == n_qubits)."""
+    for tr in fig.data:
+        mc = getattr(getattr(tr, 'marker', None), 'color', None)
+        if isinstance(mc, (list, tuple)) and len(mc) == 8:
+            return list(mc)
+    return []
+
+
+def test_first_connect_paints_candidate_real_build(monkeypatch):
+    import numpy as np
+
+    def _fake_device(state, vendor, chip, date, prefetched_props=None):
+        n = 8
+        return (list(range(n)), [0.0] * n, [(i, i + 1) for i in range(n - 1)],
+                [str(i) for i in range(n)],
+                np.array([0.01 * (i + 1) for i in range(n)]),
+                np.array([0.001 * (i + 1) for i in range(n - 1)]))
+
+    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
+    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+                        lambda b, n: (object(), None))
+    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+                        lambda b: ([(i, 0) for i in range(8)], 'chip'))
+    import qpu_mapper.async_util as au
+    monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
+    monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
+
+    from qpu_mapper.state import SessionState
+    from qpu_mapper.ui.builder import MapperUIBuilder
+    state = SessionState()
+    state.active_backend = object()
+    state.active_backend_name = 'ibm_here'
+    state.active_chip = 'chip'
+    state.active_service = SimpleNamespace(backend=lambda n: SimpleNamespace(name=n))
+    state.available_backends = ['ibm_k']
+    state.props_warning = None
+    state.initial_props = object()
+    state.active_ansatz = 'lucj'
+    state.active_vendor = 'IBM'
+    state.active_coords = [(i, 0) for i in range(8)]
+    state.custom_colors = []
+    state.cal_history_dates = ['_seed_']
+    b = MapperUIBuilder(state)
+    b.build()
+
+    # Capture the connected QPU-2 state + figure by wrapping the REAL build.
+    import qpu_mapper.ui as ui_pkg
+    real = ui_pkg.build_mapper_ui
+    cap = {}
+
+    def _wrap(s2, is_secondary=False, return_widgets=False):
+        res = real(s2, is_secondary=is_secondary, return_widgets=return_widgets)
+        cap['s2'], cap['fig'] = s2, res[1]
+        return res
+    monkeypatch.setattr(ui_pkg, 'build_mapper_ui', _wrap)
+
+    cand = {'alpha': [0, 1], 'beta': [2, 3], 'ancillas': [4], 'lqs_circuit': 0.54}
+    b._inter_qpu_handoff[0]('ibm_k', cand)
+
+    # (a) candidate LANDED on QPU-2 state (survived clear_all_layouts()).
+    d = cap['s2'].layouts_data[0]
+    assert d['alpha'] == ['0', '1'] and d['beta'] == ['2', '3'] and d['ancilla'] == ['4']
+    assert d['styles']                                    # per-qubit paint styles set
+    # (b) figure RECEIVED the layout — the 5 candidate qubits are painted, not
+    # the unpainted white; an untouched qubit stays white (specificity).
+    colors = _qubit_marker_colors(cap['fig'])
+    assert len(colors) == 8
+    assert all(colors[i] != '#ffffff' for i in (0, 1, 2, 3, 4))   # painted
+    assert colors[7] == '#ffffff'                                  # untouched

@@ -70,11 +70,11 @@ def _build(monkeypatch):
 
 def test_local_block_above_scan(monkeypatch):
     b = _build(monkeypatch)
-    view = b._build_auto_lucj_view()
-    children = list(view.children)
-    # The local sweep dropdown must precede the scan results container.
+    b._build_auto_lucj_view()
+    # The single-circuit content now lives in its own subpanel (the Auto tab
+    # splits Single / Multi via a Tab); the ordering invariant holds there.
+    children = list(b._auto_single_panel.children)
     assert children.index(b.dd_lucj_layout) < children.index(b.scan_results_box)
-    # And the "This backend (<name>)" header exists, with the active name.
     from ipywidgets import HTML
     headers = [c.value for c in children if isinstance(c, HTML)]
     assert any('📍 This backend (ibm_here)' in h for h in headers)

@@ -45,6 +45,18 @@ def _canned_res(stability):
             'stability': stability}
 
 
+def _detail_by_name(b, name):
+    """Select the scan-selector row whose label contains `name` and return its
+    rendered detail HTML (the comparison table is gone; per-backend stability /
+    cap / calib now live on the detail's second line)."""
+    from ipywidgets import Dropdown, HTML
+    dd = next(w for w in b.scan_results_box.children if isinstance(w, Dropdown))
+    dd.value = next(i for lbl, i in dd.options if name in lbl)
+    ch = list(b.scan_results_box.children)
+    di = ch.index(dd)
+    return next(w.value for w in ch[di + 1:] if isinstance(w, HTML))
+
+
 def _build(monkeypatch, *, history=False, spawn=_sync_spawn,
            marshal=lambda cb: cb()):
     import qpu_mapper.async_util as au
@@ -175,9 +187,8 @@ def test_scan_stability_badges(monkeypatch):
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
-    assert '🛡 −2 qubits' in table                             # cached → filtered
-    assert 'n/a (no cached history)' in table                  # fresh → n/a
+    assert '🛡 −2 qubits' in _detail_by_name(b, 'ibm_a')       # cached → filtered
+    assert 'n/a (no cached history)' in _detail_by_name(b, 'ibm_b')  # fresh → n/a
 
 
 # ── filter OFF keeps the plain sweep path ───────────────────────────────
@@ -264,9 +275,8 @@ def test_scan_filtered_per_backend_isolation(monkeypatch):
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
     b.btn_scan_qpus.click()
-    table = b.scan_results_box.children[0].value
     # (a) isolation: ibm_c's raise became an error row, loop not killed.
-    assert 'cache read exploded' in table
+    assert 'cache read exploded' in _detail_by_name(b, 'ibm_c')
     # (b) both badge paths: cached → filtered, fresh → n/a.
-    assert '🛡 −2 qubits' in table                  # ibm_a cached → filtered
-    assert 'n/a (no cached history)' in table        # ibm_b (after ibm_c) fresh
+    assert '🛡 −2 qubits' in _detail_by_name(b, 'ibm_a')       # cached → filtered
+    assert 'n/a (no cached history)' in _detail_by_name(b, 'ibm_b')  # fresh → n/a

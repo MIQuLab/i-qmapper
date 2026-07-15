@@ -202,11 +202,25 @@ def test_batch_scan_rows_sorted_and_failed_labeled(monkeypatch):
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_scan_batch.click()
 
-    table = b.scan_batch_box.children[0].value
-    assert table.index('ibm_hi') < table.index('ibm_lo')      # sorted
-    assert '61.0%' in table and '40.0%' in table
-    assert 'failed_at=1' in table                             # labeled, not errored
-    assert '✗' not in table
+    # ONE selector dropdown (no table), labels sorted by batch LQS + one button.
+    from ipywidgets import Dropdown, HTML, HBox
+    kids = list(b.scan_batch_box.children)
+    dd = next(c for c in kids if isinstance(c, Dropdown))
+    det = next(c for c in kids if isinstance(c, HTML))
+    btn = next(c for w in kids for c in
+               (w.children if isinstance(w, HBox) else [w]) if isinstance(c, Button))
+
+    labels = [o[0] for o in dd.options]
+    assert not any('<table' in lab for lab in labels)
+    assert labels[0].startswith('ibm_hi') and 'ibm_lo' in labels[1]  # sorted
+    assert '61.0%' in labels[0] and '40.0%' in labels[1]
+    # Selecting the failed batch: detail names the failure, open disabled + tip.
+    dd.value = 1
+    assert 'C2: does not fit' in det.value and '✗' not in det.value
+    assert btn.disabled is True and 'does not fully fit' in btn.tooltip
+    # A fitting batch is openable.
+    dd.value = 0
+    assert btn.disabled is False
 
 
 def test_batch_scan_sweep_fn_gets_multi_knobs(monkeypatch):
@@ -236,3 +250,30 @@ def test_batch_scan_sweep_fn_gets_multi_knobs(monkeypatch):
     k = seen['kwargs']
     assert k['top_n'] == 7 and k['mapping_cap'] == 5000
     assert k['hybrid'] is False and k['diversity_threshold'] == 0.8
+
+
+# ── batch handoff fires from the selector's open button (right payload) ──────
+
+def test_batch_selector_handoff_payload(monkeypatch):
+    b, state = _build(monkeypatch)
+    from qpu_mapper import qpu_scan as qs
+    monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [])
+    monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {'results': [
+        _batch_result_row('ibm_hi', 0.61, 2)],
+        'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0})
+    staged = []
+    b._inter_qpu_handoff[0] = lambda name, payload: staged.append((name, payload))
+    b.lucj_multi_norbs.value = '8, 8'
+    b.btn_scan_batch.click()
+
+    from ipywidgets import Dropdown, HBox
+    kids = list(b.scan_batch_box.children)
+    btn = next(c for w in kids for c in
+               (w.children if isinstance(w, HBox) else [w]) if isinstance(c, Button))
+    btn.click()
+
+    assert len(staged) == 1
+    name, payload = staged[0]
+    assert name == 'ibm_hi'
+    assert isinstance(payload, list) and len(payload) == 2      # both circuits
+    assert payload[0]['ancillas'] == [4] and payload[1]['ancillas'] == [5]

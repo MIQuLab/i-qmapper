@@ -147,6 +147,36 @@ def _fake_sweep_topn(*a, **k):
     }
 
 
+# ── A3: local sweep status carries a 'scored on live · HH:MM' vintage ───────
+#    so a scan-vs-local number mismatch reads as calibration drift (the two
+#    numbers were taken at different moments), not a bug.
+
+def test_local_sweep_status_shows_live_vintage(builder, monkeypatch):
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: _fake_sweep_result())
+    b = builder
+    b.btn_lucj_run.click()
+
+    status = b.lbl_lucj_status.value
+    assert '✅' in status                              # success summary
+    import re
+    assert re.search(r'scored on live · \d\d:\d\d', status)   # live vintage stamp
+
+
+def test_local_sweep_status_vintage_uses_past_date(builder, monkeypatch):
+    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+                        lambda *a, **k: _fake_sweep_result())
+    b = builder
+    # A selected PAST date → the vintage names that date, not live.
+    b.state.time_mode = 'point'
+    b.state.point_timestamp = '2026-07-01 08:00:00'
+    b.btn_lucj_run.click()
+
+    status = b.lbl_lucj_status.value
+    assert 'scored on 2026-07-01' in status
+    assert 'live ·' not in status
+
+
 def test_top_n_field_controls_dropdown_entries(builder, monkeypatch):
     monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
                         _fake_sweep_topn)

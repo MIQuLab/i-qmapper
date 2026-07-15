@@ -370,14 +370,6 @@ def setup_inter_qpu(ctx):
             s2.props_warning = props_warn
             s2.active_coords = new_coords
 
-            # if this connect was staged from a scan pick for this
-            # backend, pre-load the chosen candidate so QPU-2 paints it.
-            pend = _pending_handoff[0]
-            if pend is not None and pend[0] == backend_name:
-                with contextlib.suppress(Exception):
-                    _apply_candidate_to_state(s2, pend[1])
-                _pending_handoff[0] = None
-
             # Build the FULL secondary UI — feature-parity with QPU 1.
             # build_mapper_ui internally calls _load_device_graph which
             # populates s2.x_coord / qubit_ids / edges_list from props,
@@ -385,6 +377,20 @@ def setup_inter_qpu(ctx):
             # ahead of time anymore.
             full_ui_2, f2, w2 = build_mapper_ui(
                 s2, is_secondary=True, return_widgets=True)
+
+            # If this connect was staged from a scan pick for THIS backend,
+            # paint the chosen candidate now — AFTER the build. Applying it
+            # before build_mapper_ui was a silent no-op: _load_device_graph
+            # calls state.clear_all_layouts(), wiping any pre-loaded slot, so
+            # the candidate never reached the first paint. Apply post-clear and
+            # repaint the figure so it shows on the very first view.
+            pend = _pending_handoff[0]
+            if pend is not None and pend[0] == backend_name:
+                with contextlib.suppress(Exception):
+                    _apply_candidate_to_state(s2, pend[1])
+                    from .. import plot as _plot
+                    _plot.refresh_plot(f2, s2, w2)
+                _pending_handoff[0] = None
             # Top-level shape: HBox([ui_sidebar, fig_box]).
             # fig_box.children = (lbl_fig1, zoom_bar, fig).
             #

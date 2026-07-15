@@ -310,6 +310,7 @@ class MapperUIBuilder:
             chk_lucj_diverse=self.chk_lucj_diverse,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
+            lbl_lucj_notices=self.lbl_lucj_notices,
             dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
@@ -319,8 +320,10 @@ class MapperUIBuilder:
             btn_scan_batch=self.btn_scan_batch,
             scan_batch_box=self.scan_batch_box,
             lbl_lucj_multi=self.lbl_lucj_multi,
+            lbl_lucj_multi_notices=self.lbl_lucj_multi_notices,
             lucj_multi_detail_box=self.lucj_multi_detail_box,
             num_circuits=self.num_circuits, intra_qpu_mode=self.intra_qpu_mode, dd_mode=self.dd_mode,
+            set_num_circuits=self._set_num_circuits_silent,
             lucj_all_layouts=self._lucj_all_layouts,
             lucj_multi_results=self._lucj_multi_results,
             lucj_multi_norbs_list=self._lucj_multi_norbs,
@@ -820,9 +823,9 @@ class MapperUIBuilder:
         )
         self.nav_bar = ToggleButtons(
             options=[
-                ('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
+                ('✏️ Layout', 'manual'),
                 ('🤖 Auto', 'auto_lucj'),
-                ('📤 Export', 'export'), ('🔍 Error', 'error_inspect'),
+                ('📁 I/O', 'io'), ('🔍 Error', 'error_inspect'),
             ],
             value='manual', style={'button_width': '120px'},
         )
@@ -1271,6 +1274,9 @@ class MapperUIBuilder:
         self.lbl_lucj_status = HTML("")
         # Sweep truncation banner (VF2 cap hit); empty/hidden otherwise.
         self.lbl_lucj_trunc = HTML("")
+        # Captured WARNING+ from the local sweep (loud notices bar); empty when
+        # the sweep emitted nothing.
+        self.lbl_lucj_notices = HTML("")
 
         # ── Stability filter (opt-in) ────────────────────────────
         self.chk_stability_filter = Checkbox(
@@ -1345,29 +1351,30 @@ class MapperUIBuilder:
             value='8, 8', description='norb per circuit:',
             placeholder='e.g. 8, 8 or 10, 10, 6',
             layout=W, style={'description_width': 'initial'})
-        # Per-circuit ancilla (bridge) counts, parallel to norb. Blank →
-        # the single Ancilla dropdown applies to every circuit (legacy);
-        # otherwise one value per circuit (-1 = auto for that circuit).
+        # Per-circuit MIN ancillas (bridge floor) for the sweep, parallel to
+        # norb. Blank → auto per circuit; otherwise one value per circuit.
         self.lucj_multi_ancillas = Text(
-            value='', description='ancilla per circuit:',
-            placeholder='blank = use Ancilla above; or e.g. 2, 2  (-1 = auto)',
+            value='', description='min ancillas per circuit:',
+            placeholder='blank = auto; or e.g. 2, 2',
             layout=W, style={'description_width': 'initial'},
-            tooltip='Legacy Generate: exact bridge count per circuit. '
-                    'Sweep (🧺): per-circuit min ancillas (floor); '
-                    'blank = engine default.')
+            tooltip='min ancillas per circuit (blank = auto)')
         # Buffer qubits: tiny range 0-5, numeric input is more direct.
         self.lucj_buffer_slider = BoundedIntText(
             value=1, min=0, max=5,
             description='Buffer qubits:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
+        # Legacy multi-circuit button — no longer shown in the Multi subpanel
+        # (the sweep is the single generate action). The widget + its handler
+        # (_on_lucj_multi) and engine (get_multi_circuit_layouts) stay wired and
+        # test-pinned; it is simply omitted from the layout below.
         self.btn_lucj_multi = Button(
             description='🤖 Generate Multi-Circuit',
             button_style='success', layout=W)
-        # Sweep-based multi-circuit: greedy auto-best per circuit with a
-        # per-circuit override dropdown (uses the ancilla sweep + buffer).
+        # Sweep-based multi-circuit (the ONLY multi generate action in the UI):
+        # greedy auto-best per circuit with a per-circuit override dropdown.
         self.btn_lucj_multi_sweep = Button(
-            description='🧺 Generate Multi-Circuit (sweep)',
+            description='🧺 Generate Multi-Circuit',
             button_style='info', layout=W)
         # Batch scan: run the whole multi-circuit batch on every compatible QPU.
         self.btn_scan_batch = Button(
@@ -1377,6 +1384,9 @@ class MapperUIBuilder:
                     'backend and rank by batch fidelity')
         self.scan_batch_box = VBox([])
         self.lbl_lucj_multi = HTML("")
+        # Captured WARNING+ from the multi-circuit sweep + replan (loud notices
+        # bar); empty when nothing was emitted.
+        self.lbl_lucj_multi_notices = HTML("")
         # Populated dynamically with per-circuit dropdowns when the
         # user clicks btn_lucj_multi.
         self.lucj_multi_detail_box = VBox()
@@ -1648,6 +1658,9 @@ class MapperUIBuilder:
             description='📤 Export PNG (HQ)',
             button_style='primary', layout=W)
         self.json_preview = HTML("")
+        # JSON preview starts collapsed; the open/closed choice persists for
+        # the session (the Export subpanel is rebuilt on every nav switch).
+        self._json_preview_open = False
 
         # Shared "Save folder" for every export (PNG / JSON / session /
         # style / GIF/MP4). Plain Text field — user types a path
@@ -1730,6 +1743,25 @@ class MapperUIBuilder:
             self.chk_stability_filter.tooltip = (
                 'Fetch calibration history first (Stability Check / Multi-day)')
 
+    @staticmethod
+    def _restore_tab_index(prev, tabs):
+        """Carry a Tab's ``selected_index`` across a from-scratch rebuild.
+
+        Every structural refresh (num_circuits / dd_mode / intra_qpu_mode
+        observers, ``_toggle_intra_qpu``, an explicit ``update_view`` from the
+        multi Generate flow) funnels through the ``_build_*_view`` methods,
+        each of which mints a FRESH ``Tab`` whose ``selected_index`` defaults to
+        0 — bouncing the user off whatever subpanel they were on (e.g. Multi →
+        Single mid-Generate). Restoring the previous index at this single choke
+        point fixes every current and future trigger. Clamped to the new child
+        count so a shrink (e.g. intra_qpu OFF drops the Multi subpanel) can't
+        point past the end. First build (prev is None) keeps the default 0."""
+        prev_idx = getattr(prev, 'selected_index', None)
+        n = len(tabs.children)
+        if prev_idx is not None and n:
+            tabs.selected_index = min(prev_idx, n - 1)
+        return tabs
+
     def _build_auto_lucj_view(self):
         """Build the 'Auto' nav tab view (LUCJ chemistry mode).
 
@@ -1744,14 +1776,13 @@ class MapperUIBuilder:
         falls back to the dropdown).
         """
         self._refresh_stability_filter_availability()
+        prev_tabs = getattr(self, '_auto_lucj_tabs', None)
         name = esc(str(getattr(self.state, 'active_backend_name', '')
                        or 'current backend'))
-        return VBox([
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:4px 0;'>"
-                 "🤖 Auto-LUCJ Layout Engine</div>"),
-            HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔬 Single Circuit</div>"),
+        # Subpanel 1 — "Single Circuit": everything except the Multi-Circuit
+        # section (single-circuit controls + the local results + the scan
+        # block). Mirrors the Error tab's Tab-based subpanel switcher.
+        single_panel = VBox([
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
@@ -1767,13 +1798,12 @@ class MapperUIBuilder:
             self.btn_lucj_run,
             self.lbl_lucj_trunc,
             self.lbl_lucj_status,
-            # ── Local (current backend) results — ABOVE the scan block ──
+            self.lbl_lucj_notices,
             HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
             HTML(f"<div style='font-size:14px;font-weight:bold;color:#1a5276;"
                  f"margin:3px 0;'>📍 This backend ({name})</div>"),
             self.dd_lucj_layout,
             self.lbl_lucj_detail,
-            # ── Remote scan block — its own header + Clear control ──────
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
             HBox([
                 HTML("<div style='font-size:14px;font-weight:bold;"
@@ -1786,32 +1816,74 @@ class MapperUIBuilder:
             self.chk_scan_stability,
             self.lbl_scan_progress,
             self.scan_results_box,
-            HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔗 Multi-Circuit (Multi-Programming)</div>"),
+        ], layout=Layout(padding='6px'))
+        # Subpanel 2 — "Multi-Circuit": revealed only while Multi-Programming
+        # (intra-QPU) is enabled; the enable checkbox rebuilds this view.
+        multi_panel = VBox([
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
-            self.btn_lucj_multi,
+            # Legacy btn_lucj_multi intentionally omitted — the sweep button is
+            # the single generate action. Handler/engine remain wired + pinned.
             self.btn_lucj_multi_sweep,
             self.btn_scan_batch,
             self.lbl_lucj_multi,
+            self.lbl_lucj_multi_notices,
             self.lucj_multi_detail_box,
             self.scan_batch_box,
         ], layout=Layout(padding='6px'))
+        self._auto_single_panel = single_panel
+        self._auto_multi_panel = multi_panel
+        if self.intra_qpu_mode.value:
+            tabs = Tab(children=[single_panel, multi_panel])
+            tabs.set_title(0, '🔬 Single Circuit')
+            tabs.set_title(1, '🔗 Multi-Circuit')
+        else:
+            tabs = Tab(children=[single_panel])
+            tabs.set_title(0, '🔬 Single Circuit')
+        # Keep the user on the subpanel they were viewing across rebuilds.
+        self._auto_lucj_tabs = self._restore_tab_index(prev_tabs, tabs)
+        return VBox([
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;"
+                 "margin:4px 0;'>🤖 Auto-LUCJ Layout Engine</div>"),
+            HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
+            tabs,
+        ], layout=Layout(padding='6px'))
+
+    def _on_json_preview_toggle(self, change):
+        """Persist the JSON-preview open/closed choice; refresh on expand."""
+        self._json_preview_open = change['new'] is not None
+        if self._json_preview_open:
+            self._get_export()
+
+    def _build_import_export_view(self):
+        """The unified '📁 I/O' nav tab: an Export subpanel and an
+        Import subpanel (the former '📂 Load' view), switched via a Tab — the
+        same pattern as the Error / Auto tabs."""
+        prev_tabs = getattr(self, '_io_tabs', None)
+        io_tabs = Tab(children=[self._build_export_view(),
+                                self._build_auto_view()])
+        io_tabs.set_title(0, '📤 Export')
+        io_tabs.set_title(1, '📥 Import')
+        # Same class of bug as the Auto tab: a refresh while the user is on the
+        # Import subpanel would otherwise snap back to Export.
+        self._io_tabs = self._restore_tab_index(prev_tabs, io_tabs)
+        return io_tabs
 
     def _build_export_view(self):
-        """Build the 'Export' nav tab view. Aggregates every export/save
-        control: live JSON preview, Export Layout (JSON), Export PNG
-        (popup wired by ``setup_png_export``), Export Session, Export
-        Style Preset, Export Time-Lapse.
+        """Build the Export subpanel: JSON preview (collapsible), Export Layout
+        (JSON), Export PNG, Export Session, Export Style Preset, Export
+        Time-Lapse.
         """
+        preview = Accordion(children=[self.json_preview])
+        preview.set_title(0, 'JSON preview')
+        preview.selected_index = 0 if self._json_preview_open else None
+        preview.observe(self._on_json_preview_toggle, names='selected_index')
         return VBox([
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📁 Save folder (applies to every export below)</div>"),
             self.save_folder,
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
-            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📋 JSON Preview</div>"),
-            self.json_preview,
+            preview,
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📤 Export Layout</div>"),
             self.export_format,
@@ -1929,6 +2001,10 @@ class MapperUIBuilder:
         _err_tabs = Tab(children=[_err_tab_map, _err_tab_analysis])
         _err_tabs.set_title(0, '🔍 Calibration')
         _err_tabs.set_title(1, '🏆 Analysis')
+        # Preserve the Calibration/Analysis subtab across rebuilds (same class
+        # of bug as the Auto/I/O tabs).
+        self._err_tabs = self._restore_tab_index(
+            getattr(self, '_err_tabs', None), _err_tabs)
         return _err_tabs
 
     def _refresh(self, *args):
@@ -2494,11 +2570,13 @@ class MapperUIBuilder:
             self.dd_lucj_layout.options = []
             self.dd_lucj_layout.disabled = True
             self.lbl_lucj_status.value = ""
+            self.lbl_lucj_notices.value = ""
             self.lbl_lucj_detail.value = ""
             self._lucj_multi_results.clear()
             self._lucj_multi_norbs.clear()
             self._lucj_multi_dropdowns.clear()
             self.lbl_lucj_multi.value = ""
+            self.lbl_lucj_multi_notices.value = ""
             self.lucj_multi_detail_box.children = ()
 
             # {} (not None) for delta props — plot.py readers guard on
@@ -2573,12 +2651,12 @@ class MapperUIBuilder:
         # Update nav bar: hide Auto-LUCJ in general mode
         is_lucj = self.dd_mode.value == 'lucj'
         if is_lucj:
-            new_opts = [('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
-                        ('🤖 Auto', 'auto_lucj'),
-                        ('📤 Export', 'export'), ('🔍 Error', 'error_inspect')]
+            new_opts = [('✏️ Layout', 'manual'), ('🤖 Auto', 'auto_lucj'),
+                        ('📁 I/O', 'io'),
+                        ('🔍 Error', 'error_inspect')]
         else:
-            new_opts = [('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
-                        ('📤 Export', 'export'), ('🔍 Error', 'error_inspect')]
+            new_opts = [('✏️ Layout', 'manual'), ('📁 I/O', 'io'),
+                        ('🔍 Error', 'error_inspect')]
         current_vals = [v for _, v in self.nav_bar.options]
         new_vals = [v for _, v in new_opts]
         if current_vals != new_vals:
@@ -2611,14 +2689,13 @@ class MapperUIBuilder:
             self._ext_fns["update_grank"]()
         if mode == 'manual':
             self.content_box.children = [self._build_manual_view()]
-        elif mode == 'auto':
-            self.content_box.children = [self._build_auto_view()]
         elif mode == 'auto_lucj':
             self.content_box.children = [self._build_auto_lucj_view()]
-        elif mode == 'export':
+        elif mode == 'io':
+            # Unified Import / Export tab (Export + former Load subpanels).
             self._get_export()
             self._ext_fns["update_fidelity"]()
-            self.content_box.children = [self._build_export_view()]
+            self.content_box.children = [self._build_import_export_view()]
         elif mode == 'error_inspect':
             self.content_box.children = [self._build_error_view()]
 
@@ -2697,6 +2774,31 @@ class MapperUIBuilder:
         except Exception:
             _log.exception(
                 "update_fidelity failed after history load")
+
+    def _set_num_circuits_silent(self, n):
+        """Set ``num_circuits`` WITHOUT the full ``_update_view`` rebuild its
+        observer would fire — used when a multi-circuit sweep/legacy apply
+        changes the count as a RESULT of its own action.
+
+        The visible Multi subpanel is already updated in place (its summary and
+        per-circuit override dropdowns are persistent widgets refreshed by the
+        caller), so rebuilding ``content_box`` would only repaint an identical
+        panel — the flicker X2b targets. A count change genuinely needs just the
+        OFF-SCREEN refresh: the per-circuit manual UI + the ancilla-tool
+        options — exactly what ``_build_dynamic_ui`` does (it never touches
+        ``content_box``). The nav options don't depend on ``num_circuits`` (only
+        on ``dd_mode``), so they need no refresh here.
+
+        The unobserve→set→observe idiom (same as ``_update_view``'s nav-bar
+        reseed) silences only THIS assignment; the ``_restore_tab_index`` helper
+        still guards every legitimate full rebuild (checkbox toggles, nav
+        switches)."""
+        self.num_circuits.unobserve(self._update_view, 'value')
+        try:
+            self.num_circuits.value = n
+        finally:
+            self.num_circuits.observe(self._update_view, 'value')
+        self._build_dynamic_ui()
 
     def _toggle_intra_qpu(self, change):
         """Observer for ``intra_qpu_mode`` — enable/disable num_circuits + refresh view."""
