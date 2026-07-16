@@ -43,6 +43,36 @@ from ..state import SessionState
 _log = logging.getLogger(__name__)
 
 
+def _resync_widget_state(fig):
+    """Force ``fig``'s full state into its synced widget traits before the
+    figure is first mounted via ``Box.children``.
+
+    plotly 6.x FigureWidget snapshots ``_widget_data``/``_widget_layout`` only
+    at construction (empty) and in ``_repr_mimebundle_`` (cell display). A
+    figure mounted as a child widget never passes through either, so the
+    frontend model renders whatever subset of the incremental
+    ``_py2js_addTraces``/``restyle``/``relayout`` messages it managed to apply.
+    In the live one-click handoff that subset lost the qubit node trace →
+    "edges but no nodes" empty map (the frontend model's ``do_data`` handler is
+    a no-op, so this resync repaints nothing once a view exists — it MUST run
+    before the mount). Re-snapshotting here makes the trait state
+    authoritative, matching what plotly itself does at display time.
+
+    Touches plotly-private attributes, so it is a guarded no-op if they ever
+    move; failure must never break the connect (worst case: the pre-fix
+    behavior). Returns True if the resync was applied.
+    """
+    try:
+        from copy import deepcopy
+        fig._widget_data = deepcopy(fig._data)
+        fig._widget_layout = deepcopy(fig._layout_obj._props)
+        return True
+    except Exception:                    # noqa: BLE001 - logged, never fatal
+        _log.warning("widget-state resync skipped (plotly internals moved?)",
+                     exc_info=True)
+        return False
+
+
 def setup_inter_qpu(ctx):
     """Wire the inter-QPU toggle + connect-QPU2 callbacks.
 
@@ -424,6 +454,11 @@ def setup_inter_qpu(ctx):
                 f"text-align:center;margin-bottom:2px;'>"
                 f"📡 {esc(backend_name)}</div>"
             )
+            # Resync the full figure state into the synced widget traits so
+            # the view created by the mount below renders the complete figure
+            # regardless of which incremental messages the frontend applied.
+            # Must precede the children assignment (see _resync_widget_state).
+            _resync_widget_state(f2)
             qpu2_fig_box.children = [lbl_fig2, zoom2_bar, f2]
             # Match inter-QPU fig size via the QPU 2 sliders (their observers
             # propagate to f2.update_layout).
