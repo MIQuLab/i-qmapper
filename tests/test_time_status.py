@@ -13,10 +13,6 @@ the writers we control. These tests lock in both:
     pointing to the LAST available entry (documented "show the latest we
     have" semantic);
   * happy-path output must be byte-identical to before the guards.
-
-The SPEC referred to the reader as ``describe_current_time``; the actual
-function name in the code is ``describe_current_view`` (same signature,
-same branches).
 """
 from types import SimpleNamespace
 
@@ -69,7 +65,7 @@ def _ref_state(mode, *, time_mode, cal_history_dates=(), range_index=0,
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Stale-index regressions — the SPEC's four crash scenarios
+# Stale-index regressions — the four crash scenarios
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_describe_current_view_range_stale_index_does_not_raise():

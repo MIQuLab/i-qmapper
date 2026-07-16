@@ -3,8 +3,8 @@ export.autodetect — Split a flat qubit list into LUCJ alpha/beta
 partitions when possible, and parse the textual `parse_auto_text`
 payload (used by the Auto-map UI tab).
 
-NOTE: when the LUCJ VF2 recovery functions land (separate feature spec),
-they belong here too — same domain, shared graph-component plumbing.
+NOTE: when the LUCJ VF2 recovery functions land, they belong here too —
+same domain, shared graph-component plumbing.
 """
 import contextlib
 import logging

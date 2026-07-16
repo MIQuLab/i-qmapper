@@ -1,6 +1,6 @@
 """Unit tests for qpu_mapper.stability.analyze_property_stability.
 
-Covers the seven cases called out in the spec:
+Covers seven cases:
   1. Error kind, happy path (stable series)
   2. Time kind, happy path (stable series)
   3. NaN handling (NaN samples are skipped)
