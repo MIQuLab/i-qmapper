@@ -63,14 +63,14 @@ def test_subpanels_follow_multi_programming(monkeypatch):
     b.intra_qpu_mode.value = False
     b._build_auto_lucj_view()
     assert len(b._auto_lucj_tabs.children) == 1              # Single only
-    assert b._auto_lucj_tabs.get_title(0) == '🔬 Single Circuit'
+    assert b._auto_lucj_tabs.get_title(0) == '🔬 Single'
     # Multi widgets are not in the single panel.
     assert b.btn_scan_batch not in b._auto_single_panel.children
 
     b.intra_qpu_mode.value = True
     b._build_auto_lucj_view()
     assert len(b._auto_lucj_tabs.children) == 2              # Single + Multi
-    assert b._auto_lucj_tabs.get_title(1) == '🔗 Multi-Circuit'
+    assert b._auto_lucj_tabs.get_title(1) == '🔗 Multi'
     assert b.btn_scan_batch in b._auto_multi_panel.children
     assert b.btn_lucj_multi_sweep in b._auto_multi_panel.children
 

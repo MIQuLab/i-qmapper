@@ -40,6 +40,43 @@ _PERMISSION_HINTS = ('permission denied', 'read-only')
 _DISK_FULL_HINTS = ('no space left', 'disk full', 'enospc')
 
 
+def _append_live_colorbars(export_fig, live_fig, plot_mod):
+    """Copy the live figure's visible colorbar traces onto the export figure.
+
+    The static renderer (plot.build_static_figure) colors nodes/edges but has
+    no colorbar code; the interactive figure's two placeholder traces
+    (_META_CB_QUBIT / _META_CB_GATE) hold the exact colorbar configuration the
+    user is looking at (ranges, log/linear/delta regime, tick labels, titles).
+    Copying them guarantees the PNG shows what the screen shows. No-op when
+    the bars are hidden (design mode / no data) or the placeholders are
+    missing. Returns the number of bars appended.
+    """
+    import plotly.graph_objects as go
+    appended = 0
+    if live_fig is None:
+        return 0
+    for meta in (plot_mod._META_CB_QUBIT, plot_mod._META_CB_GATE):
+        try:
+            tr = plot_mod._trace_by_meta(live_fig, meta)
+            if tr is None or not tr.marker.showscale:
+                continue
+            export_fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode='markers',
+                hoverinfo='none', showlegend=False,
+                marker=tr.marker.to_plotly_json(),
+            ))
+            appended += 1
+        except Exception:                    # noqa: BLE001 - never break export
+            _log.exception("colorbar copy failed for %s; PNG saved without it",
+                           meta)
+    if appended:
+        # The bars render below the axes (y=-0.08); make sure the export
+        # canvas leaves room for them, whatever margin the user picked.
+        cur_b = getattr(export_fig.layout.margin, 'b', None) or 0
+        export_fig.layout.margin.b = max(cur_b, 120)
+    return appended
+
+
 def _classify_write_error(exc: BaseException) -> str:
     """Map an exception from fig.write_image() to a short user-friendly hint.
 
@@ -91,6 +128,11 @@ def setup_png_export(ctx):
                               build_static_figure
       safe_path             — path-sanitiser
       out                   — Output widget for log messages
+
+    Optional ctx fields:
+      fig                   — the live FigureWidget; its visible colorbars are
+                              copied onto the PNG (the static renderer has none).
+                              Missing → PNG saved without colorbars, as before.
     """
     state = ctx.state
     widgets_ref = ctx.widgets_ref
@@ -101,6 +143,7 @@ def setup_png_export(ctx):
     user_save_path = ctx.user_save_path
     save_dir = ctx.save_dir
     lbl_png_status = ctx.lbl_png_status
+    live_fig = getattr(ctx, 'fig', None)   # for _append_live_colorbars
 
     margin_slider = IntSlider(
         value=40, min=0, max=200, step=5,
@@ -189,6 +232,10 @@ def setup_png_export(ctx):
                 margin=margin_px,
                 crop_to_selection=crop_checkbox.value,
             )
+            # The static renderer has no colorbar code; copy the visible ones
+            # off the live figure so the PNG matches the screen (no-op in
+            # design mode / when the live fig is unavailable).
+            _append_live_colorbars(export_fig, live_fig, plot_mod)
             export_fig.write_image(
                 img_path, scale=scale,
                 width=opts['fig_width'], height=opts['fig_height'],

@@ -60,11 +60,11 @@ def test_unified_io_tab(monkeypatch):
     b.nav_bar.value = 'io'
     view = b.content_box.children[0]
     assert isinstance(view, Tab) and len(view.children) == 2
-    assert view.get_title(0) == '📤 Export'
-    assert view.get_title(1) == '📥 Import'
+    assert view.get_title(0) == '📥 Import'
+    assert view.get_title(1) == '📤 Export'
     assert exp_calls                                       # export path ran on open
 
-    export_panel, import_panel = view.children[0], view.children[1]
+    import_panel, export_panel = view.children[0], view.children[1]
     assert _contains(export_panel, b.btn_save_json)        # export control present
     assert _contains(import_panel, b.btn_unified_upload)   # import control present
 
@@ -88,7 +88,7 @@ def test_old_nav_tabs_removed(monkeypatch):
 def test_json_preview_collapsible(monkeypatch):
     b, state = _build(monkeypatch)
     b.nav_bar.value = 'io'
-    export_panel = b.content_box.children[0].children[0]
+    export_panel = b.content_box.children[0].children[1]   # Export is now 2nd subtab
     acc = _find(export_panel, Accordion)
     assert acc is not None
     assert acc.selected_index is None                       # collapsed by default
@@ -103,5 +103,5 @@ def test_json_preview_collapsible(monkeypatch):
 
     # Choice persists: a rebuilt Export subpanel keeps the preview open.
     io2 = b._build_import_export_view()
-    acc2 = _find(io2.children[0], Accordion)
+    acc2 = _find(io2.children[1], Accordion)              # Export is the 2nd subtab
     assert acc2.selected_index == 0

@@ -1015,12 +1015,9 @@ class TimePanelBuilder:
 
         # ── 3. Per-mode sub-panels ──────────────────────────────────
 
-        # 3a — Live
-        self.sub_live = VBox([
-            HTML(_status_html('info',
-                 'Showing the current live calibration from the backend.',
-                 escape=False))
-        ])
+        # 3a — Live: no sub-panel content needed; the header already states
+        # what is shown ("Showing: Live calibration — <backend>").
+        self.sub_live = VBox([])
 
         # 3b — Snapshot
         self.dp_point       = DatePicker(description='Date:', layout=_W)

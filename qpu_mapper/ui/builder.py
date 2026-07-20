@@ -274,6 +274,7 @@ class MapperUIBuilder:
             refresh=self._refresh, get_export=self._get_export,
             out=self.out,
             refresh_qpu1_label=self._refresh_qpu1_label,
+            refresh_time_panel=lambda: self._time_api.rebuild(),
         ))
 
         # ── Inter-QPU mode (toggle + connect QPU2) ───────────────────
@@ -371,6 +372,7 @@ class MapperUIBuilder:
             W=W,
             plot_mod=plot_mod, safe_path=_safe_path, user_save_path=_user_save_path, save_dir=self._save_dir, out=self.out,
             lbl_png_status=self.lbl_png_status,
+            fig=self.fig,               # live figure — copy its visible colorbars into the PNG
         ))
 
 
@@ -399,9 +401,11 @@ class MapperUIBuilder:
         # Built at builder scope so the panel's slider state (intraday
         # timestamps, range) persists across nav / num_circuits / mode
         # changes — otherwise every _update_view rebuild would discard a
-        # fetched scan. The returned `api` handle (rebuild / status_text)
-        # is discarded; the panel drives its own re-render via observers.
-        self._time_panel, _ = _build_time_panel(
+        # fetched scan. The returned `api` handle is KEPT (self._time_api):
+        # a backend switch resets the panel's time-state but never fires its
+        # own observers, so the switch wiring calls api.rebuild() to re-render
+        # the header + sub-panels for the new backend.
+        self._time_panel, self._time_api = _build_time_panel(
             state=state,
             data_mod=data_mod,
             export_mod=export_mod,
@@ -1713,18 +1717,18 @@ class MapperUIBuilder:
         ])
 
     def _build_auto_view(self):
-        """Build the 'Load' nav tab view (General Ansatz mode): four
-        load-from-outside sections — layout-file upload, paste auto-map,
+        """Build the 'Load'/Import nav tab view (General Ansatz mode): four
+        load-from-outside sections — paste auto-map, layout-file upload,
         session load, style preset load. In LUCJ mode the same nav slot
         selects ``_build_auto_lucj_view`` via
         ``nav_bar.value == 'auto_lucj'``.
         """
         return VBox([
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>✏️ Paste qubit list</div>"),
+            self.txt_auto, self.btn_auto,
+            HTML("<hr style='margin:4px 0;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>📂 Load layout file</div>"),
             self.btn_unified_upload,
-            HTML("<hr style='margin:4px 0;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>✏️ Or paste qubit list</div>"),
-            self.txt_auto, self.btn_auto,
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>💾 Load Session</div>"),
             self.btn_load_session,
@@ -1786,9 +1790,9 @@ class MapperUIBuilder:
         prev_tabs = getattr(self, '_auto_lucj_tabs', None)
         name = esc(str(getattr(self.state, 'active_backend_name', '')
                        or 'current backend'))
-        # Subpanel 1 — "Single Circuit": everything except the Multi-Circuit
-        # section (single-circuit controls + the local results + the scan
-        # block). Mirrors the Error tab's Tab-based subpanel switcher.
+        # Subpanel 1 — "Single" (single-circuit): everything except the
+        # Multi-Circuit section (single-circuit controls + the local results +
+        # the scan block). Mirrors the Error tab's Tab-based subpanel switcher.
         single_panel = VBox([
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
@@ -1824,8 +1828,8 @@ class MapperUIBuilder:
             self.lbl_scan_progress,
             self.scan_results_box,
         ], layout=Layout(padding='6px'))
-        # Subpanel 2 — "Multi-Circuit": revealed only while Multi-Programming
-        # (intra-QPU) is enabled; the enable checkbox rebuilds this view.
+        # Subpanel 2 — "Multi" (multi-circuit): revealed only while Multi-
+        # Programming (intra-QPU) is enabled; the enable checkbox rebuilds it.
         multi_panel = VBox([
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
@@ -1843,11 +1847,11 @@ class MapperUIBuilder:
         self._auto_multi_panel = multi_panel
         if self.intra_qpu_mode.value:
             tabs = Tab(children=[single_panel, multi_panel])
-            tabs.set_title(0, '🔬 Single Circuit')
-            tabs.set_title(1, '🔗 Multi-Circuit')
+            tabs.set_title(0, '🔬 Single')
+            tabs.set_title(1, '🔗 Multi')
         else:
             tabs = Tab(children=[single_panel])
-            tabs.set_title(0, '🔬 Single Circuit')
+            tabs.set_title(0, '🔬 Single')
         # Keep the user on the subpanel they were viewing across rebuilds.
         self._auto_lucj_tabs = self._restore_tab_index(prev_tabs, tabs)
         return VBox([
@@ -1864,16 +1868,16 @@ class MapperUIBuilder:
             self._get_export()
 
     def _build_import_export_view(self):
-        """The unified '📁 I/O' nav tab: an Export subpanel and an
-        Import subpanel (the former '📂 Load' view), switched via a Tab — the
-        same pattern as the Error / Auto tabs."""
+        """The unified '📁 I/O' nav tab: an Import subpanel (the former '📂 Load'
+        view) first, then an Export subpanel, switched via a Tab — the same
+        pattern as the Error / Auto tabs. Opens on Import by default."""
         prev_tabs = getattr(self, '_io_tabs', None)
-        io_tabs = Tab(children=[self._build_export_view(),
-                                self._build_auto_view()])
-        io_tabs.set_title(0, '📤 Export')
-        io_tabs.set_title(1, '📥 Import')
-        # Same class of bug as the Auto tab: a refresh while the user is on the
-        # Import subpanel would otherwise snap back to Export.
+        io_tabs = Tab(children=[self._build_auto_view(),
+                                self._build_export_view()])
+        io_tabs.set_title(0, '📥 Import')
+        io_tabs.set_title(1, '📤 Export')
+        # Same class of bug as the Auto tab: a refresh while the user is on a
+        # non-default subpanel would otherwise snap back to index 0.
         self._io_tabs = self._restore_tab_index(prev_tabs, io_tabs)
         return io_tabs
 
@@ -1924,11 +1928,11 @@ class MapperUIBuilder:
 
         Returns a ``Tab`` widget with two sub-tabs:
 
-          * **🔍 Calibration** — Property & Scale row, Threshold
-            Filter, and the Calibration & Delta section anchored on
-            the hoisted ``self._time_panel`` (whose slider state
-            survives nav / num_circuits / mode changes).
-          * **🏆 Analysis** — collapsible Qubit Inspector accordion,
+          * **Calibration** — Property & Scale row, Threshold
+            Filter, and the Calibration section anchored on the hoisted
+            ``self._time_panel`` (whose slider state survives nav /
+            num_circuits / mode changes).
+          * **Analysis** — collapsible Qubit Inspector accordion,
             Ranking accordion, Qubit + Gate Trend rows, Stable
             Qubits + Stable Gates rows.
 
@@ -1944,7 +1948,6 @@ class MapperUIBuilder:
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>🔍 Focus</div>"),
             self.chk_focus_selected,
             self.chk_isolate,
-            HTML("<div style='font-size:14px;color:#666;margin:1px 0;'>Error map of the layout only</div>"),
             HTML("<hr style='margin:6px 0; border-color:#bce8f1;'>"),
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>🎯 Threshold Filter</div>"),
             self.chk_err_threshold,
@@ -1956,7 +1959,7 @@ class MapperUIBuilder:
                   Label('Max', layout=Layout(width='30px')), self.txt_g_thr_max]),
             self.threshold_status,
             HTML("<hr style='margin:6px 0; border-color:#bce8f1;'>"),
-            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>⏱️ Calibration &amp; Delta</div>"),
+            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>⏱️ Calibration</div>"),
             self._time_panel,
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             self.lbl_calibration_date,
@@ -2006,8 +2009,8 @@ class MapperUIBuilder:
         ])
 
         _err_tabs = Tab(children=[_err_tab_map, _err_tab_analysis])
-        _err_tabs.set_title(0, '🔍 Calibration')
-        _err_tabs.set_title(1, '🏆 Analysis')
+        _err_tabs.set_title(0, 'Calibration')
+        _err_tabs.set_title(1, 'Analysis')
         # Preserve the Calibration/Analysis subtab across rebuilds (same class
         # of bug as the Auto/I/O tabs).
         self._err_tabs = self._restore_tab_index(

@@ -146,9 +146,23 @@ def test_io_subtab_survives_rebuild(monkeypatch):
     b, state = _build(monkeypatch)
     b.nav_bar.value = 'io'
     assert len(b._io_tabs.children) == 2
-    b._io_tabs.selected_index = 1                # Import subpanel
+    b._io_tabs.selected_index = 1                # Export subpanel (index 1)
     b._update_view()                             # a refresh while on I/O
-    assert b._io_tabs.selected_index == 1         # still Import, not Export
+    assert b._io_tabs.selected_index == 1         # still Export, not Import (index 0)
+
+
+def test_io_import_first_paste_first(monkeypatch):
+    from ipywidgets import HTML
+    b, state = _build(monkeypatch)
+    b.nav_bar.value = 'io'
+    # I/O opens on Import (index 0); Export is the second sub-tab.
+    assert b._io_tabs.get_title(0) == '📥 Import'
+    assert b._io_tabs.get_title(1) == '📤 Export'
+    # Import subpanel leads with the paste-qubit-list block (renamed, no "Or").
+    import_panel = b._io_tabs.children[0]
+    first_html = next(c for c in import_panel.children if isinstance(c, HTML))
+    assert 'Paste qubit list' in first_html.value
+    assert 'Or paste' not in first_html.value
 
 
 def test_error_subtab_survives_rebuild(monkeypatch):
