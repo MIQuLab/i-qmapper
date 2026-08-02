@@ -121,6 +121,59 @@ def _capture_qpu_notices(context_getter):
             pass
 
 
+class _SnapshotProps:
+    """UI-layer adapter: dict-array calibration (state.qubit_props_data /
+    gate_props_data + edges_list) → the BackendProperties surface the
+    auto-LUCJ search calls (``readout_error`` / ``gate_error`` / ``t1`` /
+    ``t2``). Lets the search score on the LOADED snapshot — the SAME arrays
+    C1 and the error map read — instead of live backend.properties().
+
+    Does NOT touch data.py / auto_lucj.py: it only reshapes what the UI
+    already holds. Unknown qubits/edges/keys return NaN, which the search's
+    existing NaN-penalty path handles.
+    """
+    def __init__(self, qubit_props, gate_props, edges):
+        self._ro = qubit_props.get('readout_error')
+        self._t1 = qubit_props.get('t1')
+        self._t2 = qubit_props.get('t2')
+        # 2Q error: prefer cz_error, else the first *_error key present.
+        self._gkey = ('cz_error' if 'cz_error' in gate_props else
+                      next((k for k in gate_props if k.endswith('_error')), None))
+        self._garr = gate_props.get(self._gkey) if self._gkey else None
+        # Map both edge orders to the positional gate array index.
+        self._edge_ix = {}
+        for i, e in enumerate(edges):
+            u, v = int(e[0]), int(e[1])
+            self._edge_ix.setdefault((u, v), i)
+            self._edge_ix.setdefault((v, u), i)
+
+    @staticmethod
+    def _at(arr, i):
+        try:
+            return float(arr[i])
+        except Exception:
+            return float('nan')
+
+    def readout_error(self, qubit):
+        return self._at(self._ro, qubit) if self._ro is not None else float('nan')
+
+    def t1(self, qubit):
+        # Arrays store µs (constants: 'T1 (µs)'); the search multiplies by 1e6
+        # expecting seconds — so hand back seconds.
+        v = self._at(self._t1, qubit) if self._t1 is not None else float('nan')
+        return v / 1e6
+
+    def t2(self, qubit):
+        v = self._at(self._t2, qubit) if self._t2 is not None else float('nan')
+        return v / 1e6
+
+    def gate_error(self, gate_name, edge):
+        if self._garr is None:
+            return float('nan')
+        i = self._edge_ix.get((int(edge[0]), int(edge[1])))
+        return float('nan') if i is None else self._at(self._garr, i)
+
+
 def setup_lucj_callbacks(ctx):
     """Wire all LUCJ-related callbacks. Called from ui.py after widget creation."""
 
@@ -242,6 +295,39 @@ def setup_lucj_callbacks(ctx):
                               'line': _line, 'width': _width, 'text_color': _text}
         _refresh()
         _get_export()
+
+    # ── Calibration epoch: search must use the LOADED snapshot ───
+    def _snapshot_label():
+        """A display id for the active NON-LIVE snapshot, else None (live)."""
+        if getattr(state, 'time_mode', 'live') == 'live':
+            return None
+        ts = getattr(state, 'point_timestamp', None)
+        if isinstance(ts, str) and len(ts) >= 10:
+            return ts[:10]
+        return getattr(state, 'calibration_data_label', None) or 'loaded snapshot'
+
+    def _local_scoring_props():
+        """The props the auto-LUCJ search should score on. Live mode → the live
+        BackendProperties (unchanged). A loaded snapshot → an adapter over the
+        SAME arrays C1/the error map read, so ranking shares their epoch. Falls
+        back to initial_props ONLY if the arrays are absent — a scoring-input
+        choice must never break generation."""
+        if getattr(state, 'time_mode', 'live') == 'live':
+            return state.initial_props
+        qp = getattr(state, 'qubit_props_data', None)
+        gp = getattr(state, 'gate_props_data', None)
+        edges = getattr(state, 'edges_list', None)
+        if not qp or not gp or edges is None or 'readout_error' not in qp:
+            return state.initial_props
+        try:
+            return _SnapshotProps(qp, gp, list(edges))
+        except Exception:
+            return state.initial_props
+
+    def _epoch_suffix():
+        """B2: '· scored on <date>' for a non-live snapshot, else ''."""
+        lbl = _snapshot_label()
+        return f" · scored on {esc(str(lbl))}" if lbl else ""
 
     # ── Dropdown layout select ───────────────────────────────────
     def _on_lucj_layout_select(change):
@@ -367,25 +453,6 @@ def setup_lucj_callbacks(ctx):
         from datetime import datetime as _dt
         return f"scored on live · {_dt.now().strftime('%H:%M')}"
 
-    def _local_scoring_props():
-        """Pre-rank on the SAME epoch as the C1 circuit-score — the
-        selected date's arrays — so product_score and lqs_circuit never mix
-        epochs inside one search. Reuses the scan's CachedPropsShim adapter.
-        Falls back to live initial_props if the arrays aren't loaded / mis-shape
-        (never break the sweep for a scoring-input choice)."""
-        from ..props_shim import CachedPropsShim
-        qp = getattr(state, 'qubit_props_data', None)
-        gp = getattr(state, 'gate_props_data', None)
-        edges = getattr(state, 'edges_list', None)
-        if not qp or not gp or edges is None or 'readout_error' not in qp:
-            return state.initial_props
-        key = 'cz_error' if 'cz_error' in gp else next(iter(gp))
-        n = len(state.qubit_ids) if getattr(state, 'qubit_ids', None) else None
-        try:
-            return CachedPropsShim(qp, gp, list(edges), gate_key=key, n_qubits=n)
-        except Exception:
-            return state.initial_props
-
     # ── SINGLE SOURCE of sweep params — local AND scan read this ──
     def _sweep_kwargs_from_ui():
         """The one place sweep parameters are derived from the UI. Both the
@@ -417,7 +484,7 @@ def setup_lucj_callbacks(ctx):
             num_orbitals=norb,
             backend=state.active_backend,
             score=lucj_chk_score.value,
-            props=state.initial_props,
+            props=_local_scoring_props(),   # loaded snapshot, not live
             requested_bridges=requested_ancillas,
         )
 
@@ -452,14 +519,14 @@ def setup_lucj_callbacks(ctx):
                 f"border-radius:4px;border:1px solid #fdebd0;margin:3px 0;'>"
                 f"⚠️ Scoring unavailable (no calibration data). "
                 f"<b>{len(all_layouts)}</b> layouts found (unsorted). "
-                f"ancillas={num_ab}{ancilla_note}</div>")
+                f"ancillas={num_ab}{ancilla_note}{_epoch_suffix()}</div>")
         else:
             sc = f"{best['score']:.4f}" if best['score'] is not None else "N/A"
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;padding:4px 8px;"
                 f"border-radius:4px;border:1px solid #abebc6;margin:3px 0;'>"
                 f"✅ <b>{len(all_layouts)}</b> layouts found (norb={norb}, "
-                f"ancillas={num_ab}). Best: err={sc}{ancilla_note}</div>")
+                f"ancillas={num_ab}). Best: err={sc}{ancilla_note}{_epoch_suffix()}</div>")
 
     # ── Stratified ancilla sweep (new default) ───────────────────
     def _generate_sweep(norb):
@@ -1313,7 +1380,7 @@ def setup_lucj_callbacks(ctx):
                 backend=state.active_backend,
                 score=lucj_chk_score.value,
                 buffer_qubits=lucj_buffer_slider.value,
-                props=state.initial_props,
+                props=_local_scoring_props(),   # loaded snapshot, not live
                 requested_bridges=requested_ancillas,
                 requested_bridges_list=ancilla_list,
             )
@@ -1878,7 +1945,7 @@ def setup_lucj_callbacks(ctx):
                 changed_idx=changed_idx,
                 buffer_qubits=lucj_buffer_slider.value,
                 score=lucj_chk_score.value,
-                props=state.initial_props,
+                props=_local_scoring_props(),   # loaded snapshot, not live
                 requested_bridges=lucj_ancilla_dd.value,
                 requested_bridges_list=(list(_lucj_multi_ancillas_list)
                                         if _lucj_multi_ancillas_list else None),
