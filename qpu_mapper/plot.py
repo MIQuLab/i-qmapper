@@ -384,8 +384,9 @@ def refresh_plot(fig, state, widgets_ref):
     # layout, grey the rest. Same dim treatment as the threshold block;
     # the criterion is selection membership (`i in global_style`).
     # Guarded by `global_style` so it no-ops when nothing is placed
-    # (otherwise the whole chip would be greyed). Edges stay coloured
-    # only when BOTH endpoints are in the selection.
+    # (otherwise the whole chip would be greyed). Edges stay coloured only
+    # when both endpoints are in the selection AND in the same circuit;
+    # cross-circuit boundary gates belong to neither layout, so they dim.
     if is_err and w.chk_focus_selected.value and global_style:
         for i in range(n_q):
             if i not in global_style:
@@ -394,7 +395,11 @@ def refresh_plot(fig, state, widgets_ref):
                 l_widths[i] = 1.0
         for i, edge in enumerate(state.edges_list):
             u, v = edge
-            if not (u in global_style and v in global_style):
+            gk_u = qubit_group_key.get(u)
+            gk_v = qubit_group_key.get(v)
+            if not (u in global_style and v in global_style
+                    and gk_u is not None and gk_v is not None
+                    and gk_u[0] == gk_v[0]):
                 edge_colors[i] = _DIM_COL
                 edge_widths[i] = max(1, base_w - 1)
 
@@ -411,7 +416,11 @@ def refresh_plot(fig, state, widgets_ref):
                 l_widths[i] = 1.0
         for i, edge in enumerate(state.edges_list):
             u, v = edge
-            if not (u in global_style and v in global_style):
+            gk_u = qubit_group_key.get(u)
+            gk_v = qubit_group_key.get(v)
+            if not (u in global_style and v in global_style
+                    and gk_u is not None and gk_v is not None
+                    and gk_u[0] == gk_v[0]):
                 edge_colors[i] = _DIM_COL
                 edge_widths[i] = max(1, base_w - 1)
 
@@ -976,8 +985,14 @@ def build_static_figure(state, opts, margin=40, crop_to_selection=False, annotat
                     ec = _DIM_COL
                     ew = max(1.0, float(base_w - 1))
 
-            # Focus mode: grey edges not fully inside the selection.
-            if (opts.get('focus_selected') or opts.get('isolate')) and global_style and not (u in global_style and v in global_style):
+            # Focus mode: grey edges not fully inside the SAME circuit's
+            # selection — a boundary gate between two adjacent circuits has
+            # styled endpoints in DIFFERENT circuits and belongs to neither.
+            gk_u = qubit_group_key.get(u)
+            gk_v = qubit_group_key.get(v)
+            if (opts.get('focus_selected') or opts.get('isolate')) and global_style and not (
+                    u in global_style and v in global_style
+                    and gk_u is not None and gk_v is not None and gk_u[0] == gk_v[0]):
                 ec = _DIM_COL
                 ew = max(1.0, float(base_w - 1))
 
