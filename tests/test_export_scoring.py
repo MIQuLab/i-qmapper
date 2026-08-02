@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qpu_mapper.export.scoring import estimate_circuit_fidelity, compute_error_delta
+from iqpu_mapper.export.scoring import estimate_circuit_fidelity, compute_error_delta
 
 
 def test_fidelity_product_and_counts(make_state, make_slot):

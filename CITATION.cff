@@ -1,10 +1,10 @@
 cff-version: 1.2.0
-message: "If you use QPU Mapper in your research, please cite the I-QMapper paper (see preferred-citation)."
-title: "QPU Mapper"
+message: "If you use I-QMapper in your research, please cite the I-QMapper paper (see preferred-citation)."
+title: "I-QMapper"
 authors:
   - family-names: "Bazayeva"
     given-names: "Milana"
-version: 0.1.0
+version: 0.0.5
 license: Apache-2.0
 preferred-citation:
   type: article

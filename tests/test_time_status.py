@@ -1,4 +1,4 @@
-"""Regression tests for the pure status-describers in qpu_mapper.ui.time_panel.
+"""Regression tests for the pure status-describers in iqpu_mapper.ui.time_panel.
 
 Historical crash: state.cal_history_dates is rebuilt by multiple writers
 (range fetch, intraday scan, 14-day auto-load) while state.range_index /
@@ -20,7 +20,7 @@ same branches).
 """
 from types import SimpleNamespace
 
-import qpu_mapper.ui.time_panel as tp
+import iqpu_mapper.ui.time_panel as tp
 
 
 def _range_state(dates, range_index):

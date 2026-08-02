@@ -1,7 +1,7 @@
 """
 ui/builder.py — MapperUIBuilder class.
 
-Constructs the main QPU Mapper UI. Public entry is the module-level
+Constructs the main I-QMapper UI. Public entry is the module-level
 ``build_mapper_ui(state, is_secondary=False) -> (ui_hbox, fig)`` (kept
 for back-compat); it instantiates this class and calls ``build()``.
 Shared state (``self.fig``, ``widgets_ref``, ``self._ext_fns``) lives on
@@ -48,7 +48,7 @@ _log = logging.getLogger(__name__)
 
 
 class MapperUIBuilder:
-    """Orchestrates construction of the QPU Mapper UI.
+    """Orchestrates construction of the I-QMapper UI.
 
     Usage::
 
@@ -3218,7 +3218,7 @@ class MapperUIBuilder:
         )
         sidebar_hr = HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>")
 
-        # Stylesheet scoped to .qpu-mapper-sidebar (add_class below) so
+        # Stylesheet scoped to .iqpu-mapper-sidebar (add_class below) so
         # it doesn't leak. See _sidebar_css.py for the per-rule rationale.
         _sidebar_css = HTML(SIDEBAR_CSS)
 
@@ -3241,7 +3241,7 @@ class MapperUIBuilder:
         ], layout=Layout(padding='10px'))
 
         # Tag container so the scoped CSS selectors above apply.
-        ui_sidebar_content.add_class('qpu-mapper-sidebar')
+        ui_sidebar_content.add_class('iqpu-mapper-sidebar')
 
         # Populate the swappable sidebar body now that ui_sidebar_content exists
         self._sidebar_body.children = [ui_sidebar_content]
@@ -3289,7 +3289,7 @@ class MapperUIBuilder:
         bloating the instance with transient build artifacts.
 
         The QPU 2 placeholder VBoxes are empty until QPU 2 connects;
-        the sidebar box is pre-tagged with ``.qpu-mapper-sidebar``
+        the sidebar box is pre-tagged with ``.iqpu-mapper-sidebar``
         so the scoped CSS applies on append (otherwise QPU 2 widgets
         would render at the default ipywidgets font size and look
         inconsistent with the QPU 1 panel).
@@ -3299,7 +3299,7 @@ class MapperUIBuilder:
 
         qpu2_sidebar_box = VBox(layout=Layout(width='720px', padding='5px',
                                               border_right='2px solid #ddd'))
-        qpu2_sidebar_box.add_class('qpu-mapper-sidebar')
+        qpu2_sidebar_box.add_class('iqpu-mapper-sidebar')
         qpu2_fig_box = VBox()
 
         # ui_sidebar & fig_box NEVER move — QPU2 boxes are appended/removed.

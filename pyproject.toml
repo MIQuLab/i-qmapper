@@ -3,8 +3,8 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qpu-mapper"
-version = "0.1.0"
+name = "iqpu-mapper"
+version = "0.0.5"
 description = "Interactive, noise-aware QPU layout mapper for Jupyter Lab"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,11 +44,11 @@ timelapse = ["imageio", "imageio-ffmpeg"]
 dev = ["pytest>=7", "pytest-cov"]
 
 [project.urls]
-Homepage = "https://github.com/mbazayeva/qpu_mapper"
-Issues = "https://github.com/mbazayeva/qpu_mapper/issues"
-Changelog = "https://github.com/mbazayeva/qpu_mapper/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mbazayeva/iqpu_mapper"
+Issues = "https://github.com/mbazayeva/iqpu_mapper/issues"
+Changelog = "https://github.com/mbazayeva/iqpu_mapper/blob/main/CHANGELOG.md"
 Paper = "https://arxiv.org/abs/2606.27508"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["qpu_mapper", "qpu_mapper.*"]
+include = ["iqpu_mapper", "iqpu_mapper.*"]

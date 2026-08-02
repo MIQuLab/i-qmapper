@@ -1,6 +1,6 @@
 """Smoke tests for _upload.read_upload()."""
 import pytest
-from qpu_mapper._upload import read_upload
+from iqpu_mapper._upload import read_upload
 
 
 def test_empty_payload_rejected():

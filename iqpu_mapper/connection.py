@@ -180,7 +180,7 @@ def _make_connection_ui(on_connect_callback):
         "<h2 style='margin:0; font-size:22px; font-weight:400; "
         "color:#161616; letter-spacing:-0.01em; "
         "font-family: \"IBM Plex Sans\", -apple-system, sans-serif;'>"
-        "Interactive QPU Mapper</h2>"
+        "I-QMapper</h2>"
         "<div style='font-size:12px; color:#525252; margin-top:4px;'>"
         "Connect to a backend and configure the layout editor.</div>"
         "</div>"

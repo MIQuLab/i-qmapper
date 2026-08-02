@@ -1,5 +1,5 @@
 """
-tests/test_html_safe.py — Unit tests for qpu_mapper.html_safe.esc().
+tests/test_html_safe.py — Unit tests for iqpu_mapper.html_safe.esc().
 
 Closes the audit gap (AUDIT_REPORT § html_safe.py): the escape helper
 was previously untested even though it's the single defence against
@@ -7,7 +7,7 @@ XSS via user-influenced strings in ipywidgets.HTML widgets (loaded
 session JSON, calibration label strings, exception messages, ...).
 """
 
-from qpu_mapper.html_safe import esc
+from iqpu_mapper.html_safe import esc
 
 
 class TestEscBasic:

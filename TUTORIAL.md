@@ -1,4 +1,4 @@
-# QPU Mapper — Tutorial
+# I-QMapper — Tutorial
 
 A step-by-step walkthrough from zero to an exported, error-aware layout.
 Prerequisites: [Installation](README.md#installation) and
@@ -22,7 +22,7 @@ Prerequisites: [Installation](README.md#installation) and
 In a notebook cell:
 
 ```python
-from qpu_mapper import run
+from iqpu_mapper import run
 run()
 ```
 
@@ -147,10 +147,10 @@ independently of sessions.
 
 | What | Where |
 |---|---|
-| Calibration cache | macOS `~/Library/Caches/qpu_mapper` · Linux `~/.cache/qpu_mapper` (or `$XDG_CACHE_HOME/qpu_mapper`) · Windows `%LOCALAPPDATA%\qpu_mapper\Cache` |
-| Cache override | Set `QPU_MAPPER_CACHE_DIR` before launching to relocate it |
-| Sessions & style presets | `.qpu_mapper_sessions/` inside the directory your notebook runs from |
-| IBM credentials | **Not stored by QPU Mapper.** They live in your own `qiskit-ibm-runtime` account store (`~/.qiskit/qiskit-ibm.json`) |
+| Calibration cache | macOS `~/Library/Caches/iqpu_mapper` · Linux `~/.cache/iqpu_mapper` (or `$XDG_CACHE_HOME/iqpu_mapper`) · Windows `%LOCALAPPDATA%\iqpu_mapper\Cache` |
+| Cache override | Set `IQPU_MAPPER_CACHE_DIR` before launching to relocate it |
+| Sessions & style presets | `.iqpu_mapper_sessions/` inside the directory your notebook runs from |
+| IBM credentials | **Not stored by I-QMapper.** They live in your own `qiskit-ibm-runtime` account store (`~/.qiskit/qiskit-ibm.json`) |
 
 The cache exists so that time travel, delta views, and stability analysis cost
 no repeated API calls. It is safe to delete at any time — the tool recreates

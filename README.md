@@ -1,18 +1,18 @@
-# QPU Mapper
+# I-QMapper
 
 **Interactive, noise-aware qubit layout selection for IBM Quantum hardware — see your device, understand its errors, and place your circuit where it will actually run well.**
 
-[![tests](https://github.com/mbazayeva/qpu_mapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/qpu_mapper/actions/workflows/tests.yml)
+[![tests](https://github.com/mbazayeva/iqpu_mapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/iqpu_mapper/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
 
-QPU Mapper is presented in the paper *I-QMapper: Error-Aware Layout Optimization and
+I-QMapper is presented in the paper *I-QMapper: Error-Aware Layout Optimization and
 Device Diagnostics for NISQ Hardware* (Bazayeva & Merz,
 [arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). The repository tracks
 development beyond the arXiv version.
 
-![QPU Mapper — auto-placed LUCJ layout with role legend on an IBM Heron device](docs/img/hero.png)
+![I-QMapper — auto-placed LUCJ layout with role legend on an IBM Heron device](docs/img/hero.png)
 
 **Contents:**
 [Why](#why) ·
@@ -35,7 +35,7 @@ development beyond the arXiv version.
 On NISQ hardware, *where* you place a circuit matters as much as *what* you run:
 gate errors, readout errors, and coherence times vary across the chip and **drift
 over time**. Today you either eyeball calibration tables by hand or trust an
-automated layout pipeline you can't see into. QPU Mapper closes that gap: an
+automated layout pipeline you can't see into. I-QMapper closes that gap: an
 interactive Jupyter tool where the device, its calibration data, its history, and
 your layout live in one view — so every placement decision is **visible,
 inspectable, and reproducible**.
@@ -86,7 +86,7 @@ pip install -e ".[dev]"
 
 ## Set up your IBM Quantum account
 
-QPU Mapper uses the credentials you save locally with `qiskit-ibm-runtime` —
+I-QMapper uses the credentials you save locally with `qiskit-ibm-runtime` —
 it never asks for, stores, or transmits your token itself. One-time setup:
 
 ```python
@@ -128,7 +128,7 @@ QiskitRuntimeService.save_account(
 )
 ```
 
-In QPU Mapper's **account selector**, the default credential is used unless
+In I-QMapper's **account selector**, the default credential is used unless
 you pick a named one — switch between them anytime without re-entering
 anything.
 
@@ -137,7 +137,7 @@ anything.
 In a notebook cell:
 
 ```python
-from qpu_mapper import run
+from iqpu_mapper import run
 run()
 ```
 
@@ -171,12 +171,12 @@ and no extra API calls. For a module-by-module tour, see
 
 | What | Where |
 |---|---|
-| Calibration cache | macOS `~/Library/Caches/qpu_mapper` · Linux `~/.cache/qpu_mapper` (or `$XDG_CACHE_HOME/qpu_mapper`) · Windows `%LOCALAPPDATA%\qpu_mapper\Cache` |
-| Cache override | Set the `QPU_MAPPER_CACHE_DIR` environment variable to relocate it |
-| Sessions & style presets | `.qpu_mapper_sessions/` inside the directory your notebook runs from |
+| Calibration cache | macOS `~/Library/Caches/iqpu_mapper` · Linux `~/.cache/iqpu_mapper` (or `$XDG_CACHE_HOME/iqpu_mapper`) · Windows `%LOCALAPPDATA%\iqpu_mapper\Cache` |
+| Cache override | Set the `IQPU_MAPPER_CACHE_DIR` environment variable to relocate it |
+| Sessions & style presets | `.iqpu_mapper_sessions/` inside the directory your notebook runs from |
 
 The cache is safe to delete at any time — the tool recreates it and refetches
-on demand. Your IBM credentials are **not** stored by QPU Mapper at all; they
+on demand. Your IBM credentials are **not** stored by I-QMapper at all; they
 live in your own `qiskit-ibm-runtime` account store.
 
 </details>
@@ -188,7 +188,7 @@ live in your own `qiskit-ibm-runtime` account store.
 <br>
 
 Backend loading goes through an explicit dispatch table
-(`_VENDOR_LOADERS` in `qpu_mapper/connection.py`). Adding a provider means
+(`_VENDOR_LOADERS` in `iqpu_mapper/connection.py`). Adding a provider means
 implementing one loader with the same signature and registering it — the UI,
 scoring, and visualization layers are vendor-agnostic. IBM Quantum is the
 provider shipped today.
@@ -202,7 +202,7 @@ provider shipped today.
 <br>
 
 ```
-qpu_mapper/
+iqpu_mapper/
 ├── connection.py     # account loading, vendor dispatch, backend selection
 ├── data.py           # calibration fetch + per-user cache
 ├── plot.py           # device graph & heatmap rendering
@@ -236,7 +236,7 @@ For a guided tour of the modules and data flow, see
 
 ## License, Credits & Citing
 
-QPU Mapper is released under the [Apache License 2.0](LICENSE) (see also
+I-QMapper is released under the [Apache License 2.0](LICENSE) (see also
 [NOTICE](NOTICE)).
 
 Parts of this project build on IBM open-source work: the auto-LUCJ layout scorer
@@ -249,6 +249,6 @@ estimator implements a cost function in the style of
 Motta *et al.*, *Chem. Sci.* **14**, 11213–11227 (2023),
 [doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
 
-If you use QPU Mapper in your research, please cite the I-QMapper paper
+If you use I-QMapper in your research, please cite the I-QMapper paper
 ([arXiv:2606.27508](https://arxiv.org/abs/2606.27508)) — see
 [CITATION.cff](CITATION.cff).

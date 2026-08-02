@@ -1,5 +1,5 @@
 
-from qpu_mapper.export.data import get_export_data, _safe_export_ids
+from iqpu_mapper.export.data import get_export_data, _safe_export_ids
 
 _MERGED = "Merged (Single List)"
 _SPLIT = "Split (Alpha/Beta/...)"

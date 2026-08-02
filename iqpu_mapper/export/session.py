@@ -2,8 +2,8 @@
 export.session — Session save/restore and style-preset save/restore,
 including the path-safety primitives that guard those flows.
 
-Sessions and presets are written under `.qpu_mapper_sessions/` and
-`.qpu_mapper_styles/` next to this sub-module on disk. Names accepted
+Sessions and presets are written under `.iqpu_mapper_sessions/` and
+`.iqpu_mapper_styles/` next to this sub-module on disk. Names accepted
 through `*_by_name` helpers are validated against `_SAFE_NAME_RE` to
 keep them inside the managed directory.
 """
@@ -21,7 +21,7 @@ _log = logging.getLogger(__name__)
 # SESSION SAVE / RESTORE
 # ═══════════════════════════════════════════════════════════════════════
 
-_SESSION_DIR = os.path.join(os.getcwd(), ".qpu_mapper_sessions")
+_SESSION_DIR = os.path.join(os.getcwd(), ".iqpu_mapper_sessions")
 
 # Allowed characters in a *session/style preset name* (the "name" argument
 # used by save_session/save_style_preset and their _by_name loaders).
@@ -186,7 +186,7 @@ def load_session_by_name(state, name):
 # STYLE PRESET SAVE / RESTORE
 # ═══════════════════════════════════════════════════════════════════════
 
-_STYLE_DIR = os.path.join(os.getcwd(), ".qpu_mapper_styles")
+_STYLE_DIR = os.path.join(os.getcwd(), ".iqpu_mapper_styles")
 
 
 def save_style_preset(state, name, widget_values=None):
@@ -225,8 +225,8 @@ def load_style_preset(state, file_bytes):
             f"exceeds the {MAX_IMPORT_BYTES // 1_048_576} MB limit."
         )
     style = json.loads(file_bytes.decode('utf-8'))
-    if style.get('_type') != 'qpu_mapper_style':
-        raise ValueError("Not a valid QPU Mapper style file")
+    if style.get('_type') != 'iqpu_mapper_style':
+        raise ValueError("Not a valid I-QMapper style file")
     return state.from_style_dict(style)
 
 

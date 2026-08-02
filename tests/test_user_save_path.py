@@ -1,6 +1,6 @@
 import os
 import pytest
-from qpu_mapper.paths import resolve_user_save_path
+from iqpu_mapper.paths import resolve_user_save_path
 
 
 def test_absolute_path_and_parent_creation(tmp_path):

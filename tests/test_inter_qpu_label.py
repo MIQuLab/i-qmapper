@@ -9,7 +9,7 @@ hook directly.
 """
 from types import SimpleNamespace
 
-from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+from iqpu_mapper.ui.inter_qpu import setup_inter_qpu
 
 
 class _Stub:

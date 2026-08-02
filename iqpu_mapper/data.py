@@ -250,27 +250,27 @@ def _audit_nan_fraction(qubit_props_data, gate_props_data, threshold=0.10):
 
 
 def _default_cache_dir():
-    """Per-user cache directory for qpu_mapper.
+    """Per-user cache directory for iqpu_mapper.
 
-    Order: an explicit QPU_MAPPER_CACHE_DIR override, then the OS standard
+    Order: an explicit IQPU_MAPPER_CACHE_DIR override, then the OS standard
     (platformdirs), then a stdlib fallback. Examples of the OS standard:
-      macOS   ~/Library/Caches/qpu_mapper
-      Linux   ~/.cache/qpu_mapper   (or $XDG_CACHE_HOME/qpu_mapper)
-      Windows %LOCALAPPDATA%\\qpu_mapper\\Cache
+      macOS   ~/Library/Caches/iqpu_mapper
+      Linux   ~/.cache/iqpu_mapper   (or $XDG_CACHE_HOME/iqpu_mapper)
+      Windows %LOCALAPPDATA%\\iqpu_mapper\\Cache
     """
-    env = os.environ.get('QPU_MAPPER_CACHE_DIR')
+    env = os.environ.get('IQPU_MAPPER_CACHE_DIR')
     if env:
         return os.path.expanduser(env)
     try:
         import platformdirs
-        return platformdirs.user_cache_dir('qpu_mapper')
+        return platformdirs.user_cache_dir('iqpu_mapper')
     except Exception:
         if os.name == 'nt':
             base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-            return os.path.join(base, 'qpu_mapper', 'Cache')
+            return os.path.join(base, 'iqpu_mapper', 'Cache')
         xdg = os.environ.get('XDG_CACHE_HOME')
         base = xdg if xdg else os.path.join(os.path.expanduser('~'), '.cache')
-        return os.path.join(base, 'qpu_mapper')
+        return os.path.join(base, 'iqpu_mapper')
 
 
 _CACHE_DIR = _default_cache_dir()

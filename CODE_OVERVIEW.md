@@ -1,4 +1,4 @@
-# QPU Mapper — Code Overview
+# I-QMapper — Code Overview
 
 A guided tour of the codebase for contributors and reviewers. For user-facing
 documentation, see the [README](README.md).
@@ -39,7 +39,7 @@ Design rules that hold across the codebase:
 | Module | Role |
 |---|---|
 | `connection.py` | Account loading UI, the `_VENDOR_LOADERS` dispatch table (extension point for non-IBM providers), backend listing and selection. Supports multiple named `QiskitRuntimeService` accounts. |
-| `data.py` | Calibration fetch (live, by timestamp, history ranges) and the per-user on-disk cache (`platformdirs`, atomic writes, per-backend index locking, `QPU_MAPPER_CACHE_DIR` override). |
+| `data.py` | Calibration fetch (live, by timestamp, history ranges) and the per-user on-disk cache (`platformdirs`, atomic writes, per-backend index locking, `IQPU_MAPPER_CACHE_DIR` override). |
 | `plot.py` | Device-graph construction and all heatmap/delta rendering (Plotly `FigureWidget`), colorbars, and the export legend. |
 | `auto_lucj.py` | LUCJ zig-zag auto-placement on heavy-hex topologies and `lightweight_layout_error_scoring`. Portions adapted from IBM code now incorporated in [ffsim](https://github.com/qiskit-community/ffsim) — see the file header and [NOTICE](NOTICE). |
 | `stability.py` | Pure, offline multi-day stability analysis over cached history: which qubits/edges stay good across a 7/14/30-day window. |

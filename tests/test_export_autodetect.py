@@ -1,4 +1,4 @@
-from qpu_mapper.export.autodetect import parse_auto_text, _autodetect_lucj_partition
+from iqpu_mapper.export.autodetect import parse_auto_text, _autodetect_lucj_partition
 
 
 def _two_chain_state(make_state, make_slot):

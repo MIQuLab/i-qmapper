@@ -1,4 +1,4 @@
-"""Unit tests for qpu_mapper.constants — deterministic layout coords,
+"""Unit tests for iqpu_mapper.constants — deterministic layout coords,
 color utilities, and backend-topology resolution.
 
 All tests are offline and use SimpleNamespace fakes for backend objects;
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from qpu_mapper.constants import (
+from iqpu_mapper.constants import (
     heron_coords, nighthawk_coords,
     hex_to_rgba, blend_colors, text_color_for_bg,
     resolve_coords,

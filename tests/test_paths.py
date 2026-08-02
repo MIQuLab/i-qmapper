@@ -1,11 +1,11 @@
 """
-tests/test_paths.py — Unit tests for qpu_mapper.paths.safe_path().
+tests/test_paths.py — Unit tests for iqpu_mapper.paths.safe_path().
 
 Closes the audit gap (AUDIT_REPORT § paths.py): tests/test_mapper.py
 historically contained a buggy reimplementation of safe_path using
 str.startswith — it tested the broken copy, not the real function.
 This module imports and exercises the REAL safe_path from
-qpu_mapper.paths, covering:
+iqpu_mapper.paths, covering:
 
   • the original guards (empty path, '..', '/', '~', escape via realpath)
   • the new guards added in the audit pass: null byte rejection,
@@ -22,7 +22,7 @@ import sys
 
 import pytest
 
-from qpu_mapper.paths import safe_path, _has_dotdot_component
+from iqpu_mapper.paths import safe_path, _has_dotdot_component
 
 
 # ─────────────────────────────────────────────────────────────────────
