@@ -9,8 +9,7 @@
 
 I-QMapper is presented in the paper *I-QMapper: Error-Aware Layout Optimization and
 Device Diagnostics for NISQ Hardware* (Bazayeva & Merz,
-[arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). The repository tracks
-development beyond the arXiv version.
+[arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). 
 
 ![I-QMapper — auto-placed LUCJ layout with role legend on an IBM Heron device](docs/img/hero.png)
 
@@ -73,11 +72,8 @@ inspectable, and reproducible**.
 Install from [PyPI](https://pypi.org/project/i-qmapper/):
 
 ```bash
-# core
 pip install i-qmapper
-# core + PNG export (adds kaleido)
 pip install "i-qmapper[png]"
-# core + PNG + time-lapse GIF/MP4 (adds imageio, imageio-ffmpeg)
 pip install "i-qmapper[png,timelapse]"
 ```
 
