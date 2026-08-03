@@ -84,10 +84,10 @@ pip install "i-qmapper[png,timelapse]"
 ### From source (development)
 
 ```bash
-git clone https://github.com/NOME_ORG/i-qmapper.git
+git clone https://github.com/MIQuLab/i-qmapper 
 cd i-qmapper
-pip install -e ".[dev]"        # editable install + test suite
-pytest -q                      # run the tests
+pip install -e ".[dev]"        
+pytest -q                     
 ```
 
 ## Set up your IBM Quantum account
