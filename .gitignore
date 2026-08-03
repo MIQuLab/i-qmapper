@@ -12,10 +12,10 @@ venv/
 .pytest_cache/
 .coverage
 htmlcov/
-# iqpu_mapper runtime data (never commit)
+# iqmapper runtime data (never commit)
 .qpu_calibration_cache/
-.iqpu_mapper_sessions/
-iqpu_mapper/.qpu_calibration_cache/
-iqpu_mapper/.iqpu_mapper_sessions/
+.iqmapper_sessions/
+iqmapper/.qpu_calibration_cache/
+iqmapper/.iqmapper_sessions/
 .scratch/
 .ipynb_checkpoints/

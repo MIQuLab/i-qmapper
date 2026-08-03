@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from datetime import datetime, timezone, timedelta
 
-from iqpu_mapper.data import _extract_last_update, _props_shape_matches
+from iqmapper.data import _extract_last_update, _props_shape_matches
 
 
 def test_extract_last_update_both_modes():

@@ -266,6 +266,10 @@ class MapperUIBuilder:
             refresh=self._refresh, get_export=self._get_export,
             out=self.out,
             refresh_qpu1_label=self._refresh_qpu1_label,
+            # Deferred: self._time_api is bound further down (the time panel
+            # is built after this wiring), but a switch can only fire once
+            # construction has finished.
+            refresh_time_panel=lambda: self._time_api.rebuild(),
         ))
 
         # ── Inter-QPU mode (toggle + connect QPU2) ───────────────────
@@ -328,6 +332,9 @@ class MapperUIBuilder:
             W=W,
             plot_mod=plot_mod, safe_path=_safe_path, user_save_path=_user_save_path, save_dir=self._save_dir, out=self.out,
             lbl_png_status=self.lbl_png_status,
+            # Live figure: its error-map colorbars get copied onto the
+            # export figure, which the static renderer doesn't draw.
+            fig=self.fig,
         ))
 
 
@@ -356,9 +363,11 @@ class MapperUIBuilder:
         # Built at builder scope so the panel's slider state (intraday
         # timestamps, range) persists across nav / num_circuits / mode
         # changes — otherwise every _update_view rebuild would discard a
-        # fetched scan. The returned `api` handle (rebuild / status_text)
-        # is discarded; the panel drives its own re-render via observers.
-        self._time_panel, _ = _build_time_panel(
+        # fetched scan. The `api` handle (rebuild / status_text) is kept:
+        # the panel drives its own re-render via observers for in-panel
+        # changes, but a backend switch happens outside those observers,
+        # so backend_switch calls api.rebuild() to refresh the header.
+        self._time_panel, self._time_api = _build_time_panel(
             state=state,
             data_mod=data_mod,
             export_mod=export_mod,
@@ -1554,7 +1563,7 @@ class MapperUIBuilder:
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>📂 Load layout file</div>"),
             self.btn_unified_upload,
             HTML("<hr style='margin:4px 0;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>✏️ Or paste qubit list</div>"),
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>✏️ Paste qubit list</div>"),
             self.txt_auto, self.btn_auto,
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>💾 Load Session</div>"),
@@ -1583,7 +1592,7 @@ class MapperUIBuilder:
                  "🤖 Auto-LUCJ Layout Engine</div>"),
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔬 Single Circuit</div>"),
+                 "🔬 Single</div>"),
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
             self.lucj_chk_score,
@@ -1595,7 +1604,7 @@ class MapperUIBuilder:
             self.lbl_lucj_detail,
             HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔗 Multi-Circuit (Multi-Programming)</div>"),
+                 "🔗 Multi</div>"),
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
@@ -1649,11 +1658,11 @@ class MapperUIBuilder:
 
         Returns a ``Tab`` widget with two sub-tabs:
 
-          * **🔍 Calibration** — Property & Scale row, Threshold
-            Filter, and the Calibration & Delta section anchored on
+          * **Calibration** — Property & Scale row, Threshold
+            Filter, and the Calibration section anchored on
             the hoisted ``self._time_panel`` (whose slider state
             survives nav / num_circuits / mode changes).
-          * **🏆 Analysis** — collapsible Qubit Inspector accordion,
+          * **Analysis** — collapsible Qubit Inspector accordion,
             Ranking accordion, Qubit + Gate Trend rows, Stable
             Qubits + Stable Gates rows.
 
@@ -1669,7 +1678,6 @@ class MapperUIBuilder:
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>🔍 Focus</div>"),
             self.chk_focus_selected,
             self.chk_isolate,
-            HTML("<div style='font-size:14px;color:#666;margin:1px 0;'>Error map of the layout only</div>"),
             HTML("<hr style='margin:6px 0; border-color:#bce8f1;'>"),
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>🎯 Threshold Filter</div>"),
             self.chk_err_threshold,
@@ -1681,7 +1689,7 @@ class MapperUIBuilder:
                   Label('Max', layout=Layout(width='30px')), self.txt_g_thr_max]),
             self.threshold_status,
             HTML("<hr style='margin:6px 0; border-color:#bce8f1;'>"),
-            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>⏱️ Calibration &amp; Delta</div>"),
+            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>⏱️ Calibration</div>"),
             self._time_panel,
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             self.lbl_calibration_date,
@@ -1731,8 +1739,8 @@ class MapperUIBuilder:
         ])
 
         _err_tabs = Tab(children=[_err_tab_map, _err_tab_analysis])
-        _err_tabs.set_title(0, '🔍 Calibration')
-        _err_tabs.set_title(1, '🏆 Analysis')
+        _err_tabs.set_title(0, 'Calibration')
+        _err_tabs.set_title(1, 'Analysis')
         return _err_tabs
 
     def _refresh(self, *args):
@@ -3218,7 +3226,7 @@ class MapperUIBuilder:
         )
         sidebar_hr = HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>")
 
-        # Stylesheet scoped to .iqpu-mapper-sidebar (add_class below) so
+        # Stylesheet scoped to .iqmapper-sidebar (add_class below) so
         # it doesn't leak. See _sidebar_css.py for the per-rule rationale.
         _sidebar_css = HTML(SIDEBAR_CSS)
 
@@ -3241,7 +3249,7 @@ class MapperUIBuilder:
         ], layout=Layout(padding='10px'))
 
         # Tag container so the scoped CSS selectors above apply.
-        ui_sidebar_content.add_class('iqpu-mapper-sidebar')
+        ui_sidebar_content.add_class('iqmapper-sidebar')
 
         # Populate the swappable sidebar body now that ui_sidebar_content exists
         self._sidebar_body.children = [ui_sidebar_content]
@@ -3289,7 +3297,7 @@ class MapperUIBuilder:
         bloating the instance with transient build artifacts.
 
         The QPU 2 placeholder VBoxes are empty until QPU 2 connects;
-        the sidebar box is pre-tagged with ``.iqpu-mapper-sidebar``
+        the sidebar box is pre-tagged with ``.iqmapper-sidebar``
         so the scoped CSS applies on append (otherwise QPU 2 widgets
         would render at the default ipywidgets font size and look
         inconsistent with the QPU 1 panel).
@@ -3299,7 +3307,7 @@ class MapperUIBuilder:
 
         qpu2_sidebar_box = VBox(layout=Layout(width='720px', padding='5px',
                                               border_right='2px solid #ddd'))
-        qpu2_sidebar_box.add_class('iqpu-mapper-sidebar')
+        qpu2_sidebar_box.add_class('iqmapper-sidebar')
         qpu2_fig_box = VBox()
 
         # ui_sidebar & fig_box NEVER move — QPU2 boxes are appended/removed.

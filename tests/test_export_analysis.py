@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from iqpu_mapper.export.analysis import (
+from iqmapper.export.analysis import (
     get_connectivity_scores, get_connectivity_ranking_html, find_stable_qubits,
 )
 

@@ -250,27 +250,27 @@ def _audit_nan_fraction(qubit_props_data, gate_props_data, threshold=0.10):
 
 
 def _default_cache_dir():
-    """Per-user cache directory for iqpu_mapper.
+    """Per-user cache directory for iqmapper.
 
-    Order: an explicit IQPU_MAPPER_CACHE_DIR override, then the OS standard
+    Order: an explicit IQMAPPER_CACHE_DIR override, then the OS standard
     (platformdirs), then a stdlib fallback. Examples of the OS standard:
-      macOS   ~/Library/Caches/iqpu_mapper
-      Linux   ~/.cache/iqpu_mapper   (or $XDG_CACHE_HOME/iqpu_mapper)
-      Windows %LOCALAPPDATA%\\iqpu_mapper\\Cache
+      macOS   ~/Library/Caches/iqmapper
+      Linux   ~/.cache/iqmapper   (or $XDG_CACHE_HOME/iqmapper)
+      Windows %LOCALAPPDATA%\\iqmapper\\Cache
     """
-    env = os.environ.get('IQPU_MAPPER_CACHE_DIR')
+    env = os.environ.get('IQMAPPER_CACHE_DIR')
     if env:
         return os.path.expanduser(env)
     try:
         import platformdirs
-        return platformdirs.user_cache_dir('iqpu_mapper')
+        return platformdirs.user_cache_dir('iqmapper')
     except Exception:
         if os.name == 'nt':
             base = os.environ.get('LOCALAPPDATA') or os.path.expanduser('~')
-            return os.path.join(base, 'iqpu_mapper', 'Cache')
+            return os.path.join(base, 'iqmapper', 'Cache')
         xdg = os.environ.get('XDG_CACHE_HOME')
         base = xdg if xdg else os.path.join(os.path.expanduser('~'), '.cache')
-        return os.path.join(base, 'iqpu_mapper')
+        return os.path.join(base, 'iqmapper')
 
 
 _CACHE_DIR = _default_cache_dir()
@@ -981,8 +981,8 @@ def auto_load_recent_history(state, days=14, min_cached_threshold=5):
     Three steps:
       1. Cache-only probe of the last `days` days — no IBM calls here.
       2. If ≥ `min_cached_threshold` snapshots, populate from cache and
-         STOP (respects IBM rate limits; spec says "good enough" cache
-         skips enrichment).
+         STOP — a "good enough" cache skips enrichment, which is what
+         keeps this inside IBM's rate limits.
       3. Otherwise delegate to fetch_calibration_history (cache + IBM).
 
     Args:
@@ -999,8 +999,8 @@ def auto_load_recent_history(state, days=14, min_cached_threshold=5):
           'cache' — cache had ≥ threshold; only cached entries loaded.
           'fetch' — cache had < threshold; fetch_calibration_history ran.
     """
-    # Spec: don't touch state if the user has already populated
-    # cal_history via Multi-day mode before this auto-load fires.
+    # Don't touch state if the user has already populated cal_history
+    # via Multi-day mode before this auto-load fires.
     if state.cal_history_dates:
         return len(state.cal_history_dates), 'noop'
 

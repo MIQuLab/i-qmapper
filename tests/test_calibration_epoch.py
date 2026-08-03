@@ -35,15 +35,15 @@ _SNAP_T2 = np.array([80.0, 82.0, 84.0, 86.0, 88.0])        # µs
 
 
 def _build(monkeypatch, *, snapshot):
-    monkeypatch.setattr("iqpu_mapper.data.generate_device_data", _fake_device_data)
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
     captured = {}
     monkeypatch.setattr(
-        "iqpu_mapper.auto_lucj.get_all_zigzag_layouts",
+        "iqmapper.auto_lucj.get_all_zigzag_layouts",
         lambda **kw: (captured.update(props=kw['props']) or
                       ([{'rank': 1, 'score': 0.1, 'alpha': [0, 1],
                          'beta': [2, 3]}], 1)))
-    from iqpu_mapper.state import SessionState
-    from iqpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()                 # no .coords → Auto allowed
     state.active_backend_name = "stub"

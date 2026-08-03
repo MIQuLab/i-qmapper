@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from iqpu_mapper.export.analysis import get_connectivity_scores
-from iqpu_mapper.constants import hex_to_rgba, fmt_e
+from iqmapper.export.analysis import get_connectivity_scores
+from iqmapper.constants import hex_to_rgba, fmt_e
 
 
 def test_connectivity_dedup_bidirectional_edges():

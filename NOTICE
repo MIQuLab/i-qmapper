@@ -8,7 +8,7 @@ You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2
 This product includes software developed at IBM and in the Qiskit
 community ecosystem:
 
-1. Portions of iqpu_mapper/auto_lucj.py (the layout error-scoring routine
+1. Portions of iqmapper/auto_lucj.py (the layout error-scoring routine
    `lightweight_layout_error_scoring`) were adapted from IBM code now
    incorporated in ffsim (`ffsim.qiskit.generate_lucj_pass_manager`),
    https://github.com/qiskit-community/ffsim
@@ -18,7 +18,7 @@ community ecosystem:
    The ffsim library is described in: K. J. Sung et al., "ffsim: Faster
    simulation of fermionic quantum circuits", arXiv:2605.03123 (2026).
 
-2. The circuit-fidelity estimator in iqpu_mapper/export/scoring.py
+2. The circuit-fidelity estimator in iqmapper/export/scoring.py
    (`estimate_circuit_fidelity`) implements a cost function in the style
    of mapomatic, https://github.com/qiskit-community/mapomatic
    (C) Copyright IBM.

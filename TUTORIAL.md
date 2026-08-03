@@ -22,7 +22,7 @@ Prerequisites: [Installation](README.md#installation) and
 In a notebook cell:
 
 ```python
-from iqpu_mapper import run
+from iqmapper import run
 run()
 ```
 
@@ -147,9 +147,9 @@ independently of sessions.
 
 | What | Where |
 |---|---|
-| Calibration cache | macOS `~/Library/Caches/iqpu_mapper` · Linux `~/.cache/iqpu_mapper` (or `$XDG_CACHE_HOME/iqpu_mapper`) · Windows `%LOCALAPPDATA%\iqpu_mapper\Cache` |
-| Cache override | Set `IQPU_MAPPER_CACHE_DIR` before launching to relocate it |
-| Sessions & style presets | `.iqpu_mapper_sessions/` inside the directory your notebook runs from |
+| Calibration cache | macOS `~/Library/Caches/iqmapper` · Linux `~/.cache/iqmapper` (or `$XDG_CACHE_HOME/iqmapper`) · Windows `%LOCALAPPDATA%\iqmapper\Cache` |
+| Cache override | Set `IQMAPPER_CACHE_DIR` before launching to relocate it |
+| Sessions & style presets | `.iqmapper_sessions/` inside the directory your notebook runs from |
 | IBM credentials | **Not stored by I-QMapper.** They live in your own `qiskit-ibm-runtime` account store (`~/.qiskit/qiskit-ibm.json`) |
 
 The cache exists so that time travel, delta views, and stability analysis cost

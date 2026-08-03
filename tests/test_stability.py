@@ -1,6 +1,6 @@
-"""Unit tests for iqpu_mapper.stability.analyze_property_stability.
+"""Unit tests for iqmapper.stability.analyze_property_stability.
 
-Covers the seven cases called out in the spec:
+The seven cases covered:
   1. Error kind, happy path (stable series)
   2. Time kind, happy path (stable series)
   3. NaN handling (NaN samples are skipped)
@@ -12,7 +12,7 @@ Covers the seven cases called out in the spec:
 import numpy as np
 import pytest
 
-from iqpu_mapper.stability import analyze_property_stability
+from iqmapper.stability import analyze_property_stability
 
 
 def test_error_happy_path_stable_series():

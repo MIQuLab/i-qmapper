@@ -21,7 +21,7 @@ from typing import Optional
 import numpy as np
 
 
-# "Bad" sample thresholds vs. series median (audit UX spec):
+# "Bad" sample thresholds vs. series median:
 #   errors > 2× median → bad
 #   times  < 0.5× median → bad
 # A series is unstable when ≥ `_min_bad_days(total)` samples are bad.
@@ -31,7 +31,7 @@ _MIN_SAMPLES      = 5     # need at least this many non-NaN points to judge
 
 
 def _min_bad_days(total: int) -> int:
-    """Bad-days threshold for "unstable". Spec: 2 of ≤14, 3 of >14 —
+    """Bad-days threshold for "unstable": 2 of ≤14, 3 of >14 —
     avoids flagging a single day-of-the-week dip on 7-day windows while
     still catching short bursts on 14-day ones.
     """
@@ -137,7 +137,7 @@ def analyze_property_stability(values, kind: str) -> dict:
 
 # ── Layout report ────────────────────────────────────────────────────────
 
-# Hard-coded for v1 per spec: qubit→readout_error, gate→cz_error. Module
+# Hard-coded for v1: qubit→readout_error, gate→cz_error. Module
 # constants so a future per-property matrix (Robust LQS) won't need to
 # tear through call sites.
 _QUBIT_PROP_KEY = 'readout_error'

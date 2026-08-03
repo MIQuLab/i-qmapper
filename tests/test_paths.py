@@ -1,28 +1,28 @@
 """
-tests/test_paths.py — Unit tests for iqpu_mapper.paths.safe_path().
+tests/test_paths.py — Unit tests for iqmapper.paths.safe_path().
 
 Closes the audit gap (AUDIT_REPORT § paths.py): tests/test_mapper.py
 historically contained a buggy reimplementation of safe_path using
 str.startswith — it tested the broken copy, not the real function.
 This module imports and exercises the REAL safe_path from
-iqpu_mapper.paths, covering:
+iqmapper.paths, covering:
 
   • the original guards (empty path, '..', '/', '~', escape via realpath)
   • the new guards added in the audit pass: null byte rejection,
     component-level '..' detection (so legitimate names like
     'my..file.json' are accepted), and the 255-byte component limit.
 
-The two known-not-yet-tested gaps mentioned in the audit (Windows
-drive-letter behaviour, symlink containment) are covered by skipped
-tests rather than removed entries — left as TODOs the CI can fix
-when run on Windows / when a tmpdir-based symlink fixture is added.
+Two known-not-yet-tested gaps (Windows drive-letter behaviour, symlink
+containment) are covered by skipped tests rather than removed entries —
+left as TODOs the CI can fix when run on Windows / when a tmpdir-based
+symlink fixture is added.
 """
 import os
 import sys
 
 import pytest
 
-from iqpu_mapper.paths import safe_path, _has_dotdot_component
+from iqmapper.paths import safe_path, _has_dotdot_component
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -222,9 +222,9 @@ class TestContainment:
 
 
 # ═════════════════════════════════════════════════════════════════════
-# Platform — known gaps the audit report calls out. Tracked as skipped
-# tests instead of TODO comments so they show up in pytest -v and can
-# be implemented incrementally.
+# Platform — known coverage gaps. Tracked as skipped tests instead of
+# TODO comments so they show up in pytest -v and can be implemented
+# incrementally.
 # ═════════════════════════════════════════════════════════════════════
 
 class TestWindowsDrives:

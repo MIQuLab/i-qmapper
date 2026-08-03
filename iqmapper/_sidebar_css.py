@@ -6,8 +6,8 @@ embedded mid-builder, which obscured the surrounding Python logic and
 forced reviewers to scroll through stylesheet rules to find related
 widget wiring.
 
-The CSS targets EVERY widget under `.iqpu-mapper-sidebar` (added to the
-container via `add_class('iqpu-mapper-sidebar')`). Selectors are
+The CSS targets EVERY widget under `.iqmapper-sidebar` (added to the
+container via `add_class('iqmapper-sidebar')`). Selectors are
 deliberately broad (`[class*="Accordion"]`, `[class*="Collapse-header"]`,
 etc.) so the rules survive the ipywidgets class-name rename trail
 `p-Accordion → lm-Accordion → jupyter-widget-Accordion` and the
@@ -25,18 +25,18 @@ SIDEBAR_CSS = """
 <style>
 /* Base font for all standard widget chrome (label, dropdown, text
    input, checkbox label, radio label, button, datepicker). */
-.iqpu-mapper-sidebar .widget-label,
-.iqpu-mapper-sidebar .widget-readout,
-.iqpu-mapper-sidebar .widget-dropdown > select,
-.iqpu-mapper-sidebar .widget-text > input,
-.iqpu-mapper-sidebar .widget-textarea > textarea,
-.iqpu-mapper-sidebar .widget-checkbox label,
-.iqpu-mapper-sidebar .widget-radio-box label,
-.iqpu-mapper-sidebar button.jupyter-button,
-.iqpu-mapper-sidebar .widget-datepicker input {
+.iqmapper-sidebar .widget-label,
+.iqmapper-sidebar .widget-readout,
+.iqmapper-sidebar .widget-dropdown > select,
+.iqmapper-sidebar .widget-text > input,
+.iqmapper-sidebar .widget-textarea > textarea,
+.iqmapper-sidebar .widget-checkbox label,
+.iqmapper-sidebar .widget-radio-box label,
+.iqmapper-sidebar button.jupyter-button,
+.iqmapper-sidebar .widget-datepicker input {
     font-size: 20px !important;
 }
-.iqpu-mapper-sidebar .widget-inline-hbox .widget-label {
+.iqmapper-sidebar .widget-inline-hbox .widget-label {
     font-size: 20px !important;
     min-width: 130px !important;
 }
@@ -50,9 +50,9 @@ SIDEBAR_CSS = """
    the sidebar — covers .widget-label, .jupyter-widget-Label, and
    the LabelView/LabelStyle variants.
    ─────────────────────────────────────────────────────────────── */
-.iqpu-mapper-sidebar [class*="widget-label"],
-.iqpu-mapper-sidebar [class*="LabelView"],
-.iqpu-mapper-sidebar [class*="jupyter-widget-Label"] {
+.iqmapper-sidebar [class*="widget-label"],
+.iqmapper-sidebar [class*="LabelView"],
+.iqmapper-sidebar [class*="jupyter-widget-Label"] {
     font-size: 20px !important;
 }
 
@@ -64,21 +64,21 @@ SIDEBAR_CSS = """
    we bump both the wrapper and the descendant label/span so the
    cascade reaches the actual rendered text.
    ─────────────────────────────────────────────────────────────── */
-.iqpu-mapper-sidebar .widget-radio-box label,
-.iqpu-mapper-sidebar .widget-checkbox label,
-.iqpu-mapper-sidebar [class*="RadioButtons"] label,
-.iqpu-mapper-sidebar [class*="Checkbox"] label,
-.iqpu-mapper-sidebar [class*="radio-box"] label,
-.iqpu-mapper-sidebar [class*="checkbox"] label {
+.iqmapper-sidebar .widget-radio-box label,
+.iqmapper-sidebar .widget-checkbox label,
+.iqmapper-sidebar [class*="RadioButtons"] label,
+.iqmapper-sidebar [class*="Checkbox"] label,
+.iqmapper-sidebar [class*="radio-box"] label,
+.iqmapper-sidebar [class*="checkbox"] label {
     font-size: 20px !important;
 }
 /* Descendant span/text inside radio/checkbox labels — some ipywidgets
    versions wrap the option text in a nested <span> whose font-size
    does not inherit through the user-agent button reset. */
-.iqpu-mapper-sidebar .widget-radio-box label *,
-.iqpu-mapper-sidebar .widget-checkbox label *,
-.iqpu-mapper-sidebar [class*="RadioButtons"] label *,
-.iqpu-mapper-sidebar [class*="Checkbox"] label * {
+.iqmapper-sidebar .widget-radio-box label *,
+.iqmapper-sidebar .widget-checkbox label *,
+.iqmapper-sidebar [class*="RadioButtons"] label *,
+.iqmapper-sidebar [class*="Checkbox"] label * {
     font-size: 20px !important;
 }
 
@@ -89,15 +89,15 @@ SIDEBAR_CSS = """
    sometimes rendered as a child of .jupyter-widget-IntSliderView
    or .jupyter-widget-FloatSliderView with a different inner class.
    We match both flavours. */
-.iqpu-mapper-sidebar .widget-readout,
-.iqpu-mapper-sidebar [class*="readout"],
-.iqpu-mapper-sidebar [class*="Readout"] {
+.iqmapper-sidebar .widget-readout,
+.iqmapper-sidebar [class*="readout"],
+.iqmapper-sidebar [class*="Readout"] {
     font-size: 20px !important;
     font-weight: 500 !important;
 }
 
 /* H3/H4 panel titles. */
-.iqpu-mapper-sidebar h3, .iqpu-mapper-sidebar h4 {
+.iqmapper-sidebar h3, .iqmapper-sidebar h4 {
     font-size: 23px !important;
 }
 
@@ -107,9 +107,9 @@ SIDEBAR_CSS = """
    class names AND any descendant button text, so the rule survives
    across ipywidgets versions that wrap the label deeper.
    ─────────────────────────────────────────────────────────────── */
-.iqpu-mapper-sidebar [class*="ToggleButtons"] button,
-.iqpu-mapper-sidebar [class*="toggle-buttons"] button,
-.iqpu-mapper-sidebar .widget-toggle-buttons button {
+.iqmapper-sidebar [class*="ToggleButtons"] button,
+.iqmapper-sidebar [class*="toggle-buttons"] button,
+.iqmapper-sidebar .widget-toggle-buttons button {
     font-size: 20px !important;
     font-weight: 600 !important;
     padding: 8px 6px !important;
@@ -128,9 +128,9 @@ SIDEBAR_CSS = """
    attribute-contains selector. Then force the font on every text
    descendant to defeat user-agent button text reset rules.
    ─────────────────────────────────────────────────────────────── */
-.iqpu-mapper-sidebar [class*="Accordion"] [class*="Collapse-header"],
-.iqpu-mapper-sidebar [class*="accordion"] [class*="collapse-header"],
-.iqpu-mapper-sidebar [class*="Collapse-header"] {
+.iqmapper-sidebar [class*="Accordion"] [class*="Collapse-header"],
+.iqmapper-sidebar [class*="accordion"] [class*="collapse-header"],
+.iqmapper-sidebar [class*="Collapse-header"] {
     font-size: 20px !important;
     font-weight: 600 !important;
     padding: 10px 14px !important;
@@ -140,10 +140,10 @@ SIDEBAR_CSS = """
    also pick up the bump because ipywidgets typically renders the
    header label as a nested <button> whose font-size is reset by
    the browser default unless we override it explicitly. */
-.iqpu-mapper-sidebar [class*="Collapse-header"] *,
-.iqpu-mapper-sidebar [class*="collapse-header"] *,
-.iqpu-mapper-sidebar [class*="Accordion"] button,
-.iqpu-mapper-sidebar [class*="Accordion"] [role="button"] {
+.iqmapper-sidebar [class*="Collapse-header"] *,
+.iqmapper-sidebar [class*="collapse-header"] *,
+.iqmapper-sidebar [class*="Accordion"] button,
+.iqmapper-sidebar [class*="Accordion"] [role="button"] {
     font-size: 20px !important;
     font-weight: 600 !important;
 }
@@ -159,17 +159,17 @@ SIDEBAR_CSS = """
    specific Lumino/Phosphor class names that wrap an individual tab
    header, using full segment matches.
    ─────────────────────────────────────────────────────────────── */
-.iqpu-mapper-sidebar .p-TabBar-tab,
-.iqpu-mapper-sidebar .lm-TabBar-tab,
-.iqpu-mapper-sidebar .jupyter-widget-TabBar-tab {
+.iqmapper-sidebar .p-TabBar-tab,
+.iqmapper-sidebar .lm-TabBar-tab,
+.iqmapper-sidebar .jupyter-widget-TabBar-tab {
     font-size: 20px !important;
     font-weight: 600 !important;
     padding: 8px 14px !important;
     min-height: 38px !important;
 }
-.iqpu-mapper-sidebar .p-TabBar-tabLabel,
-.iqpu-mapper-sidebar .lm-TabBar-tabLabel,
-.iqpu-mapper-sidebar .jupyter-widget-TabBar-tabLabel {
+.iqmapper-sidebar .p-TabBar-tabLabel,
+.iqmapper-sidebar .lm-TabBar-tabLabel,
+.iqmapper-sidebar .jupyter-widget-TabBar-tabLabel {
     font-size: 20px !important;
     font-weight: 600 !important;
 }
@@ -184,43 +184,43 @@ SIDEBAR_CSS = """
    This preserves the visual distinction between section headers and
    descriptive subtext that the source code intends, even after the
    font bump. */
-.iqpu-mapper-sidebar .widget-html-content,
-.iqpu-mapper-sidebar .jupyter-widgets.widget-html .widget-html-content {
+.iqmapper-sidebar .widget-html-content,
+.iqmapper-sidebar .jupyter-widgets.widget-html .widget-html-content {
     font-size: 19px !important;
 }
 /* Plain inline (no bold) — 16px */
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:13px"]:not([style*="font-weight:bold"]),
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:14px"]:not([style*="font-weight:bold"]),
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:15px"]:not([style*="font-weight:bold"]) {
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:13px"]:not([style*="font-weight:bold"]),
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:14px"]:not([style*="font-weight:bold"]),
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:15px"]:not([style*="font-weight:bold"]) {
     font-size: 19px !important;
 }
 /* Bold subtitle headers (often emoji + section label) — 17px */
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:13px"][style*="font-weight:bold"],
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:14px"][style*="font-weight:bold"],
-.iqpu-mapper-sidebar .widget-html-content > div[style*="font-size:15px"][style*="font-weight:bold"] {
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:13px"][style*="font-weight:bold"],
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:14px"][style*="font-weight:bold"],
+.iqmapper-sidebar .widget-html-content > div[style*="font-size:15px"][style*="font-weight:bold"] {
     font-size: 20px !important;
     font-weight: 700 !important;
 }
 
 /* Containment: prevent slider tracks, dropdowns or long-labelled
    buttons from overflowing the sidebar. */
-.iqpu-mapper-sidebar .widget-box,
-.iqpu-mapper-sidebar .widget-vbox,
-.iqpu-mapper-sidebar .widget-hbox {
+.iqmapper-sidebar .widget-box,
+.iqmapper-sidebar .widget-vbox,
+.iqmapper-sidebar .widget-hbox {
     max-width: 100% !important;
     box-sizing: border-box !important;
 }
-.iqpu-mapper-sidebar .widget-toggle-buttons {
+.iqmapper-sidebar .widget-toggle-buttons {
     flex-wrap: wrap !important;
 }
-.iqpu-mapper-sidebar {
+.iqmapper-sidebar {
     overflow-x: hidden !important;
 }
 
 /* BoundedIntText / BoundedFloatText — keep input dimensions
    consistent with the bumped slider/dropdown chrome. */
-.iqpu-mapper-sidebar .widget-int-text input,
-.iqpu-mapper-sidebar .widget-float-text input {
+.iqmapper-sidebar .widget-int-text input,
+.iqmapper-sidebar .widget-float-text input {
     font-size: 20px !important;
     height: 32px !important;
     padding: 2px 8px !important;

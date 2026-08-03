@@ -357,12 +357,12 @@ class SessionState:
             raise ValueError(
                 f"Session file _version={version} is newer than this "
                 f"build supports (max v{self._MAX_SUPPORTED_VERSION}). "
-                f"Upgrade iqpu_mapper to read this session, or re-save it "
+                f"Upgrade iqmapper to read this session, or re-save it "
                 f"from the build that created it.")
         if version < 3:
             raise ValueError(
                 f"Session file _version={version} is too old — please "
-                f"re-save from a newer iqpu_mapper build (v3+).")
+                f"re-save from a newer iqmapper build (v3+).")
 
         self.active_backend_name = session.get('backend_name')
         self.active_chip = session.get('chip')
@@ -425,7 +425,7 @@ class SessionState:
 
     def to_style_dict(self, widget_values=None):
         style = {
-            '_type': 'iqpu_mapper_style',
+            '_type': 'iqmapper_style',
             'colorscale': self.current_colorscale,
             'custom_colors': list(self.custom_colors),
             'circuit_colors': {},

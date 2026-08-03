@@ -2,7 +2,7 @@
 
 **Interactive, noise-aware qubit layout selection for IBM Quantum hardware — see your device, understand its errors, and place your circuit where it will actually run well.**
 
-[![tests](https://github.com/mbazayeva/iqpu_mapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/iqpu_mapper/actions/workflows/tests.yml)
+[![tests](https://github.com/mbazayeva/i-qmapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/i-qmapper/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
@@ -137,7 +137,7 @@ anything.
 In a notebook cell:
 
 ```python
-from iqpu_mapper import run
+from iqmapper import run
 run()
 ```
 
@@ -171,9 +171,9 @@ and no extra API calls. For a module-by-module tour, see
 
 | What | Where |
 |---|---|
-| Calibration cache | macOS `~/Library/Caches/iqpu_mapper` · Linux `~/.cache/iqpu_mapper` (or `$XDG_CACHE_HOME/iqpu_mapper`) · Windows `%LOCALAPPDATA%\iqpu_mapper\Cache` |
-| Cache override | Set the `IQPU_MAPPER_CACHE_DIR` environment variable to relocate it |
-| Sessions & style presets | `.iqpu_mapper_sessions/` inside the directory your notebook runs from |
+| Calibration cache | macOS `~/Library/Caches/iqmapper` · Linux `~/.cache/iqmapper` (or `$XDG_CACHE_HOME/iqmapper`) · Windows `%LOCALAPPDATA%\iqmapper\Cache` |
+| Cache override | Set the `IQMAPPER_CACHE_DIR` environment variable to relocate it |
+| Sessions & style presets | `.iqmapper_sessions/` inside the directory your notebook runs from |
 
 The cache is safe to delete at any time — the tool recreates it and refetches
 on demand. Your IBM credentials are **not** stored by I-QMapper at all; they
@@ -188,7 +188,7 @@ live in your own `qiskit-ibm-runtime` account store.
 <br>
 
 Backend loading goes through an explicit dispatch table
-(`_VENDOR_LOADERS` in `iqpu_mapper/connection.py`). Adding a provider means
+(`_VENDOR_LOADERS` in `iqmapper/connection.py`). Adding a provider means
 implementing one loader with the same signature and registering it — the UI,
 scoring, and visualization layers are vendor-agnostic. IBM Quantum is the
 provider shipped today.
@@ -202,7 +202,7 @@ provider shipped today.
 <br>
 
 ```
-iqpu_mapper/
+iqmapper/
 ├── connection.py     # account loading, vendor dispatch, backend selection
 ├── data.py           # calibration fetch + per-user cache
 ├── plot.py           # device graph & heatmap rendering

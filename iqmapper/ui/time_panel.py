@@ -1015,12 +1015,11 @@ class TimePanelBuilder:
 
         # ── 3. Per-mode sub-panels ──────────────────────────────────
 
-        # 3a — Live
-        self.sub_live = VBox([
-            HTML(_status_html('info',
-                 'Showing the current live calibration from the backend.',
-                 escape=False))
-        ])
+        # 3a — Live. Deliberately empty: the panel header already states
+        # "Showing: Live calibration — <backend>", so an info line here
+        # only repeated it. _show_sub toggles this box's display like any
+        # other sub-panel, which works fine with no children.
+        self.sub_live = VBox([])
 
         # 3b — Snapshot
         self.dp_point       = DatePicker(description='Date:', layout=_W)
@@ -1271,7 +1270,7 @@ def _auto_ref_hint(state) -> str:
 
 def _self_test():
     """Construct the panel with dummy stubs, verify no exceptions.
-    Run with: python -m iqpu_mapper.ui.time_panel"""
+    Run with: python -m iqmapper.ui.time_panel"""
     import types
 
     class _StubState:

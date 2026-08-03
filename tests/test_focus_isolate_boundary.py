@@ -14,14 +14,14 @@ import pytest
 
 pytest.importorskip('plotly')
 
-from iqpu_mapper import plot                      # noqa: E402
+from iqmapper import plot                      # noqa: E402
 
 _STYLE = {'fill': 'rgba(99,110,250,1.0)', 'line': '#000000',
           'width': 2, 'text_color': '#000000'}
 
 
 def _make_state(single=False):
-    from iqpu_mapper.state import SessionState
+    from iqmapper.state import SessionState
     s = SessionState()
     s.active_backend_name = 'ibm_test'
     s.active_chip = 'Heron r1'

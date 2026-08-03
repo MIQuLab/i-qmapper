@@ -1,4 +1,4 @@
-"""Regression tests for the pure status-describers in iqpu_mapper.ui.time_panel.
+"""Regression tests for the pure status-describers in iqmapper.ui.time_panel.
 
 Historical crash: state.cal_history_dates is rebuilt by multiple writers
 (range fetch, intraday scan, 14-day auto-load) while state.range_index /
@@ -14,13 +14,12 @@ the writers we control. These tests lock in both:
     have" semantic);
   * happy-path output must be byte-identical to before the guards.
 
-The SPEC referred to the reader as ``describe_current_time``; the actual
-function name in the code is ``describe_current_view`` (same signature,
-same branches).
+The reader under test is ``describe_current_view``; earlier notes called it
+``describe_current_time`` (same signature, same branches).
 """
 from types import SimpleNamespace
 
-import iqpu_mapper.ui.time_panel as tp
+import iqmapper.ui.time_panel as tp
 
 
 def _range_state(dates, range_index):
@@ -69,7 +68,7 @@ def _ref_state(mode, *, time_mode, cal_history_dates=(), range_index=0,
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Stale-index regressions — the SPEC's four crash scenarios
+# Stale-index regressions — the four crash scenarios
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_describe_current_view_range_stale_index_does_not_raise():

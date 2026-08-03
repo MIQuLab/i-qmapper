@@ -11,7 +11,7 @@ depending on the real SessionState constructor."""
 import numpy as np
 from types import SimpleNamespace
 
-from iqpu_mapper.export.scoring import estimate_circuit_fidelity
+from iqmapper.export.scoring import estimate_circuit_fidelity
 
 
 def _fake_state():

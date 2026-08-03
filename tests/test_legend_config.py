@@ -1,5 +1,5 @@
 """Legend-config defaults + session round-trip."""
-from iqpu_mapper.state import SessionState, _default_legend_config
+from iqmapper.state import SessionState, _default_legend_config
 
 
 def test_default_legend_config_has_six_roles():

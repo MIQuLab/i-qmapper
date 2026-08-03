@@ -2,7 +2,7 @@
 I-QMapper — Quantum circuit layout visualization tool.
 
 Usage:
-    from iqpu_mapper import run
+    from iqmapper import run
     run()                # sidebar UI
 
 Architecture:

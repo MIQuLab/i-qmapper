@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-import iqpu_mapper.export.layout_io as lio
-from iqpu_mapper.export.layout_io import apply_layout_to_circuit, import_json_layout
+import iqmapper.export.layout_io as lio
+from iqmapper.export.layout_io import apply_layout_to_circuit, import_json_layout
 
 
 def _slots(make_state, make_slot, n=3):

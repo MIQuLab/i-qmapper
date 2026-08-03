@@ -1,10 +1,10 @@
-"""Pytest config: make the iqpu_mapper package importable from tests."""
+"""Pytest config: make the iqmapper package importable from tests."""
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-# Fixtures for iqpu_mapper.export pure-function tests
+# Fixtures for iqmapper.export pure-function tests
 from types import SimpleNamespace
 
 import pytest

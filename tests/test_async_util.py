@@ -1,4 +1,4 @@
-"""Regression tests for iqpu_mapper.async_util.default_spawn_bg.
+"""Regression tests for iqmapper.async_util.default_spawn_bg.
 
 Historical bug: the on_error path inside _worker scheduled
 `lambda: _safe(on_error, exc)`. Python 3 unbinds `exc` when the except
@@ -15,7 +15,7 @@ schedulers, without depending on either.
 """
 import pytest
 
-import iqpu_mapper.async_util as async_util
+import iqmapper.async_util as async_util
 
 
 @pytest.fixture
