@@ -70,18 +70,24 @@ inspectable, and reproducible**.
 
 ## Installation
 
+Install from [PyPI](https://pypi.org/project/i-qmapper/):
+
 ```bash
 # core
-pip install -e .
-
+pip install i-qmapper
 # core + PNG export (adds kaleido)
-pip install -e ".[png]"
-
+pip install "i-qmapper[png]"
 # core + PNG + time-lapse GIF/MP4 (adds imageio, imageio-ffmpeg)
-pip install -e ".[png,timelapse]"
+pip install "i-qmapper[png,timelapse]"
+```
 
-# development (test suite)
-pip install -e ".[dev]"
+### From source (development)
+
+```bash
+git clone https://github.com/NOME_ORG/i-qmapper.git
+cd i-qmapper
+pip install -e ".[dev]"        # editable install + test suite
+pytest -q                      # run the tests
 ```
 
 ## Set up your IBM Quantum account
