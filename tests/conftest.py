@@ -2,6 +2,10 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# ...and the tests directory itself, so a test module can reuse another's
+# fixture (test_guided_search cross-checks against test_ancilla_sweep's
+# GOOD/BAD-block backend rather than cloning it and letting the two drift).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # Fixtures for iqmapper.export pure-function tests

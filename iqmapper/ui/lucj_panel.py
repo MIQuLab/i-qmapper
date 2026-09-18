@@ -190,6 +190,10 @@ def setup_lucj_callbacks(ctx):
     lucj_chk_score = ctx.lucj_chk_score
     chk_deep_search = ctx.chk_deep_search
     chk_lucj_diverse = ctx.chk_lucj_diverse
+    dd_search_engine = getattr(ctx, 'dd_search_engine', None)
+    int_beam_width = getattr(ctx, 'int_beam_width', None)
+    int_refine_top = getattr(ctx, 'int_refine_top', None)
+    guided_params_box = getattr(ctx, 'guided_params_box', None)
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
     lbl_lucj_trunc = ctx.lbl_lucj_trunc
@@ -471,6 +475,56 @@ def setup_lucj_callbacks(ctx):
             'diversity_threshold': 0.8 if chk_lucj_diverse.value else None,
         }
 
+    # ── ONE dispatch point for the search engine ─────────────────
+    def _selected_engine():
+        """'vf2' (default) or 'guided'. Absent widget → the frozen default."""
+        return getattr(dd_search_engine, 'value', 'vf2') or 'vf2'
+
+    def _guided_params():
+        return {
+            'beam_width': int(getattr(int_beam_width, 'value', 200) or 200),
+            'refine_top': int(getattr(int_refine_top, 'value', 5) or 5),
+        }
+
+    def _run_sweep(norb, backend, props, **kwargs):
+        """Run the selected search engine.
+
+        Both engines return the same dict shape, so every caller below and all
+        the display code downstream is engine-agnostic. `hybrid` and
+        `mapping_cap` are VF2-only concepts (the beam is bounded by
+        construction and never truncates), so they are dropped for guided
+        rather than passed and ignored.
+        """
+        if _selected_engine() != 'guided':
+            from ..ancilla_sweep import sweep_ancilla_layouts
+            return sweep_ancilla_layouts(norb, backend, props, **kwargs)
+
+        from ..guided_search import guided_sweep
+        guided_kwargs = {k: v for k, v in kwargs.items()
+                         if k not in ('hybrid', 'mapping_cap', 'shuffle_seed')}
+        guided_kwargs.update(_guided_params())
+        return guided_sweep(norb, backend, props, **guided_kwargs)
+
+    def _engine_suffix(res):
+        """Status-line tail naming the engine, and the refinement tally."""
+        if not isinstance(res, dict) or res.get('engine') != 'guided':
+            return ""
+        attempted = res.get('refine_attempted') or 0
+        refined = res.get('refined_count') or 0
+        return (f" · engine: guided · refined {refined}/{attempted}"
+                if attempted else " · engine: guided")
+
+    def _on_engine_change(_change=None):
+        """Guided-only params are hidden while Exhaustive is selected."""
+        if guided_params_box is None:
+            return
+        guided_params_box.layout.display = (
+            '' if _selected_engine() == 'guided' else 'none')
+
+    if dd_search_engine is not None:
+        dd_search_engine.observe(_on_engine_change, names='value')
+        _on_engine_change()
+
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
     # active backend's reference in the scan table, so the scan never
     # re-searches self yet keeps the reference point.
@@ -559,7 +613,7 @@ def setup_lucj_callbacks(ctx):
             # the same floor through sweep_with_stability's quality_sigma, so
             # they never both fire on one search — no double-exclusion).
             floor_excl = _floor_exclusions()
-            res = sweep_ancilla_layouts(
+            res = _run_sweep(
                 norb, state.active_backend, scoring_props,
                 circuit_score_fn=_circuit_score,   # aligned circuit LQS
                 exclude_qubits=(floor_excl or None),
@@ -636,7 +690,7 @@ def setup_lucj_callbacks(ctx):
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
-                f"{cap_txt}{vin_txt}</div>")
+                f"{cap_txt}{vin_txt}{_engine_suffix(res)}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"

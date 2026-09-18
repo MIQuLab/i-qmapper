@@ -448,10 +448,26 @@ def build_plan(level, targets, n_qubits, coupling_edges):
     qiskit objects are constructed here, which is what lets the whole planning
     and costing path be tested offline with no quantum stack installed.
 
-    Level 1 measures readout on the target qubits. Level 2 adds layered 2Q RB
-    over the target edges. Level 3 ignores the targets and covers the device:
-    T1, T2 Hahn, readout, 1Q RB over all qubits, 2Q RB over all coupling
-    edges — the tutorial suite, at the tutorial's parameters.
+    THE STRUCTURE IS COMPOSITE, and that is the point. Each spec becomes ONE
+    `ParallelExperiment` covering many qubits or pairs at once, exactly as the
+    tutorial does:
+
+      readout     -> one LocalReadoutError over every target qubit: 2 circuits
+                     whatever the width.
+      t1 / t2hahn -> one ParallelExperiment of per-qubit T1/T2Hahn: one circuit
+                     per delay, so 6 each, not 6 x n_qubits.
+      rb1q        -> one ParallelExperiment of per-qubit StandardRB:
+                     len(lengths) x num_samples = 30 circuits.
+      rb2q_layer  -> one ParallelExperiment per edge-colouring LAYER, each
+                     layer a set of vertex-disjoint pairs: 30 circuits per
+                     layer, and heavy-hex needs about three layers.
+
+    A full-chip Level 3 on 156 qubits is therefore 6 + 6 + 2 + 30 + 3x30 =
+    ~134 circuits. The previous version emitted one spec per qubit and per
+    EDGE, which on that device meant ~43,400 circuits in a single job and was
+    rejected outright by IBM (error 1520, shot limit). Keeping the specs
+    composite is what keeps the run submittable; `plan_circuit_count` is the
+    check on it.
     """
     level = int(level)
     coupling = [tuple(e) for e in (coupling_edges or [])]
@@ -466,7 +482,7 @@ def build_plan(level, targets, n_qubits, coupling_edges):
 
     specs = []
 
-    if level == LEVEL_FULL:
+    if level == LEVEL_FULL and qubits:
         specs.append(ExperimentSpec('t1', tuple(qubits),
                                     {'delays': list(T1T2_DELAYS)}, 0))
         specs.append(ExperimentSpec('t2hahn', tuple(qubits),
@@ -481,32 +497,132 @@ def build_plan(level, targets, n_qubits, coupling_edges):
             {'lengths': list(RB_1Q_LENGTHS), 'num_samples': RB_1Q_SAMPLES}, 0))
 
     if level in (LEVEL_TARGETED, LEVEL_FULL) and edges:
+        # One ParallelExperiment per colour class. Pairs inside a layer are
+        # vertex-disjoint, so they genuinely run together.
         for layer_idx, layer in enumerate(_layer_edges(edges)):
-            for pair in layer:
-                specs.append(ExperimentSpec(
-                    'rb2q', tuple(pair),
-                    {'lengths': list(RB_2Q_LENGTHS),
-                     'num_samples': RB_2Q_SAMPLES}, layer_idx))
+            flat = tuple(q for pair in layer for q in pair)
+            specs.append(ExperimentSpec(
+                'rb2q_layer', flat,
+                {'pairs': [tuple(p) for p in layer],
+                 'lengths': list(RB_2Q_LENGTHS),
+                 'num_samples': RB_2Q_SAMPLES}, layer_idx))
 
     return BenchmarkPlan(level, specs, targets, DEFAULT_SHOTS)
 
 
-# ── Cost estimation ─────────────────────────────────────────────────
+# ── Circuit accounting and the per-job shot budget ──────────────────
+
+#: IBM rejects a job whose total circuit-shots exceed this (error 1520).
+_MAX_CIRCUIT_SHOTS_PER_JOB = 10_000_000
+
+#: Submit at 80% of the hard limit; the provider counts a little differently
+#: than we do and a rejected job costs a whole round trip.
+_BUDGET_MARGIN = 0.8
+
+#: Effective per-job ceiling.
+_JOB_SHOT_BUDGET = int(_MAX_CIRCUIT_SHOTS_PER_JOB * _BUDGET_MARGIN)
+
+JobChunk = namedtuple('JobChunk', 'specs circuits shots index')
+
 
 def _spec_circuits(spec):
-    """Circuit count for one spec, at the tutorial's parameterisation."""
+    """Circuits ONE spec contributes, at the tutorial's parameterisation.
+
+    Every branch is flat in the number of qubits or pairs, because every spec
+    is a ParallelExperiment: widening a spec adds qubits to each circuit, not
+    circuits to the job.
+    """
     params = spec.params
     if spec.kind in ('t1', 't2hahn'):
         return len(params.get('delays') or [])
     if spec.kind == 'readout':
         return 2                              # |0...0> and |1...1> preparations
-    if spec.kind == 'rb1q':
-        return (len(params.get('lengths') or [])
-                * int(params.get('num_samples') or 0))
-    if spec.kind == 'rb2q':
+    if spec.kind in ('rb1q', 'rb2q_layer', 'rb2q'):
         return (len(params.get('lengths') or [])
                 * int(params.get('num_samples') or 0))
     return 1
+
+
+def plan_circuit_count(plan):
+    """Exact number of circuits the plan submits."""
+    return sum(_spec_circuits(spec) for spec in plan.specs)
+
+
+def plan_shots(plan, shots=DEFAULT_SHOTS):
+    """Total circuit-shots: the quantity IBM's per-job limit applies to."""
+    return plan_circuit_count(plan) * int(shots)
+
+
+def _split_spec(spec, shots):
+    """Break one over-budget spec into several that each fit.
+
+    Only RB specs can be split, by reducing `num_samples` — the samples are
+    independent random Clifford sequences, so running them across two jobs is
+    the same experiment, just submitted twice. T1/T2/readout are already tiny
+    (2-6 circuits) and cannot exceed a budget measured in millions.
+    """
+    circuits = _spec_circuits(spec)
+    if circuits * shots <= _JOB_SHOT_BUDGET:
+        return [spec]
+    samples = int(spec.params.get('num_samples') or 0)
+    lengths = len(spec.params.get('lengths') or [])
+    if samples <= 1 or lengths == 0:
+        return [spec]                         # indivisible; caller reports it
+    per_job = max(1, _JOB_SHOT_BUDGET // (lengths * shots))
+    out = []
+    remaining = samples
+    while remaining > 0:
+        take = min(per_job, remaining)
+        params = dict(spec.params)
+        params['num_samples'] = take
+        out.append(spec._replace(params=params))
+        remaining -= take
+    return out
+
+
+def split_for_submission(plan, shots=DEFAULT_SHOTS):
+    """Group the plan's experiments into jobs that each fit the shot limit.
+
+    Returns a list of `JobChunk`. Every spec ends up in exactly one chunk —
+    nothing is dropped, which is the property the tests pin, because silently
+    discarding an experiment would look like a partial measurement rather than
+    a bug.
+    """
+    shots = int(shots)
+    expanded = []
+    for spec in plan.specs:
+        expanded.extend(_split_spec(spec, shots))
+
+    chunks = []
+    current, current_circuits = [], 0
+    for spec in expanded:
+        circuits = _spec_circuits(spec)
+        if current and (current_circuits + circuits) * shots > _JOB_SHOT_BUDGET:
+            chunks.append(JobChunk(tuple(current), current_circuits,
+                                   current_circuits * shots, len(chunks)))
+            current, current_circuits = [], 0
+        current.append(spec)
+        current_circuits += circuits
+    if current:
+        chunks.append(JobChunk(tuple(current), current_circuits,
+                               current_circuits * shots, len(chunks)))
+    return chunks
+
+
+def plan_is_submittable(plan, shots=DEFAULT_SHOTS):
+    """(ok, reason). False when some chunk still exceeds the hard limit.
+
+    A plan that cannot be made to fit must disable Run rather than be sent and
+    rejected: a rejection costs a round trip and, before this version, ended in
+    a false success.
+    """
+    for chunk in split_for_submission(plan, shots):
+        if chunk.shots > _MAX_CIRCUIT_SHOTS_PER_JOB:
+            return False, (
+                f'One experiment needs {chunk.shots:,} circuit-shots, over '
+                f"IBM's {_MAX_CIRCUIT_SHOTS_PER_JOB:,} per-job limit, and "
+                f'cannot be split further. Reduce the target set or the level.')
+    return True, None
 
 
 def estimate_cost(plan, shots=DEFAULT_SHOTS):

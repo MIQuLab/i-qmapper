@@ -324,6 +324,10 @@ class MapperUIBuilder:
             lucj_search_cap=self.lucj_search_cap,
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
             chk_lucj_diverse=self.chk_lucj_diverse,
+            dd_search_engine=self.dd_search_engine,
+            int_beam_width=self.int_beam_width,
+            int_refine_top=self.int_refine_top,
+            guided_params_box=self.bench_guided_box,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
             lbl_lucj_notices=self.lbl_lucj_notices,
@@ -1399,11 +1403,44 @@ class MapperUIBuilder:
             self.lbl_bench_status,
         ], layout=W)
 
+        # ── Search engine (Advanced) ─────────────────────────────
+        # Default stays Exhaustive (VF2) until iqmapper.evaluation says the
+        # guided beam wins on real cached calibration — see the harness.
+        self.dd_search_engine = Dropdown(
+            options=[('Exhaustive (VF2)', 'vf2'), ('Guided (beam)', 'guided')],
+            value='vf2',
+            description='Search engine:',
+            layout=Layout(width='280px'),
+            style={'description_width': '110px'},
+            tooltip='Exhaustive enumerates zigzag embeddings with VF2 and is '
+                    'calibration-blind (capped at the search cap). Guided '
+                    'grows chains using the calibration and polishes the '
+                    'finalists; it is a heuristic, so it stays opt-in.')
+        _guided_layout = Layout(width=W.width, margin=W.margin,
+                                min_width=W.min_width)
+        _guided_layout.display = 'none'      # shown only for Guided
+        self.bench_guided_box = VBox([], layout=_guided_layout)
+        self.int_beam_width = BoundedIntText(
+            value=200, min=10, max=5000, step=50,
+            description='Beam width:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='partial layouts kept at each growth step')
+        self.int_refine_top = BoundedIntText(
+            value=5, min=0, max=50,
+            description='Refine top:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='how many finalists per ancilla count get the 1-opt polish')
+        self.bench_guided_box.children = [self.int_beam_width,
+                                          self.int_refine_top]
+
         # Expert knobs, collapsed out of the primary flow (ancilla dropdown
         # -> Run). The defaults are right for nearly everyone, and the notices
         # bar already reports when the cap truncated a search.
         self.lucj_advanced_acc = Accordion(
-            children=[VBox([self.lucj_search_cap, self.chk_deep_search])],
+            children=[VBox([self.lucj_search_cap, self.chk_deep_search,
+                            self.dd_search_engine, self.bench_guided_box])],
             layout=W)
         self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
         self.lucj_advanced_acc.selected_index = None   # collapsed on open
