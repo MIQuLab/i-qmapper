@@ -390,6 +390,7 @@ class MapperUIBuilder:
             lbl_bench_status=self.lbl_bench_status,
             lbl_bench_reuse=self.lbl_bench_reuse,
             btn_bench_reuse=self.btn_bench_reuse,
+            btn_bench_reanalyze=self.btn_bench_reanalyze,
             lbl_lucj_notices=self.lbl_lucj_notices,
             lucj_all_layouts=self._lucj_all_layouts,
             rescore_cell=self._bench_rescore,
@@ -1385,6 +1386,13 @@ class MapperUIBuilder:
         self.btn_bench_reuse = Button(
             description='Reuse', button_style='info', disabled=True,
             layout=Layout(width='120px', margin='2px 0px'))
+        _reanalyze_layout = Layout(width='200px', margin='2px 0px')
+        _reanalyze_layout.display = 'none'   # only when a job record exists
+        self.btn_bench_reanalyze = Button(
+            description='Reanalyze last run', button_style='info',
+            disabled=True, layout=_reanalyze_layout,
+            tooltip='Re-run the analysis on the last submission\'s jobs. '
+                    'Analysis is client-side, so this costs no QPU time.')
         self.lbl_bench_status = HTML("")
         self.bench_box = VBox([
             HTML("<div style='font-size:14px;color:#6c757d;"
@@ -1398,7 +1406,8 @@ class MapperUIBuilder:
             self.lbl_bench_summary,
             self.chk_bench_ack,
             self.btn_bench_run,
-            HBox([self.lbl_bench_reuse, self.btn_bench_reuse],
+            HBox([self.lbl_bench_reuse, self.btn_bench_reuse,
+                  self.btn_bench_reanalyze],
                  layout=Layout(align_items='center')),
             self.lbl_bench_status,
         ], layout=W)

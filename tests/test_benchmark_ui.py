@@ -692,3 +692,139 @@ def _runtime_fakes():
         Session=_Session, SamplerV2=_Sampler, BatchExperiment=_Batch,
         ParallelExperiment=_Exp, LocalReadoutError=_Exp, StandardRB=_Exp,
         T1=_Exp, T2Hahn=_Exp)
+
+
+# ── v3: no false success ────────────────────────────────────────────
+
+def test_empty_epoch_is_not_applied_and_not_called_measured(monkeypatch,
+                                                             tmp_path):
+    """The exact 18 Sept failure: the run produced nothing and said ✅.
+
+    IBM rejected the job, the parser found no analysis results, and the panel
+    applied an epoch identical to the reported one labelled 'measured'.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    before_label = state.calibration_data_label
+    before_readout = state.qubit_props_data['readout_error'].copy()
+
+    def _nothing_runner(plan):
+        return {i: [] for i, _s in enumerate(plan.specs)}
+
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_nothing_runner)
+    api = _setup(ctx)
+    api['run']()
+
+    status = ctx.lbl_bench_status.value
+    assert '✅' not in status, f'a run that measured nothing reported success: {status}'
+    assert 'no usable measurements' in status
+    # The reported epoch is untouched, and nothing claims to be measured.
+    assert state.calibration_data_label == before_label
+    assert 'measured' not in state.calibration_data_label
+    assert getattr(state, '_measured_epoch', None) is None
+    np.testing.assert_array_equal(
+        state.qubit_props_data['readout_error'], before_readout)
+    # ...and it is not offered for reuse.
+    assert not bench.list_measured_epochs('ibm_test')
+    # ...but the failure IS visible.
+    assert ctx.lbl_lucj_notices.value
+
+
+def test_partial_measurement_is_applied_but_labelled_partial(monkeypatch,
+                                                              tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+
+    def _half_runner(plan):
+        out = {}
+        for idx, spec in enumerate(plan.specs):
+            if spec.kind == 'readout':
+                # Only the first target qubit comes back.
+                q = spec.qubits[0]
+                out[idx] = [SimpleNamespace(
+                    qubits=[q], device_components=[q],
+                    value=SimpleNamespace(assignment_matrix=np.array(
+                        [[0.99, 0.01], [0.01, 0.99]])))]
+            else:
+                out[idx] = []
+        return out
+
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_half_runner)
+    api = _setup(ctx)
+    api['run']()
+
+    status = ctx.lbl_bench_status.value
+    assert '⚠' in status and 'partial' in status, status
+    assert '1/4 qubits' in status, status
+    assert 'measured' in state.calibration_data_label, 'a partial run applies'
+    assert getattr(state, '_measured_epoch', None) is not None
+
+
+def test_complete_measurement_reports_real_coverage(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_fake_runner)
+    api = _setup(ctx)
+    api['run']()
+
+    status = ctx.lbl_bench_status.value
+    assert '✅' in status, status
+    assert '4/4 qubits' in status, status
+
+
+# ── v3: a failed job says so ────────────────────────────────────────
+
+def test_job_failure_surfaces_ibms_message_and_job_ids(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    before = state.calibration_data_label
+
+    def _rejecting_runner(_plan):
+        raise bench.BenchmarkRunError(
+            'chunk 1: job error — The number of circuit shots 43433984 '
+            'exceeds the system limit 10000000',
+            job_ids=['d3adb33f'])
+
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_rejecting_runner)
+    api = _setup(ctx)
+    api['run']()
+
+    status = ctx.lbl_bench_status.value
+    assert '❌' in status
+    assert 'exceeds the system limit' in status, status
+    assert 'd3adb33f' in status, 'the job id must be reported for diagnosis'
+    assert state.calibration_data_label == before
+    assert getattr(state, '_measured_epoch', None) is None
+    assert ctx.btn_bench_run.disabled is False
+
+
+# ── v3: submittability gating ───────────────────────────────────────
+
+def test_run_is_disabled_when_the_plan_cannot_fit_a_job(monkeypatch,
+                                                         tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    monkeypatch.setattr(bench, 'plan_is_submittable',
+                        lambda plan, shots=1000: (False, 'too many shots'))
+    ctx = _ctx(candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP)
+    _setup(ctx)
+    assert ctx.btn_bench_run.disabled is True
+    assert 'too many shots' in ctx.lbl_bench_summary.value
+
+
+def test_summary_states_circuits_shots_and_jobs(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    ctx = _ctx(target=bench.TARGET_WHOLE)
+    _setup(ctx)
+    summary = ctx.lbl_bench_summary.value
+    assert 'circuits' in summary and 'shots' in summary and 'job' in summary

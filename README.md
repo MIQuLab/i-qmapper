@@ -242,6 +242,11 @@ when it cannot, so Level 2 warns and Level 3 requires an explicit
 acknowledgement. The estimate itself is calibrated from a single published
 figure — treat it as the right order of magnitude, not a quote.
 
+A run reports what it actually measured: `measured 156/156 qubits` when complete,
+`⚠ partial` when some elements failed to fit, and `⚠ no usable measurements —
+reported epoch kept` when nothing came back. A rejected or failed job shows IBM's
+own error text and the job ids. Nothing is ever labelled "measured" unless it was.
+
 Measured values replace reported ones only for the elements actually measured;
 everything else keeps its reported value, and the calibration label tells you
 which epoch you are looking at. Any experiment or fit that fails falls back to

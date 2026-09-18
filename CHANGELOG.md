@@ -14,7 +14,13 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   scan, and the QPU cost estimate is shown before the run can be started.
   Lives in the sidebar as "5. Benchmark" with selectable targets (current
   layouts / sweep candidates / whole QPU / a custom qubit list) and, in
-  inter-QPU mode, a QPU 1 | QPU 2 selector.
+  inter-QPU mode, a QPU 1 | QPU 2 selector. The experiment plan is composite
+  (one `ParallelExperiment` per kind, edge-coloured layers for two-qubit RB),
+  so a full-chip Level 3 is ~134 circuits rather than ~43,400, and is split
+  across jobs when it would exceed IBM's per-job shot limit. A rejected or
+  errored job now reports IBM's own message with the job ids, and a run that
+  measured nothing is reported as a failure instead of being applied and
+  labelled "measured".
 - Stratified ancilla sweep: a single VF2 solve at `k_max` feeding a
   bridge-subtraction cascade down to `k_min`, with a hybrid mode, a shuffled
   search for hard instances, and region-diversity selection across the chip.

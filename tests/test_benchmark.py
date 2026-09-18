@@ -5,10 +5,13 @@ Entirely offline: the runner is injected, so nothing imports qiskit_experiments
 or touches a network. That is the same discipline qpu_scan.py's tests use, and
 it is what makes a feature that spends QPU time safe to develop.
 """
+import json
+import os
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import rustworkx
 
 from iqmapper import benchmark as bench
 
@@ -49,6 +52,7 @@ class _Res:
                  assignment_matrix=None):
         self.name = name
         self.qubits = qubits
+        self.device_components = list(qubits or [])
         if assignment_matrix is not None:
             self.value = SimpleNamespace(assignment_matrix=assignment_matrix)
         else:
@@ -119,28 +123,29 @@ def test_level2_adds_layered_2q_rb_over_target_edges_only():
 
     kinds = [s.kind for s in plan.specs]
     assert kinds.count('readout') == 1
-    rb = [s for s in plan.specs if s.kind == 'rb2q']
-    assert {s.qubits for s in rb} == {(0, 1), (1, 2), (2, 3)}, \
+    rb = [s for s in plan.specs if s.kind == 'rb2q_layer']
+    assert rb, 'no layered 2Q RB specs'
+    covered = {tuple(p) for spec in rb for p in spec.params['pairs']}
+    assert covered == {(0, 1), (1, 2), (2, 3)}, \
         'only TARGET edges may be benchmarked'
     assert all(s.params['lengths'] == bench.RB_2Q_LENGTHS for s in rb)
     assert all(s.params['num_samples'] == bench.RB_2Q_SAMPLES for s in rb)
 
-    # No two experiments in one layer may share a qubit.
-    by_layer = {}
+    # Each layer is ONE parallel experiment, so its pairs must be disjoint.
     for spec in rb:
-        by_layer.setdefault(spec.layer, []).append(set(spec.qubits))
-    for layer, pairs in by_layer.items():
         seen = set()
-        for pair in pairs:
-            assert not (seen & pair), f'layer {layer} reuses a qubit'
-            seen |= pair
+        for pair in spec.params['pairs']:
+            assert not (seen & set(pair)), f'layer {spec.layer} reuses a qubit'
+            seen |= set(pair)
+        # 30 circuits per layer, whatever the number of pairs in it.
+        assert bench._spec_circuits(spec) == 30
 
 
 def test_level3_covers_the_whole_chip_with_tutorial_parameters():
     plan = bench.build_plan(bench.LEVEL_FULL, bench.Targets([], []), 8,
                             _line_edges(8))
     kinds = {s.kind for s in plan.specs}
-    assert kinds == {'t1', 't2hahn', 'readout', 'rb1q', 'rb2q'}
+    assert kinds == {'t1', 't2hahn', 'readout', 'rb1q', 'rb2q_layer'}
 
     t1 = next(s for s in plan.specs if s.kind == 't1')
     assert t1.params['delays'] == bench.T1T2_DELAYS
@@ -150,7 +155,8 @@ def test_level3_covers_the_whole_chip_with_tutorial_parameters():
     assert rb1.params['lengths'] == bench.RB_1Q_LENGTHS
     assert rb1.params['num_samples'] == bench.RB_1Q_SAMPLES
 
-    rb2 = {s.qubits for s in plan.specs if s.kind == 'rb2q'}
+    rb2 = {tuple(p) for s in plan.specs if s.kind == 'rb2q_layer'
+           for p in s.params['pairs']}
     assert rb2 == set(_line_edges(8)), 'L3 benchmarks every coupling edge'
     assert plan.shots == bench.DEFAULT_SHOTS == 1000
 
@@ -209,8 +215,8 @@ def test_measured_values_override_only_measured_elements():
                              assignment_matrix=[[0.9, 0.1], [0.2, 0.8]]),
                         _Res(qubits=[2],
                              assignment_matrix=[[0.97, 0.03], [0.01, 0.99]])]
-        elif spec.kind == 'rb2q':
-            raw[idx] = [_Res(name='EPG', value=0.004)]
+        elif spec.kind == 'rb2q_layer':
+            raw[idx] = [_Res(name='EPG', value=0.004, qubits=[1, 2])]
 
     epoch = bench.results_to_epoch(raw, plan, qp, gp, _line_edges(8))
 
@@ -244,8 +250,9 @@ def test_fit_failure_keeps_reported_value_and_emits_a_notice():
         if spec.kind == 'readout':
             raw[idx] = [_Res(qubits=[1],
                              assignment_matrix=[[0.9, 0.1], [0.2, 0.8]])]
-        elif spec.kind == 'rb2q':
-            raw[idx] = [_Res(name='EPG', value=float('nan'))]   # bad fit
+        elif spec.kind == 'rb2q_layer':
+            raw[idx] = [_Res(name='EPG', value=float('nan'),
+                             qubits=[1, 2])]                    # bad fit
 
     epoch = bench.results_to_epoch(raw, plan, qp, gp, _line_edges(8))
 
@@ -532,11 +539,325 @@ def test_level1_cost_is_flat_in_qubit_count():
     assert whole.circuits == ten.circuits == 2
 
 
-def test_level2_cost_scales_with_edge_count():
+def test_level2_cost_scales_with_layer_count_not_edge_count():
+    """Layering is the whole saving: 44 disjointly-colourable edges cost the
+    same as 4 if they fit the same number of layers."""
     coupling = _line_edges(127)
+    # A path graph 2-colours, so any number of path edges needs 2 layers.
     few = bench.estimate_cost(bench.build_plan(
         2, bench.Targets(list(range(5)), coupling[:4]), 127, coupling))
     many = bench.estimate_cost(bench.build_plan(
         2, bench.Targets(list(range(40)), coupling[:39]), 127, coupling))
-    assert many.qpu_seconds > few.qpu_seconds
-    assert many.circuits > few.circuits
+    assert many.circuits == few.circuits, (
+        'more edges in the same layers must not add circuits')
+    # ...and a plan with MORE layers does cost more.
+    one_edge = bench.estimate_cost(bench.build_plan(
+        2, bench.Targets([0, 1], coupling[:1]), 127, coupling))
+    assert few.circuits >= one_edge.circuits
+
+
+# ── v3 Part A: the plan is composite, and it fits in a job ──────────
+
+def test_level1_is_two_circuits_at_any_width():
+    """LocalReadoutError prepares all targets at once: 2 circuits, always."""
+    coupling = _line_edges(156)
+    for n in (3, 10, 156):
+        plan = bench.build_plan(1, bench.Targets(list(range(n)), []), 156,
+                                coupling)
+        assert bench.plan_circuit_count(plan) == 2, f'{n} qubits'
+        assert len([s for s in plan.specs if s.kind == 'readout']) == 1
+
+
+def test_level2_is_bounded_by_layers_not_edges():
+    """44 edges must cost at most 2 + n_layers x 30 circuits."""
+    coupling = _line_edges(64)
+    targets = bench.Targets(list(range(45)), coupling[:44])
+    plan = bench.build_plan(2, targets, 64, coupling)
+
+    layers = [s for s in plan.specs if s.kind == 'rb2q_layer']
+    assert 0 < len(layers) <= 3, f'{len(layers)} layers for a path graph'
+    assert bench.plan_circuit_count(plan) <= 2 + 3 * 30
+    # Every target edge is covered exactly once, and layers stay disjoint.
+    covered = [tuple(p) for s in layers for p in s.params['pairs']]
+    assert sorted(covered) == sorted(coupling[:44])
+    assert len(covered) == len(set(covered))
+
+
+def test_full_chip_level3_is_about_134_circuits():
+    """The number that decides whether the job is accepted at all.
+
+    The pre-v3 plan emitted one spec per qubit and per edge: ~43,400 circuits
+    on this device, which IBM rejected outright (error 1520).
+    """
+    graph = rustworkx.generators.heavy_hex_graph(9)
+    coupling = [tuple(e) for e in graph.edge_list()]
+    plan = bench.build_plan(3, bench.Targets([], []), 156, coupling)
+
+    circuits = bench.plan_circuit_count(plan)
+    assert abs(circuits - 134) <= 10, f'{circuits} circuits, expected ~134'
+    assert bench.plan_shots(plan) == circuits * 1000
+    assert len(bench.split_for_submission(plan)) == 1, 'L3 must fit one job'
+    ok, reason = bench.plan_is_submittable(plan)
+    assert ok, reason
+
+
+def test_split_never_drops_an_experiment():
+    coupling = _line_edges(64)
+    plan = bench.build_plan(2, bench.Targets(list(range(45)), coupling[:44]),
+                            64, coupling)
+    chunks = bench.split_for_submission(plan)
+    assert sum(len(c.specs) for c in chunks) >= len(plan.specs)
+    kinds_in = sorted(s.kind for s in plan.specs)
+    kinds_out = sorted(s.kind for c in chunks for s in c.specs)
+    assert kinds_out[:len(kinds_in)] == kinds_in or set(kinds_out) == set(kinds_in)
+    for chunk in chunks:
+        assert chunk.shots <= bench._JOB_SHOT_BUDGET
+
+
+def test_an_over_budget_plan_is_split_into_several_jobs():
+    """A plan bigger than one job's shot budget must chunk, not fail."""
+    coupling = _line_edges(64)
+    plan = bench.build_plan(2, bench.Targets(list(range(45)), coupling[:44]),
+                            64, coupling)
+    huge = 200_000                              # shots per circuit
+    chunks = bench.split_for_submission(plan, huge)
+    assert len(chunks) > 1, 'an over-budget plan must split'
+    for chunk in chunks:
+        assert chunk.shots <= bench._JOB_SHOT_BUDGET
+
+
+def test_planned_count_reflects_the_plan_not_the_targets():
+    """L1 targets edges but measures none, so it must still read complete."""
+    coupling = _line_edges(8)
+    targets = bench.Targets([0, 1, 2, 3], [(0, 1), (1, 2), (2, 3)])
+    l1 = bench.build_plan(1, targets, 8, coupling)
+    assert bench.plan_planned_count(l1) == (4, 0)
+    l2 = bench.build_plan(2, targets, 8, coupling)
+    assert bench.plan_planned_count(l2) == (4, 3)
+
+
+def test_summary_line_states_circuits_shots_and_jobs():
+    graph = rustworkx.generators.heavy_hex_graph(9)
+    coupling = [tuple(e) for e in graph.edge_list()]
+    cost = bench.estimate_cost(bench.build_plan(3, bench.Targets([], []), 156,
+                                                coupling))
+    assert 'circuits' in cost.text and 'shots' in cost.text
+    assert '1 job' in cost.text
+    assert 'estimate' in cost.text
+
+
+# ── v3 Part C: an empty epoch is a failure ─────────────────────────
+
+def test_epoch_reports_emptiness_partiality_and_completeness():
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(1, bench.Targets([1, 2], []), 8, coupling)
+
+    empty = bench.results_to_epoch({0: []}, plan, qp, gp, coupling)
+    assert empty.is_empty is True
+    assert empty.is_complete is False
+    assert empty.measured_count == (0, 0)
+
+    full = bench.results_to_epoch(
+        {0: [_Res(qubits=[1], assignment_matrix=[[0.99, 0.01], [0.01, 0.99]]),
+             _Res(qubits=[2], assignment_matrix=[[0.98, 0.02], [0.02, 0.98]])]},
+        plan, qp, gp, coupling)
+    assert full.is_empty is False
+    assert full.measured_count == (2, 0) == full.planned_count
+    assert full.is_complete is True
+    assert '2/2 qubits' in full.coverage_text()
+
+    partial = bench.results_to_epoch(
+        {0: [_Res(qubits=[1], assignment_matrix=[[0.99, 0.01], [0.01, 0.99]])]},
+        plan, qp, gp, coupling)
+    assert partial.is_empty is False and partial.is_complete is False
+    assert partial.measured_count == (1, 0)
+
+
+# ── v3 Part B: a failed job is an error, not an empty parse ────────
+
+def test_check_chunk_status_raises_on_an_errored_job():
+    class _Errored:
+        job_ids = ['abc123']
+
+        def status(self):
+            return SimpleNamespace(name='ERROR')
+
+        def errors(self):
+            return ('The number of circuit shots 43433984 exceeds the '
+                    'system limit 10000000')
+
+    with pytest.raises(bench.BenchmarkRunError) as excinfo:
+        bench._check_chunk_status(_Errored(), 0)
+    assert 'exceeds the system limit' in str(excinfo.value)
+    assert excinfo.value.job_ids == ['abc123']
+
+
+def test_check_chunk_status_passes_a_healthy_job():
+    class _Done:
+        job_ids = ['ok1']
+
+        def status(self):
+            return SimpleNamespace(name='DONE')
+
+        def errors(self):
+            return None
+
+    assert bench._check_chunk_status(_Done(), 0) == ['ok1']
+
+
+# ── v3 Part E: the analysis-result shape adapter ───────────────────
+
+def test_result_adapter_handles_the_list_shape():
+    items = [_Res(name='T1', value=1.0, qubits=[3])]
+
+    class _Data:
+        def analysis_results(self, *a, **k):
+            return items
+
+        def child_data(self):
+            return []
+
+    out = list(bench._iter_analysis_results(_Data()))
+    assert len(out) == 1 and out[0].name == 'T1'
+
+
+def test_result_adapter_handles_the_dataframe_shape():
+    """Newer qiskit-experiments returns a DataFrame from analysis_results()."""
+    pd = pytest.importorskip('pandas')
+    frame = pd.DataFrame([{'name': 'T1', 'value': 1.5,
+                           'device_components': ['Q3'], 'quality': 'good'}])
+
+    class _Data:
+        def analysis_results(self, *a, **k):
+            return frame
+
+        def child_data(self):
+            return []
+
+    out = list(bench._iter_analysis_results(_Data()))
+    assert len(out) == 1
+    assert out[0].name == 'T1'
+    assert bench._components_to_qubits(out[0]) == [3]
+
+
+def test_result_adapter_recurses_into_children():
+    child_items = [_Res(name='EPG', value=0.01, qubits=[0, 1])]
+
+    class _Child:
+        def analysis_results(self, *a, **k):
+            return child_items
+
+        def child_data(self):
+            return []
+
+    class _Parent:
+        def analysis_results(self, *a, **k):
+            return []
+
+        def child_data(self):
+            return [_Child()]
+
+    out = list(bench._iter_analysis_results(_Parent()))
+    assert len(out) == 1 and out[0].name == 'EPG'
+
+
+def test_components_to_qubits_parses_both_forms():
+    assert bench._components_to_qubits(
+        SimpleNamespace(device_components=['Q7'])) == [7]
+    assert bench._components_to_qubits(
+        SimpleNamespace(device_components=[SimpleNamespace(index=4)])) == [4]
+    assert bench._components_to_qubits(
+        SimpleNamespace(device_components=[]), fallback=(9,)) == [9]
+
+
+# ── v3 Part D: persistence and diagnosis ───────────────────────────
+
+def test_job_record_is_written_at_submission(tmp_path, monkeypatch):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    coupling = _line_edges(8)
+    plan = bench.build_plan(2, bench.Targets([0, 1, 2, 3], coupling[:3]), 8,
+                            coupling)
+    when = 1_700_000_000.0
+
+    path = bench.save_job_record('ibm_test', when, plan,
+                                 jobs={'0': ['job-1']},
+                                 statuses={'0': 'submitted'})
+    assert path and os.path.exists(path)
+    with open(path, encoding='utf-8') as fh:
+        record = json.load(fh)
+    for key in ('level', 'shots', 'circuits', 'total_shots', 'targets',
+                'specs', 'chunks', 'jobs', 'statuses'):
+        assert key in record, key
+    assert record['jobs'] == {'0': ['job-1']}
+    assert record['circuits'] == bench.plan_circuit_count(plan)
+
+    back = bench.latest_job_record('ibm_test')
+    assert back and back['jobs'] == {'0': ['job-1']}
+
+
+def test_raw_dump_captures_nesting_status_and_errors():
+    class _Node:
+        def __init__(self, name, results, children=(), status='DONE',
+                     errors=None, jobs=()):
+            self.experiment_type = name
+            self._results = results
+            self._children = list(children)
+            self._status = status
+            self._errors = errors
+            self.job_ids = list(jobs)
+
+        def status(self):
+            return SimpleNamespace(name=self._status)
+
+        def errors(self):
+            return self._errors
+
+        def analysis_results(self, *a, **k):
+            return self._results
+
+        def child_data(self):
+            return self._children
+
+    leaf = _Node('StandardRB', [_Res(name='EPG_cz', value=0.004,
+                                     qubits=[0, 1])])
+    root = _Node('BatchExperiment', [], [leaf], status='ERROR',
+                 errors='shot limit exceeded', jobs=['j1'])
+
+    dump = bench.dump_raw_results([root])
+    assert dump['experiments'][0]['status'] == 'ERROR'
+    assert dump['experiments'][0]['job_ids'] == ['j1']
+    assert dump['experiments'][0]['children'][0]['results'][0]['name'] == \
+        'EPG_cz'
+
+    text = bench.diagnose_raw(dump)
+    assert 'ERROR' in text
+    assert 'EPG_cz' in text
+    assert 'shot limit exceeded' in text
+    assert 'depth 1' in text, 'the summary must say WHERE results were found'
+
+
+def test_diagnose_raw_says_so_when_nothing_was_produced():
+    class _Empty:
+        job_ids = []
+        experiment_type = 'BatchExperiment'
+
+        def status(self):
+            return SimpleNamespace(name='ERROR')
+
+        def errors(self):
+            return 'error 1520'
+
+        def analysis_results(self, *a, **k):
+            return []
+
+        def child_data(self):
+            return []
+
+    text = bench.diagnose_raw(bench.dump_raw_results([_Empty()]))
+    assert 'NO analysis results at any depth' in text
+    assert 'error 1520' in text
+
+
+def test_diagnose_raw_on_a_missing_file():
+    assert 'Could not read' in bench.diagnose_raw('/nonexistent/path.json')

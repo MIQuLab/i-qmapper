@@ -48,6 +48,7 @@ def setup_benchmark_panel(ctx):
     lbl_bench_status = ctx.lbl_bench_status
     lbl_bench_reuse = ctx.lbl_bench_reuse
     btn_bench_reuse = ctx.btn_bench_reuse
+    btn_bench_reanalyze = getattr(ctx, 'btn_bench_reanalyze', None)
 
     lucj_all_layouts = ctx.lucj_all_layouts
     refresh = ctx.refresh
@@ -212,6 +213,15 @@ def setup_benchmark_panel(ctx):
             warn = (f"<br><span style='color:#e67e22;'>⚠ "
                     f"{esc(gate.warning)}</span>") if gate.warning else ''
 
+            # A plan that cannot be split under IBM's per-job shot limit must
+            # not be submittable: sending it costs a round trip and, before
+            # v3, ended in a false success. Computed BEFORE the summary is
+            # written so the reason is visible, not just a greyed button.
+            ok, reason = bench.plan_is_submittable(plan, plan.shots)
+            if not ok:
+                extra += (f"<br><span style='color:#e74c3c;'>\u274c "
+                          f"{esc(reason)}</span>")
+
             lbl_bench_summary.value = (
                 f"<div style='font-size:13px;color:#1a5276;background:#f4f8fb;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #d6e4f0;"
@@ -220,7 +230,8 @@ def setup_benchmark_panel(ctx):
 
             chk_bench_ack.layout.display = '' if needs_ack else 'none'
             btn_bench_run.disabled = bool(
-                (not plan.specs) or (needs_ack and not chk_bench_ack.value))
+                (not plan.specs) or (not ok)
+                or (needs_ack and not chk_bench_ack.value))
             _refresh_reuse_offer()
         except Exception:
             _log.exception("Benchmark summary refresh failed")
@@ -249,8 +260,23 @@ def setup_benchmark_panel(ctx):
 
     # ── applying an epoch ───────────────────────────────────────
     def _install_epoch(epoch, *, source):
-        """Apply, refresh, re-rank, surface notices. Main thread only."""
+        """Apply, refresh, re-rank, surface notices. Main thread only.
+
+        An epoch that measured NOTHING is a failure, not a successful no-op.
+        Applying one overwrites the reported calibration with an identical
+        copy and labels it "measured" — which is exactly what happened after
+        IBM rejected the 18 Sept submission, and is the single outcome this
+        feature must never produce.
+        """
         state, refresh_fn = active_target()
+        if getattr(epoch, 'is_empty', False):
+            _surface_notices(epoch)
+            lbl_bench_status.value = (
+                f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
+                f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
+                f"margin:3px 0;'>⚠ Benchmark returned no usable "
+                f"measurements — reported epoch kept (see notices).</div>")
+            return False
         if not bench.apply_measured_epoch(state, epoch):
             lbl_bench_status.value = _err(
                 'Measured epoch does not match the current device '
@@ -271,23 +297,34 @@ def setup_benchmark_panel(ctx):
             except Exception:
                 _log.exception("candidate re-ranking after benchmark failed")
 
-        if notices_label is not None and epoch.notices:
+        _surface_notices(epoch)
+
+        rank_txt = f" · {n_ranked} candidate(s) re-ranked" if n_ranked else ''
+        qpu_txt = f"QPU {tb_bench_qpu.value} · " if _qpu2_available() else ''
+        coverage = (epoch.coverage_text() if hasattr(epoch, 'coverage_text')
+                    else f'{epoch.n_measured_qubits}q/{epoch.n_measured_edges}e')
+        if getattr(epoch, 'is_complete', True):
+            lbl_bench_status.value = (
+                f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+                f"margin:3px 0;'>✅ {esc(qpu_txt)}{esc(source)}: measured "
+                f"{esc(coverage)} (L{epoch.level}){rank_txt}</div>")
+        else:
+            lbl_bench_status.value = (
+                f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
+                f"padding:4px 8px;border-radius:4px;border:1px solid #ffe08a;"
+                f"margin:3px 0;'>⚠ {esc(qpu_txt)}{esc(source)}: partial — "
+                f"measured {esc(coverage)} (L{epoch.level}){rank_txt}</div>")
+        _refresh_reuse_offer()
+        return True
+
+    def _surface_notices(epoch):
+        if notices_label is not None and getattr(epoch, 'notices', None):
             notices_label.value = (
                 "<div style='font-size:13px;color:#8a4b00;background:#fff3cd;"
                 "padding:4px 8px;border-radius:4px;border:1px solid #ffe08a;"
                 "margin:2px 0;'>⚠ " +
                 "<br>".join(esc(n) for n in epoch.notices) + "</div>")
-
-        rank_txt = f" · {n_ranked} candidate(s) re-ranked" if n_ranked else ''
-        qpu_txt = f"QPU {tb_bench_qpu.value} · " if _qpu2_available() else ''
-        lbl_bench_status.value = (
-            f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
-            f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-            f"margin:3px 0;'>✅ {esc(qpu_txt)}{esc(source)}: measured "
-            f"epoch applied ({epoch.n_measured_qubits}q/"
-            f"{epoch.n_measured_edges}e, L{epoch.level}){rank_txt}</div>")
-        _refresh_reuse_offer()
-        return True
 
     def _err(msg):
         return (f"<div style='font-size:14px;color:#e74c3c;background:#fdedec;"
@@ -350,18 +387,47 @@ def setup_benchmark_panel(ctx):
         edges = list(getattr(state, 'edges_list', None) or [])
         backend_name = getattr(state, 'active_backend_name', None)
 
+        import time as _time
+        started_at = _time.time()
+        job_ids_seen = {}
+
+        def _record_jobs(chunk_index, job_ids, status):
+            """Persist ids the moment they exist, not at the end.
+
+            The 18 Sept run left no record of what had been submitted because
+            it never completed. With this, an interrupted or rejected run can
+            still be diagnosed and — via reanalyze_from_jobs — recovered.
+            """
+            job_ids_seen[str(chunk_index)] = list(job_ids)
+            if backend_name:
+                bench.save_job_record(
+                    backend_name, started_at, plan, shots=plan.shots,
+                    jobs=job_ids_seen, statuses={str(chunk_index): status})
+
         def _work():
             """Background: build the runner and spend the QPU time."""
             if runner_factory is not None:
                 runner = runner_factory(state)
             else:
                 runner = bench.make_runtime_runner(
-                    getattr(state, 'active_backend', None))
-            return bench.run_plan(plan, runner)
+                    getattr(state, 'active_backend', None),
+                    on_jobs=_record_jobs)
+            result = bench.run_plan(plan, runner)
+            return result, getattr(runner, 'last_expdata', [])
 
-        def _done(raw):
-            """Main thread: fold, apply, persist."""
+        def _done(payload):
+            """Main thread: fold, apply, persist. Raw dump always written."""
             btn_bench_run.disabled = False
+            raw, expdata = (payload if isinstance(payload, tuple)
+                            else (payload, []))
+            # The raw dump is saved BEFORE anything can go wrong in folding,
+            # and regardless of whether the epoch turns out usable: it is the
+            # diagnostic artefact that did not exist on 18 Sept.
+            if backend_name and expdata:
+                try:
+                    bench.save_raw_results(backend_name, started_at, expdata)
+                except Exception:
+                    _log.debug('raw dump failed', exc_info=True)
             try:
                 epoch = bench.results_to_epoch(raw, plan, reported_q,
                                                reported_g, edges)
@@ -372,12 +438,19 @@ def setup_benchmark_panel(ctx):
             if _install_epoch(epoch, source=f'L{level} benchmark') \
                     and backend_name:
                 bench.save_measured_epoch(backend_name, epoch)
+            _refresh_reanalyze_offer()
 
         def _failed(exc):
             """Main thread: the reported epoch is left exactly as it was."""
             btn_bench_run.disabled = False
             _log.exception("benchmark run failed: %s", exc)
-            lbl_bench_status.value = _err(exc)
+            if isinstance(exc, bench.BenchmarkRunError):
+                ids = ', '.join(exc.job_ids) if exc.job_ids else 'none'
+                lbl_bench_status.value = _err(
+                    f'Benchmark job failed: {exc} (job ids: {ids})')
+            else:
+                lbl_bench_status.value = _err(exc)
+            _refresh_reanalyze_offer()
 
         if spawn_bg is None:                  # no runner injected: inline
             try:
@@ -386,6 +459,80 @@ def setup_benchmark_panel(ctx):
                 _failed(exc)
             return
         spawn_bg(_work, on_done=_done, on_error=_failed)
+
+    def _refresh_reanalyze_offer():
+        """Show Reanalyze when a submission record exists for this backend."""
+        if btn_bench_reanalyze is None:
+            return
+        try:
+            state, _r = active_target()
+            name = getattr(state, 'active_backend_name', None)
+            record = bench.latest_job_record(name) if name else None
+            has_jobs = bool(record and any(record.get('jobs', {}).values()))
+            btn_bench_reanalyze.layout.display = '' if has_jobs else 'none'
+            btn_bench_reanalyze.disabled = not has_jobs
+        except Exception:
+            _log.debug('reanalyze offer unavailable', exc_info=True)
+
+    def _on_reanalyze(_b=None):
+        """Rebuild the epoch from the last submission's jobs. Zero QPU.
+
+        qiskit-experiments fits client-side, so the jobs already hold
+        everything needed: this re-runs the analysis, never the circuits.
+        """
+        state, _refresh_fn = active_target()
+        name = getattr(state, 'active_backend_name', None)
+        record = bench.latest_job_record(name) if name else None
+        if not record:
+            lbl_bench_status.value = _err('No previous submission to reanalyze.')
+            return
+        job_ids = [jid for ids in record.get('jobs', {}).values()
+                   for jid in ids]
+        if not job_ids:
+            lbl_bench_status.value = _err(
+                'The last submission recorded no job ids.')
+            return
+
+        try:
+            _targets, plan = _current_plan()
+        except Exception as exc:              # noqa: BLE001 - reported
+            lbl_bench_status.value = _err(exc)
+            return
+
+        btn_bench_reanalyze.disabled = True
+        if runner_factory is None:
+            if not bench.runtime_ready():
+                lbl_bench_status.value = (
+                    "<div style='font-size:14px;color:#8a4b00;"
+                    "background:#fff3cd;padding:6px 10px;border-radius:4px;"
+                    "border:1px solid #ffe08a;margin:3px 0;font-weight:bold;'>"
+                    "\u23f3 Loading benchmark libraries\u2026</div>")
+            try:
+                bench.preload_runtime()
+            except Exception as exc:          # noqa: BLE001 - reported
+                btn_bench_reanalyze.disabled = False
+                lbl_bench_status.value = _err(exc)
+                return
+
+        reported_q = dict(getattr(state, 'qubit_props_data', {}) or {})
+        reported_g = dict(getattr(state, 'gate_props_data', {}) or {})
+        edges = list(getattr(state, 'edges_list', None) or [])
+
+        try:
+            raw, expdata = bench.reanalyze_from_jobs(
+                plan, job_ids, getattr(state, 'active_backend', None),
+                getattr(state, 'active_service', None))
+            epoch = bench.results_to_epoch(raw, plan, reported_q, reported_g,
+                                           edges)
+        except Exception as exc:              # noqa: BLE001 - reported
+            btn_bench_reanalyze.disabled = False
+            _log.exception('reanalysis failed')
+            lbl_bench_status.value = _err(exc)
+            return
+
+        btn_bench_reanalyze.disabled = False
+        if _install_epoch(epoch, source='Reanalysis (no QPU)') and name:
+            bench.save_measured_epoch(name, epoch)
 
     def _on_reuse(_b=None):
         epoch = _last_epoch[0]
@@ -396,6 +543,9 @@ def setup_benchmark_panel(ctx):
 
     btn_bench_run.on_click(_on_run)
     btn_bench_reuse.on_click(_on_reuse)
+    if btn_bench_reanalyze is not None:
+        btn_bench_reanalyze.on_click(_on_reanalyze)
+    _refresh_reanalyze_offer()
     for widget in (dd_bench_level, dd_bench_target, chk_bench_ack,
                    tb_bench_qpu, txt_bench_custom):
         widget.observe(refresh_summary, names='value')
@@ -411,4 +561,5 @@ def setup_benchmark_panel(ctx):
         'current_plan': _current_plan,
         'active_target': active_target,
         'qpu2_available': _qpu2_available,
+        'reanalyze': _on_reanalyze,
     }

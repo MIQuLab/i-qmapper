@@ -133,9 +133,9 @@ REUSE_TTL_MINUTES = 60
 # wall-clock seconds per circuit including the provider's own overhead, not
 # pure quantum-execution time.
 
-_SEC_PER_CIRCUIT_1Q = 0.012
-_SEC_PER_CIRCUIT_2Q = 0.035
-_SEC_PER_T1T2 = 0.030
+_SEC_PER_CIRCUIT_1Q = 1.20
+_SEC_PER_CIRCUIT_2Q = 1.90
+_SEC_PER_T1T2 = 1.20
 _SESSION_OVERHEAD_S = 8.0
 
 # The model charges two-qubit RB per EDGE, not per layer, even though
@@ -167,10 +167,12 @@ class MeasuredEpoch:
     """
 
     __slots__ = ('qubit_props', 'gate_props', 'measured_qubit_mask',
-                 'measured_edge_mask', 'level', 'when', 'notices')
+                 'measured_edge_mask', 'level', 'when', 'notices',
+                 'planned_count')
 
     def __init__(self, qubit_props, gate_props, measured_qubit_mask,
-                 measured_edge_mask, level, when, notices=None):
+                 measured_edge_mask, level, when, notices=None,
+                 planned_count=None):
         self.qubit_props = qubit_props
         self.gate_props = gate_props
         self.measured_qubit_mask = np.asarray(measured_qubit_mask, dtype=bool)
@@ -178,6 +180,10 @@ class MeasuredEpoch:
         self.level = int(level)
         self.when = when                      # epoch seconds (time.time())
         self.notices = list(notices or [])
+        # (n_qubits, n_edges) the plan INTENDED to measure. Compared against
+        # measured_count so the UI can tell "complete", "partial" and "nothing
+        # came back" apart — the last of which must never read as success.
+        self.planned_count = tuple(planned_count or (0, 0))
 
     # ── convenience ────────────────────────────────────────────
     @property
@@ -187,6 +193,26 @@ class MeasuredEpoch:
     @property
     def n_measured_edges(self):
         return int(self.measured_edge_mask.sum())
+
+    @property
+    def measured_count(self):
+        return (self.n_measured_qubits, self.n_measured_edges)
+
+    @property
+    def is_empty(self):
+        """Nothing was measured. A FAILURE, not a successful no-op."""
+        return self.measured_count == (0, 0)
+
+    @property
+    def is_complete(self):
+        return (self.planned_count != (0, 0)
+                and self.measured_count == self.planned_count)
+
+    def coverage_text(self):
+        """'120/156 qubits, 210/240 edges' for the status line."""
+        pq, pe = self.planned_count
+        return (f'{self.n_measured_qubits}/{pq} qubits, '
+                f'{self.n_measured_edges}/{pe} edges')
 
     def age_minutes(self, now=None):
         return ((time.time() if now is None else now) - self.when) / 60.0
@@ -548,6 +574,26 @@ def plan_circuit_count(plan):
     return sum(_spec_circuits(spec) for spec in plan.specs)
 
 
+def plan_planned_count(plan):
+    """(n_qubits, n_edges) this plan actually intends to MEASURE.
+
+    Not the target counts: a Level 1 plan targets qubits and edges but only
+    ever measures readout, so counting its target edges as "planned" would
+    make a perfect L1 run look permanently partial. Planned means "a spec in
+    this plan writes to that element".
+    """
+    qubits, edges = set(), set()
+    for spec in plan.specs:
+        if spec.kind in ('readout', 't1', 't2hahn'):
+            qubits.update(int(q) for q in spec.qubits)
+        elif spec.kind == 'rb2q_layer':
+            for pair in (spec.params.get('pairs') or []):
+                edges.add(tuple(sorted(int(q) for q in pair)))
+        elif spec.kind == 'rb2q':
+            edges.add(tuple(sorted(int(q) for q in spec.qubits)))
+    return (len(qubits), len(edges))
+
+
 def plan_shots(plan, shots=DEFAULT_SHOTS):
     """Total circuit-shots: the quantity IBM's per-job limit applies to."""
     return plan_circuit_count(plan) * int(shots)
@@ -628,42 +674,60 @@ def plan_is_submittable(plan, shots=DEFAULT_SHOTS):
 def estimate_cost(plan, shots=DEFAULT_SHOTS):
     """Wall-clock QPU seconds a plan is expected to consume.
 
-    An ESTIMATE, and a coarse one: the constants are back-solved from the
-    tutorial's single published figure (~240 s for the full suite on 127
-    qubits) and take no account of queueing, of how busy the device is, or of
-    the provider's batching. Treat it as an order of magnitude that is right,
-    not a quote. It is monotonic in plan size, which is the property the UI
-    actually depends on.
+    Now that every spec is a ParallelExperiment, the driver is the CIRCUIT
+    COUNT, not the qubit count: widening a spec puts more qubits into the same
+    circuits rather than adding circuits. So the model is flat per circuit,
+    with a higher rate for two-qubit RB because those circuits are deeper.
+
+    An ESTIMATE, and a coarse one: back-solved from the tutorial's single
+    published figure (~4 min for the full suite) and blind to queueing and
+    device load. `circuits` and `shots` on the returned estimate are exact;
+    only `qpu_seconds` is a guess.
     """
-    circuits = 0
+    circuits = plan_circuit_count(plan)
     seconds = 0.0
     for spec in plan.specs:
         n = _spec_circuits(spec)
-        circuits += n
-        if spec.kind == 'readout':
-            # LocalReadoutError prepares |0...0> and |1...1> across every
-            # target qubit at once: two circuits, whatever the width. So a
-            # whole-QPU Level 1 costs the same as a three-qubit one, which is
-            # what makes it the cheap way to refresh the readout heatmap.
-            seconds += n * _SEC_PER_CIRCUIT_1Q
-        elif spec.kind in ('t1', 't2hahn'):
-            # One sequence per delay per qubit, run in parallel across qubits.
-            seconds += n * _SEC_PER_T1T2 * max(1, len(spec.qubits))
-        elif spec.kind == 'rb2q':
+        if spec.kind in ('rb2q_layer', 'rb2q'):
             seconds += n * _SEC_PER_CIRCUIT_2Q
+        elif spec.kind in ('t1', 't2hahn'):
+            seconds += n * _SEC_PER_T1T2
         else:
-            seconds += n * _SEC_PER_CIRCUIT_1Q * max(1, len(spec.qubits))
+            seconds += n * _SEC_PER_CIRCUIT_1Q
 
     seconds *= (shots / float(DEFAULT_SHOTS)) if DEFAULT_SHOTS else 1.0
     seconds += _SESSION_OVERHEAD_S if plan.specs else 0.0
 
-    return CostEstimate(circuits, seconds, _format_cost(seconds))
+    n_jobs = len(split_for_submission(plan, shots)) if plan.specs else 0
+    total_shots = circuits * int(shots)
+    return CostEstimate(circuits, seconds,
+                        _format_cost(circuits, total_shots, n_jobs, seconds))
 
 
-def _format_cost(seconds):
+def _format_shots(total):
+    if total >= 1_000_000:
+        return f'{total / 1_000_000:.1f}M shots'
+    if total >= 1_000:
+        return f'{total / 1_000:.0f}k shots'
+    return f'{total} shots'
+
+
+def _format_cost(circuits, total_shots, n_jobs, seconds):
+    """The one line that has to tell the truth before the click.
+
+    Circuits, shots and job count are exact; the seconds are the estimate.
+    Showing the job count matters because a run that needs more than one job
+    is the situation that used to fail at submission.
+    """
+    if circuits == 0:
+        return 'nothing to measure'
+    job_txt = '1 job' if n_jobs <= 1 else f'{n_jobs} jobs'
     if seconds < 90:
-        return f'~{seconds:.0f} s QPU (estimate)'
-    return f'~{seconds / 60.0:.1f} min QPU (estimate)'
+        time_txt = f'~{seconds:.0f} s QPU (estimate)'
+    else:
+        time_txt = f'~{seconds / 60.0:.1f} min QPU (estimate)'
+    return (f'~{circuits} circuits · {_format_shots(total_shots)} · '
+            f'{job_txt} · {time_txt}')
 
 
 # ── Plan (subscription) gating ──────────────────────────────────────
@@ -824,73 +888,283 @@ def _reset_runtime_cache():
     _RUNTIME_CACHE[0] = None
 
 
+class BenchmarkRunError(RuntimeError):
+    """A job was rejected, errored or cancelled by the provider.
+
+    Carries the provider's own message and the job ids, because "no results
+    returned" told the user nothing on the run that motivated this class: IBM
+    had rejected the submission outright (error 1520, shot limit) and the
+    panel still reported success.
+    """
+
+    def __init__(self, message, job_ids=None, chunk=None):
+        super().__init__(message)
+        self.job_ids = list(job_ids or [])
+        self.chunk = chunk
+
+
+#: Analysis-result names the tutorial's experiments produce. Kept in one place
+#: because they are the contract between qiskit-experiments and our parser, and
+#: a rename there silently emptied every epoch before the integration tests.
+RESULT_T1 = 'T1'
+RESULT_T2 = 'T2'
+RESULT_READOUT_MITIGATOR = 'Local Readout Mitigator'
+RESULT_EPG_PREFIXES = ('EPG', 'EPC')
+
+
 def _build_experiment(spec, api):
-    """One `ExperimentSpec` → the qiskit-experiments object that runs it."""
+    """One `ExperimentSpec` → ONE composite qiskit-experiments object.
+
+    Every branch returns a single experiment covering all of the spec's qubits
+    or pairs at once. `flatten_results=True` is passed explicitly rather than
+    left to the installed version's default, so the analysis results land at a
+    predictable depth whatever version is installed.
+    """
     physical = list(spec.qubits)
     if spec.kind == 't1':
         return api.ParallelExperiment(
-            [api.T1((q,), delays=spec.params['delays']) for q in physical])
+            [api.T1((q,), delays=spec.params['delays']) for q in physical],
+            flatten_results=True)
     if spec.kind == 't2hahn':
         return api.ParallelExperiment(
-            [api.T2Hahn((q,), delays=spec.params['delays'])
-             for q in physical])
+            [api.T2Hahn((q,), delays=spec.params['delays']) for q in physical],
+            flatten_results=True)
     if spec.kind == 'readout':
         return api.LocalReadoutError(physical)
     if spec.kind == 'rb1q':
         return api.ParallelExperiment(
             [api.StandardRB((q,), lengths=spec.params['lengths'],
                             num_samples=spec.params['num_samples'])
-             for q in physical])
-    if spec.kind == 'rb2q':
+             for q in physical],
+            flatten_results=True)
+    if spec.kind == 'rb2q_layer':
+        pairs = [tuple(p) for p in spec.params['pairs']]
+        return api.ParallelExperiment(
+            [api.StandardRB(pair, lengths=spec.params['lengths'],
+                            num_samples=spec.params['num_samples'])
+             for pair in pairs],
+            flatten_results=True)
+    if spec.kind == 'rb2q':                   # legacy single-pair spec
         return api.StandardRB(tuple(physical),
                               lengths=spec.params['lengths'],
                               num_samples=spec.params['num_samples'])
     raise ValueError(f'unknown experiment kind: {spec.kind}')
 
 
-def make_runtime_runner(backend):
+def _job_ids_of(expdata):
+    try:
+        return [str(j) for j in (expdata.job_ids or [])]
+    except Exception:
+        return []
+
+
+def _status_name(obj):
+    try:
+        status = obj.status()
+    except Exception:
+        return ''
+    return getattr(status, 'name', None) or str(status)
+
+
+def _check_chunk_status(expdata, chunk_index):
+    """Raise `BenchmarkRunError` when the provider failed this chunk.
+
+    This is the gap that produced the false success: a rejected submission
+    left an errored `ExperimentData` whose `analysis_results()` was simply
+    empty, and an empty parse looked exactly like a successful run that
+    measured nothing.
+    """
+    job_ids = _job_ids_of(expdata)
+    status = _status_name(expdata).upper()
+    if status in ('ERROR', 'CANCELLED'):
+        detail = ''
+        try:
+            errors = expdata.errors()
+            if errors:
+                detail = str(errors).strip()
+        except Exception:
+            pass
+        raise BenchmarkRunError(
+            f'chunk {chunk_index + 1}: job {status.lower()}'
+            + (f' — {detail}' if detail else ''),
+            job_ids, chunk_index)
+    return job_ids
+
+
+def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
     """The production runner: qiskit-experiments against a real backend.
 
     The session is opened as `Session(backend=backend)`. Older
     qiskit-ibm-runtime took a `service=` kwarg as well; 0.48 removed it,
-    because a backend object already carries its own service. Passing it now
-    raises `TypeError: Session.__init__() got an unexpected keyword argument
-    'service'`, which is what the first live run hit. The call shape is pinned
-    by tests/test_benchmark_runtime_contract.py so the next such drift fails
-    offline instead of on a device.
+    because a backend object already carries its own service. The call shape
+    is pinned by tests/test_benchmark_runtime_contract.py.
 
-    The session is entered with `with`, so it closes on the way out whether
-    the run succeeds or raises — a leaked session keeps holding a reservation.
+    The plan is split into chunks that each fit IBM's per-job circuit-shot
+    limit and submitted sequentially INSIDE ONE SESSION, so the whole run
+    still costs one reservation. Each chunk's status is checked before its
+    results are parsed; a failed chunk raises rather than yielding an empty
+    parse that would look like a successful measurement of nothing.
 
-    Resolves through `preload_runtime`, so if the UI already preloaded on the
-    main thread this is a cache read. Calling it from a worker without that
-    preload would import the stack off-thread — see `preload_runtime` for the
-    crash that causes.
+    Args:
+        on_jobs: optional ``callable(chunk_index, job_ids, status)`` invoked as
+            soon as ids are known, so the panel can persist them for later
+            reanalysis even if the process dies mid-run.
+        sampler_factory: optional ``callable(session) -> sampler``, for the
+            integration tests to substitute a local simulator without touching
+            any other part of the path.
     """
     api = preload_runtime()
 
     def _runner(plan):
-        experiments = [(spec, _build_experiment(spec, api))
-                       for spec in plan.specs]
-        batch = api.BatchExperiment([exp for _s, exp in experiments],
-                                    flatten_results=False)
+        chunks = split_for_submission(plan, plan.shots)
+        merged = {}
+        notices = []
+        collected = []
+        spec_offset = 0
 
         with api.Session(backend=backend) as session:
-            sampler = api.SamplerV2(mode=session)
-            data = batch.run(sampler=sampler, shots=plan.shots)
-            data.block_for_results()
+            sampler = (sampler_factory(session) if sampler_factory is not None
+                       else api.SamplerV2(mode=session))
+            for chunk in chunks:
+                experiments = [(spec, _build_experiment(spec, api))
+                               for spec in chunk.specs]
+                batch = api.BatchExperiment(
+                    [exp for _s, exp in experiments], flatten_results=False)
+                data = batch.run(sampler=sampler, shots=plan.shots)
+                job_ids = _job_ids_of(data)
+                if on_jobs is not None:
+                    try:
+                        on_jobs(chunk.index, job_ids, 'submitted')
+                    except Exception:
+                        _log.debug('job-id callback failed', exc_info=True)
+                data.block_for_results()
 
-        out = {}
-        for idx, (spec, _exp) in enumerate(experiments):
-            try:
-                out[idx] = data.child_data(idx).analysis_results()
-            except Exception as exc:          # noqa: BLE001 - per-experiment
-                _log.warning("benchmark: no results for %s %s: %s",
-                             spec.kind, spec.qubits, exc)
-                out[idx] = None
-        return out
+                try:
+                    job_ids = _check_chunk_status(data, chunk.index)
+                except BenchmarkRunError as exc:
+                    if len(chunks) == 1:
+                        raise
+                    # Partial failure: keep what the other chunks produced and
+                    # surface this one loudly rather than losing the whole run.
+                    notices.append(
+                        f'chunk {chunk.index + 1}/{len(chunks)} failed: {exc}')
+                    spec_offset += len(chunk.specs)
+                    continue
+                if on_jobs is not None:
+                    try:
+                        on_jobs(chunk.index, job_ids, _status_name(data))
+                    except Exception:
+                        _log.debug('job-id callback failed', exc_info=True)
 
+                for local_idx, (spec, _exp) in enumerate(experiments):
+                    idx = spec_offset + local_idx
+                    try:
+                        merged[idx] = list(_iter_analysis_results(
+                            data.child_data(local_idx)))
+                    except Exception as exc:   # noqa: BLE001 - per-experiment
+                        _log.warning('benchmark: no results for %s %s: %s',
+                                     spec.kind, spec.qubits, exc)
+                        merged[idx] = None
+                collected.append(data)
+                spec_offset += len(chunk.specs)
+
+        if notices:
+            merged['_notices'] = notices
+        # The ExperimentData objects live on the runner, not in the result
+        # mapping: `results_to_epoch` iterates that mapping by spec index, and
+        # a stray key there would look like an extra experiment.
+        _runner.last_expdata = collected
+        return merged
+
+    _runner.last_expdata = []
     return _runner
+
+
+def _iter_analysis_results(expdata):
+    """Yield analysis results from either shape qiskit-experiments returns.
+
+    `ExperimentData.analysis_results()` returns a list of `AnalysisResult`
+    objects in older versions and a pandas DataFrame in newer ones (with
+    `dataframe=True` becoming the default). Normalising here means the parser
+    below never has to know which is installed — and a version bump cannot
+    silently empty every epoch again.
+
+    Recurses into `child_data` so a composite experiment's results are found
+    whether they were flattened to the top or left nested.
+    """
+    if expdata is None:
+        return
+
+    results = None
+    try:
+        results = expdata.analysis_results()
+    except TypeError:
+        try:
+            results = expdata.analysis_results(dataframe=False)
+        except Exception:
+            results = None
+    except Exception:
+        results = None
+
+    for item in _normalise_results(results):
+        yield item
+
+    # Nested composites: look one level down too.
+    try:
+        children = list(expdata.child_data())
+    except Exception:
+        children = []
+    for child in children:
+        for item in _iter_analysis_results(child):
+            yield item
+
+
+def _normalise_results(results):
+    """List / DataFrame / None → a flat list of result-like objects."""
+    if results is None:
+        return []
+    # DataFrame: has .itertuples and .columns
+    if hasattr(results, 'itertuples') and hasattr(results, 'columns'):
+        out = []
+        for row in results.itertuples(index=False):
+            out.append(SimpleNamespace(
+                name=getattr(row, 'name', None),
+                value=getattr(row, 'value', None),
+                device_components=list(
+                    getattr(row, 'device_components', []) or []),
+                quality=getattr(row, 'quality', None)))
+        return out
+    if isinstance(results, (list, tuple)):
+        return list(results)
+    return [results]
+
+
+def _components_to_qubits(item, fallback=()):
+    """Physical qubit ids an analysis result refers to.
+
+    `device_components` entries are `Qubit(3)`-style objects or their string
+    form; both are handled, because which one appears depends on the version
+    and on whether the results came back as a DataFrame.
+    """
+    raw = getattr(item, 'device_components', None)
+    if not raw:
+        raw = getattr(item, 'qubits', None)
+    out = []
+    for component in (raw or []):
+        if isinstance(component, (int, np.integer)):
+            out.append(int(component))
+            continue
+        # `Qubit(3)` exposes .index as an int. Careful: str also has an
+        # `.index` ATTRIBUTE — the method — so the type check matters.
+        index = getattr(component, 'index', None)
+        if isinstance(index, (int, np.integer)):
+            out.append(int(index))
+            continue
+        text = str(component)
+        digits = ''.join(ch for ch in text if ch.isdigit())
+        if digits:
+            out.append(int(digits))
+    return out or list(fallback)
 
 
 # ── Results → epoch ─────────────────────────────────────────────────
@@ -962,7 +1236,10 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
             elif spec.kind in ('t1', 't2hahn'):
                 _apply_coherence(entry, spec, qubit_props, q_mask, n_q,
                                  notices)
-            elif spec.kind == 'rb2q':
+            elif spec.kind == 'rb2q_layer':
+                _apply_rb2q_layer(entry, spec, gate_props, e_mask, edge_index,
+                                  two_q_key, notices)
+            elif spec.kind == 'rb2q':         # legacy single-pair spec
                 _apply_rb2q(entry, spec, gate_props, e_mask, edge_index,
                             two_q_key, notices)
             # rb1q is measured at Level 3 for the diagnostic view; it has no
@@ -977,8 +1254,12 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
             notices.append(f'{spec.kind} {list(spec.qubits)}: '
                            f'{exc}; kept reported values')
 
+    for note in (raw.get('_notices') if isinstance(raw, dict) else None) or []:
+        notices.append(str(note))
+
+    planned = plan_planned_count(plan)
     return MeasuredEpoch(qubit_props, gate_props, q_mask, e_mask,
-                         plan.level, when, notices)
+                         plan.level, when, notices, planned_count=planned)
 
 
 def _two_qubit_key(gate_props):
@@ -1086,6 +1367,56 @@ def _apply_rb2q(entry, spec, gate_props, e_mask, edge_index, two_q_key,
     except Exception as exc:                  # noqa: BLE001 - per element
         notices.append(f'{list(pair)}: RB fit failed ({exc}), '
                        f'kept reported value')
+
+
+def _apply_rb2q_layer(entry, spec, gate_props, e_mask, edge_index, two_q_key,
+                      notices):
+    """Fold ONE layer's parallel 2Q RB: many pairs, one experiment.
+
+    Each analysis result names its own qubits through `device_components`, so
+    results are matched to edges by those components rather than by position —
+    a ParallelExperiment gives no ordering guarantee worth relying on.
+    """
+    pairs = [tuple(p) for p in (spec.params.get('pairs') or [])]
+    if two_q_key is None:
+        notices.append(f'{spec.kind}: no two-qubit error array to update')
+        return
+    arr = gate_props.get(two_q_key)
+    if arr is None:
+        return
+
+    items = entry if isinstance(entry, (list, tuple)) else [entry]
+    by_pair = {}
+    for item in items:
+        name = str(getattr(item, 'name', '') or '')
+        if not name.upper().startswith(RESULT_EPG_PREFIXES):
+            continue
+        qubits = tuple(sorted(_components_to_qubits(item)))
+        if len(qubits) != 2:
+            continue
+        by_pair.setdefault(qubits, item)
+
+    for pair in pairs:
+        item = by_pair.get(tuple(sorted(pair)))
+        idx = edge_index.get(pair) or edge_index.get((pair[1], pair[0]))
+        if idx is None:
+            idx = edge_index.get((pair[1], pair[0]))
+        if idx is None or not (0 <= idx < len(arr)):
+            notices.append(f'{list(pair)}: edge not in the device map, skipped')
+            continue
+        if item is None:
+            notices.append(f'{list(pair)}: no RB result in the layer, '
+                           f'kept reported value')
+            continue
+        try:
+            epg = _result_value(item)
+            if not np.isfinite(epg) or epg < 0:
+                raise ValueError(f'implausible EPG={epg}')
+            arr[idx] = epg
+            e_mask[idx] = True
+        except Exception as exc:              # noqa: BLE001 - per element
+            notices.append(f'{list(pair)}: RB fit failed ({exc}), '
+                           f'kept reported value')
 
 
 def _epg_from_rb(entry):
@@ -1267,6 +1598,275 @@ def load_measured_epoch(backend_name, when):
         _log.warning("Failed to load measured epoch %s/%s: %s",
                      backend_name, when, exc)
         return None
+
+
+def _stamp_for(when):
+    return time.strftime('%Y%m%dT%H%M%S', time.localtime(when))
+
+
+def jobs_path(backend_name, when):
+    return os.path.join(_measured_dir(backend_name),
+                        f'{_MEASURED_PREFIX}{_stamp_for(when)}_jobs.json')
+
+
+def raw_path(backend_name, when):
+    return os.path.join(_measured_dir(backend_name),
+                        f'{_MEASURED_PREFIX}{_stamp_for(when)}_raw.json')
+
+
+def _write_json(path, payload):
+    try:
+        dirn = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(dir=dirn, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+                _json.dump(payload, fh, default=str)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        return path
+    except Exception as exc:                  # noqa: BLE001 - diagnostic only
+        _log.warning('Failed to write %s: %s', path, exc)
+        return None
+
+
+def save_job_record(backend_name, when, plan, shots=None, session_id=None,
+                    chunks=None, jobs=None, statuses=None):
+    """Persist what was submitted, as soon as it is known.
+
+    Written at submission rather than at completion, because the run that
+    motivated this file never completed: the job was rejected and there was no
+    record of what had been sent. With this, a failed or interrupted run can
+    still be diagnosed — and, via `reanalyze_from_jobs`, recovered without
+    spending QPU time again.
+    """
+    shots = shots or plan.shots
+    payload = {
+        'when': when,
+        'level': plan.level,
+        'shots': shots,
+        'circuits': plan_circuit_count(plan),
+        'total_shots': plan_shots(plan, shots),
+        'session_id': session_id,
+        'targets': {'qubits': list(plan.targets.qubits),
+                    'edges': [list(e) for e in plan.targets.edges]},
+        'specs': [{'kind': s.kind, 'qubits': list(s.qubits),
+                   'layer': s.layer, 'params': _jsonable(s.params)}
+                  for s in plan.specs],
+        'chunks': [{'index': c.index, 'circuits': c.circuits,
+                    'shots': c.shots,
+                    'kinds': [s.kind for s in c.specs]}
+                   for c in (chunks or split_for_submission(plan, shots))],
+        'jobs': dict(jobs or {}),
+        'statuses': dict(statuses or {}),
+    }
+    return _write_json(jobs_path(backend_name, when), payload)
+
+
+def _jsonable(params):
+    out = {}
+    for key, value in (params or {}).items():
+        if isinstance(value, (list, tuple)):
+            out[key] = [list(v) if isinstance(v, tuple) else v for v in value]
+        else:
+            out[key] = value
+    return out
+
+
+def latest_job_record(backend_name):
+    """The most recent submission record for a backend, or None."""
+    try:
+        dirn = _measured_dir(backend_name)
+        names = [n for n in os.listdir(dirn)
+                 if n.startswith(_MEASURED_PREFIX) and n.endswith('_jobs.json')]
+        if not names:
+            return None
+        newest = sorted(names)[-1]
+        with open(os.path.join(dirn, newest), 'r', encoding='utf-8') as fh:
+            record = _json.load(fh)
+        record['_path'] = os.path.join(dirn, newest)
+        return record
+    except Exception:
+        _log.debug('no job record for %s', backend_name, exc_info=True)
+        return None
+
+
+_MAX_DUMP_ITEMS = 1000
+
+
+def dump_raw_results(expdata_list):
+    """Everything an ExperimentData tree holds, as plain JSON-able data.
+
+    Deliberately exhaustive and shape-agnostic: the bug this exists to catch
+    was a parser looking in the wrong place, so a dump that only recorded what
+    the parser already understood would have been useless. Values longer than
+    1000 entries are truncated.
+    """
+    return {'experiments': [_dump_one(d) for d in (expdata_list or [])]}
+
+
+def _dump_one(expdata, depth=0):
+    if expdata is None or depth > 6:
+        return {}
+    node = {
+        'type': type(expdata).__name__,
+        'experiment_type': getattr(expdata, 'experiment_type', None),
+        'status': _status_name(expdata),
+        'job_ids': _job_ids_of(expdata),
+        'results': [],
+        'errors': None,
+        'children': [],
+    }
+    try:
+        errors = expdata.errors()
+        node['errors'] = str(errors) if errors else None
+    except Exception:
+        pass
+    try:
+        raw = expdata.analysis_results()
+    except Exception:
+        raw = None
+    for item in _normalise_results(raw):
+        node['results'].append({
+            'name': str(getattr(item, 'name', '') or ''),
+            'device_components': [str(c) for c in
+                                  (getattr(item, 'device_components', None)
+                                   or [])],
+            'value': _dump_value(getattr(item, 'value', None)),
+        })
+    try:
+        for child in list(expdata.child_data()):
+            node['children'].append(_dump_one(child, depth + 1))
+    except Exception:
+        pass
+    return node
+
+
+def _dump_value(value):
+    try:
+        if hasattr(value, 'nominal_value'):
+            return float(value.nominal_value)
+        if isinstance(value, (int, float, str, bool)) or value is None:
+            return value
+        if hasattr(value, 'tolist'):
+            listed = value.tolist()
+            if isinstance(listed, list) and len(listed) > _MAX_DUMP_ITEMS:
+                return listed[:_MAX_DUMP_ITEMS] + ['...truncated']
+            return listed
+        if isinstance(value, (list, tuple)):
+            listed = list(value)
+            if len(listed) > _MAX_DUMP_ITEMS:
+                return listed[:_MAX_DUMP_ITEMS] + ['...truncated']
+            return listed
+        return str(value)[:500]
+    except Exception:
+        return '<unrepresentable>'
+
+
+def save_raw_results(backend_name, when, expdata_list):
+    return _write_json(raw_path(backend_name, when),
+                       dump_raw_results(expdata_list))
+
+
+def diagnose_raw(path_or_dump):
+    """Human summary of a raw dump: where the results were, and what failed."""
+    dump = path_or_dump
+    if isinstance(path_or_dump, str):
+        try:
+            with open(path_or_dump, 'r', encoding='utf-8') as fh:
+                dump = _json.load(fh)
+        except Exception as exc:
+            return f'Could not read {path_or_dump}: {exc}'
+
+    lines = []
+    experiments = (dump or {}).get('experiments') or []
+    if not experiments:
+        return 'Empty dump: no ExperimentData recorded.'
+
+    from collections import Counter
+    names = Counter()
+    depth_hits = Counter()
+    statuses = Counter()
+    errors = []
+
+    def _walk(node, depth):
+        statuses[node.get('status') or '?'] += 1
+        if node.get('errors'):
+            errors.append((depth, node['errors']))
+        for result in node.get('results') or []:
+            names[result.get('name') or '?'] += 1
+            depth_hits[depth] += 1
+        for child in node.get('children') or []:
+            _walk(child, depth + 1)
+
+    for exp in experiments:
+        _walk(exp, 0)
+
+    lines.append(f'{len(experiments)} top-level experiment(s).')
+    lines.append('Job statuses: ' + ', '.join(
+        f'{k}={v}' for k, v in statuses.most_common()) or 'none')
+    if depth_hits:
+        lines.append('Analysis results by nesting depth: ' + ', '.join(
+            f'depth {d}: {n}' for d, n in sorted(depth_hits.items())))
+    else:
+        lines.append('NO analysis results at any depth — '
+                     'the run produced nothing to parse.')
+    if names:
+        lines.append('Result names: ' + ', '.join(
+            f'{k} x{v}' for k, v in names.most_common(12)))
+    if errors:
+        lines.append(f'{len(errors)} node(s) reported errors:')
+        for depth, text in errors[:5]:
+            lines.append(f'  depth {depth}: {str(text)[:300]}')
+    return '\n'.join(lines)
+
+
+# ── Reanalysis from job ids (zero QPU) ──────────────────────────────
+
+def reanalyze_from_jobs(plan, job_ids, backend, service=None):
+    """Rebuild the analysis from already-executed jobs. Costs no QPU time.
+
+    qiskit-experiments runs its fits CLIENT-SIDE: the jobs hold the raw counts,
+    and analysis is pure post-processing. So a run whose results were parsed
+    badly — or lost to a crash between execution and folding — can be recovered
+    from its job ids alone, without re-executing anything on the device.
+    """
+    api = preload_runtime()
+    experiments = [_build_experiment(spec, api) for spec in plan.specs]
+    batch = api.BatchExperiment(experiments, flatten_results=False)
+
+    jobs = []
+    if service is not None:
+        for job_id in job_ids:
+            try:
+                jobs.append(service.job(job_id))
+            except Exception as exc:          # noqa: BLE001 - reported
+                raise BenchmarkRunError(
+                    f'could not retrieve job {job_id}: {exc}', job_ids) from exc
+    else:
+        jobs = list(job_ids)
+
+    expdata = batch._initialize_experiment_data() \
+        if hasattr(batch, '_initialize_experiment_data') else None
+    if expdata is None:
+        from qiskit_experiments.framework import ExperimentData
+        expdata = ExperimentData(experiment=batch, backend=backend)
+    expdata.add_jobs(jobs)
+    batch.analysis.run(expdata, replace_results=True)
+    expdata.block_for_results()
+    _check_chunk_status(expdata, 0)
+
+    merged = {}
+    for idx, _spec in enumerate(plan.specs):
+        try:
+            merged[idx] = list(_iter_analysis_results(expdata.child_data(idx)))
+        except Exception:
+            merged[idx] = None
+    return merged, expdata
 
 
 def latest_reusable_epoch(backend_name, ttl_minutes=REUSE_TTL_MINUTES,
