@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from qpu_mapper.export.scoring import (
+from iqmapper.export.scoring import (
     estimate_circuit_fidelity, estimate_fidelity_core,
 )
-from qpu_mapper.props_shim import CachedPropsShim
+from iqmapper.props_shim import CachedPropsShim
 
 
 # ── C1 pin — behaviour unchanged across the refactor-extract ────────────

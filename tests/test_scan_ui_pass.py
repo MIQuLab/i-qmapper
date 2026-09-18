@@ -64,12 +64,12 @@ class _FixedProps:
 
 
 def _build(monkeypatch, spawn=_sync_spawn, marshal=lambda cb: cb()):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
     monkeypatch.setattr(au, 'marshal_to_main', marshal)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "stub"          # NOT a target → no ref row
@@ -89,11 +89,11 @@ def _build(monkeypatch, spawn=_sync_spawn, marshal=lambda cb: cb()):
 
 
 def _patch_one(monkeypatch, sweep, props_obj, name='ibm_a'):
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': name, 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: sweep)
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: props_obj))
 
 

@@ -1,4 +1,4 @@
-"""Tests for qpu_mapper.stability_filter — the stability-aware sweep.
+"""Tests for iqmapper.stability_filter — the stability-aware sweep.
 
 Offline, deterministic. Two disconnected width-8 heavy-hex-like blocks
 (the norb=8 host from the sweep tests): block A = ids 0..23, block B =
@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import rustworkx
 
-from qpu_mapper.ancilla_sweep import sweep_ancilla_layouts
-from qpu_mapper.stability_filter import (
+from iqmapper.ancilla_sweep import sweep_ancilla_layouts
+from iqmapper.stability_filter import (
     compute_qubit_volatility, select_excluded, select_quality_floor,
     sweep_with_stability,
 )

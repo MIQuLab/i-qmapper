@@ -18,12 +18,12 @@ def _noop_spawn(fn, on_done=None, on_error=None):
 
 
 def _build(monkeypatch, active='ibm_boston'):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _noop_spawn)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    monkeypatch.setattr("qpu_mapper.qpu_scan._detect_family", lambda b: 'Heron')
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    monkeypatch.setattr("iqmapper.qpu_scan._detect_family", lambda b: 'Heron')
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = active
@@ -50,7 +50,7 @@ def _targets_html(b):
 
 def test_targets_line_compact_mixed(monkeypatch):
     b, state = _build(monkeypatch, active='ibm_boston')
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_pittsburgh', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_fez', 'family': 'Heron', 'eligible': True, 'reason': None},
@@ -74,7 +74,7 @@ def test_targets_line_compact_mixed(monkeypatch):
 
 def test_short_reasons_mapped(monkeypatch):
     b, state = _build(monkeypatch, active='none')
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_ok', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_small', 'family': 'Heron', 'eligible': False,
@@ -96,7 +96,7 @@ def test_short_reasons_mapped(monkeypatch):
 
 def test_targets_line_none(monkeypatch):
     b, state = _build(monkeypatch, active='none')
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Nighthawk', 'eligible': False,
          'reason': 'different family (Nighthawk)'},
@@ -113,7 +113,7 @@ def test_targets_line_none(monkeypatch):
 
 def test_targets_line_escapes_name(monkeypatch):
     b, state = _build(monkeypatch, active='none')
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': '<script>x</script>', 'family': 'Heron', 'eligible': True,
          'reason': None}])

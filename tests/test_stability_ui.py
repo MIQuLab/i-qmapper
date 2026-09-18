@@ -59,13 +59,13 @@ def _detail_by_name(b, name):
 
 def _build(monkeypatch, *, history=False, spawn=_sync_spawn,
            marshal=lambda cb: cb()):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
     monkeypatch.setattr(au, 'marshal_to_main', marshal)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
 
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
 
     state = SessionState()
     state.active_backend = object()
@@ -118,9 +118,9 @@ def test_filter_on_calls_sweep_with_stability(monkeypatch):
         return _canned_res({'available': True, 'relaxed': False,
                             'excluded_final': [1, 2, 3],
                             'window_days': kw.get('window_days')})
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability", fake_sws)
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability", fake_sws)
     plain = []
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: plain.append(1) or _canned_res(None))
 
     b.chk_stability_filter.value = True
@@ -138,7 +138,7 @@ def test_filter_on_calls_sweep_with_stability(monkeypatch):
 def test_banner_states(monkeypatch):
     b = _build(monkeypatch, history=True)
     holder = {}
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: _canned_res(holder['stab']))
     b.chk_stability_filter.value = True
 
@@ -166,11 +166,11 @@ def test_scan_stability_badges(monkeypatch):
     b.chk_stability_filter.value = True        # enabled (history available)
     b.chk_scan_stability.value = True          # filter the scan too
 
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
     # ibm_a has CACHED history, ibm_b does not.
-    from qpu_mapper import data
+    from iqmapper import data
     monkeypatch.setattr(data, 'list_known_calibrations', lambda name, date=None:
                         [{'last_update': '2026-07-05 08:00:00'}] if name == 'ibm_a' else [])
     monkeypatch.setattr(data, '_load_calibration', lambda name, ts:
@@ -178,11 +178,11 @@ def test_scan_stability_badges(monkeypatch):
     # ibm_a → filtered (excluded_final); ibm_b → plain sweep.
     filt = dict(_canned_res({'available': True, 'relaxed': False,
                              'excluded_final': [3, 4], 'window_days': 14}))
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: filt)
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned_res(None))
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: SimpleNamespace(
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
@@ -197,10 +197,10 @@ def test_filter_off_uses_plain_sweep(monkeypatch):
     b = _build(monkeypatch, history=True)
 
     plain = []
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: plain.append(1) or _canned_res(None))
     sws = []
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: sws.append(1) or _canned_res({'available': True}))
 
     assert b.chk_stability_filter.value is False               # default OFF
@@ -215,7 +215,7 @@ def test_filter_off_uses_plain_sweep(monkeypatch):
 def test_banner_counts_volatile_and_outlier(monkeypatch):
     b = _build(monkeypatch, history=True)
     monkeypatch.setattr(
-        "qpu_mapper.stability_filter.sweep_with_stability",
+        "iqmapper.stability_filter.sweep_with_stability",
         lambda *a, **k: _canned_res({
             'available': True, 'relaxed': False,
             'excluded_final': [1, 2, 3, 4, 5],       # 5 total
@@ -230,7 +230,7 @@ def test_banner_counts_volatile_and_outlier(monkeypatch):
 def test_banner_no_outlier_suffix_when_floor_empty(monkeypatch):
     b = _build(monkeypatch, history=True)
     monkeypatch.setattr(
-        "qpu_mapper.stability_filter.sweep_with_stability",
+        "iqmapper.stability_filter.sweep_with_stability",
         lambda *a, **k: _canned_res({
             'available': True, 'relaxed': False,
             'excluded_final': [1, 2], 'n_floor_excluded': 0,
@@ -249,11 +249,11 @@ def test_scan_filtered_per_backend_isolation(monkeypatch):
     b.chk_scan_stability.value = True
     # ibm_c (the MIDDLE target) blows up during history assembly; the loop
     # must survive so ibm_b (after it) still completes.
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_c', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    from qpu_mapper import data
+    from iqmapper import data
     monkeypatch.setattr(data, 'list_known_calibrations', lambda name, date=None:
                         [{'last_update': '2026-07-05 08:00:00'}]
                         if name in ('ibm_a', 'ibm_c') else [])
@@ -266,11 +266,11 @@ def test_scan_filtered_per_backend_isolation(monkeypatch):
 
     filt = dict(_canned_res({'available': True, 'relaxed': False,
                              'excluded_final': [3, 4], 'window_days': 14}))
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: filt)
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned_res(None))
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: SimpleNamespace(
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 

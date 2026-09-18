@@ -18,9 +18,9 @@ def _fake_device(state, vendor, chip, date, prefetched_props=None):
 
 
 def _build(monkeypatch):
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "stub"
@@ -40,13 +40,13 @@ def _build(monkeypatch):
 
 
 def _qubit_trace(fig):
-    from qpu_mapper.plot import _META_QUBITS
+    from iqmapper.plot import _META_QUBITS
     return next(t for t in fig.data if getattr(t, 'meta', None) == _META_QUBITS)
 
 
 def test_refresh_preserves_nodes_when_qubit_ids_empty(monkeypatch, caplog):
     b = _build(monkeypatch)
-    from qpu_mapper import plot
+    from iqmapper import plot
 
     qt = _qubit_trace(b.fig)
     assert len(qt.x) == 8 and len(qt.marker.color) == 8      # nodes present
@@ -54,7 +54,7 @@ def test_refresh_preserves_nodes_when_qubit_ids_empty(monkeypatch, caplog):
     # Emptying qubit_ids while edges remain used to wipe the node colour/text
     # (positions kept) → invisible nodes, edges drawn. The guard must refuse.
     b.state.qubit_ids = []
-    with caplog.at_level(logging.WARNING, logger='qpu_mapper.plot'):
+    with caplog.at_level(logging.WARNING, logger='iqmapper.plot'):
         plot.refresh_plot(b.fig, b.state, b.widgets_ref)
 
     assert len(qt.x) == 8                                     # positions intact
@@ -65,7 +65,7 @@ def test_refresh_preserves_nodes_when_qubit_ids_empty(monkeypatch, caplog):
 
 def test_refresh_rewrites_node_positions_from_state(monkeypatch):
     b = _build(monkeypatch)
-    from qpu_mapper import plot
+    from iqmapper import plot
 
     # Move the device coordinates, then refresh: the node trace x/y must follow
     # the state (same source), so it can never diverge from what is painted.

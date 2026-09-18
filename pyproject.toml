@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "i-qmapper"
-version = "0.0.5"
+version = "0.1.0.dev0"
 description = "Interactive, noise-aware QPU layout mapper for Jupyter Lab"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -44,9 +44,9 @@ timelapse = ["imageio", "imageio-ffmpeg"]
 dev = ["pytest>=7", "pytest-cov"]
 
 [project.urls]
-Homepage = "https://github.com/mbazayeva/i-qmapper"
-Issues = "https://github.com/mbazayeva/i-qmapper/issues"
-Changelog = "https://github.com/mbazayeva/i-qmapper/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/MIQuLab/i-qmapper"
+Issues = "https://github.com/MIQuLab/i-qmapper/issues"
+Changelog = "https://github.com/MIQuLab/i-qmapper/blob/main/CHANGELOG.md"
 Paper = "https://arxiv.org/abs/2606.27508"
 
 [tool.setuptools.packages.find]

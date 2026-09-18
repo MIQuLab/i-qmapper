@@ -75,7 +75,7 @@ def _k_cap_phrase(norb, k_effective):
 
 
 class _ScanNoticeCapture(logging.Handler):
-    """Captures WARNING+ records off the 'qpu_mapper' logger during a
+    """Captures WARNING+ records off the 'iqmapper' logger during a
     scan, tagging each with the current backend context. emit() never raises
     out — a logging hiccup must not break the scan."""
 
@@ -93,7 +93,7 @@ class _ScanNoticeCapture(logging.Handler):
 
 @contextlib.contextmanager
 def _capture_qpu_notices(context_getter):
-    """Capture WARNING+ records off the 'qpu_mapper' logger for the duration of
+    """Capture WARNING+ records off the 'iqmapper' logger for the duration of
     a sweep and stop them leaking under the notebook cell (propagate=False).
     Attaches the handler in the try; restores BOTH the handler and propagate in
     finally, so a raising sweep can't leave the logger muted or double-handled.
@@ -103,7 +103,7 @@ def _capture_qpu_notices(context_getter):
     Shared by every sweep path: the multi-QPU scan, the local single sweep, and
     the multi-circuit sweep + replan. Restoration is the try/finally guarantee
     the tests pin."""
-    logger = logging.getLogger('qpu_mapper')
+    logger = logging.getLogger('iqmapper')
     orig_propagate = logger.propagate
     handler = _ScanNoticeCapture(context_getter)
     try:
@@ -662,7 +662,7 @@ def setup_lucj_callbacks(ctx):
         lbl_lucj_notices.value = ""
         try:
             requested_ancillas = lucj_ancilla_dd.value
-            # Capture WARNING+ off 'qpu_mapper' for the sweep so bridge/VF2
+            # Capture WARNING+ off 'iqmapper' for the sweep so bridge/VF2
             # notices land in the loud notices bar, not under the cell.
             with _capture_qpu_notices(
                     lambda: state.active_backend_name or 'local sweep') as handler:
@@ -1308,7 +1308,7 @@ def setup_lucj_callbacks(ctx):
                            and chk_scan_stability.value)
 
         def _work():
-            # Capture WARNING+ off 'qpu_mapper' for the scan's duration and stop
+            # Capture WARNING+ off 'iqmapper' for the scan's duration and stop
             # them leaking under the cell — the same context every sweep uses.
             with _capture_qpu_notices(
                     lambda: _scan.get('current') or 'general') as handler:

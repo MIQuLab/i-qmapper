@@ -42,8 +42,8 @@ def _export_stub():
 # ── 1. header re-renders on api.rebuild() (the switch hook's effect) ─────────
 
 def test_header_updates_after_backend_switch():
-    from qpu_mapper.ui.time_panel import build_time_panel
-    from qpu_mapper.state import SessionState
+    from iqmapper.ui.time_panel import build_time_panel
+    from iqmapper.state import SessionState
 
     state = SessionState()
     state.active_backend_name = 'ibm_old'
@@ -87,7 +87,7 @@ def _switch_ctx(state, *, load_device_graph, refresh_time_panel):
 
 
 def _fresh_state():
-    from qpu_mapper.state import SessionState
+    from iqmapper.state import SessionState
     state = SessionState()
     state.active_backend_name = 'ibm_old'
     state.active_chip = 'Heron r1'
@@ -97,10 +97,10 @@ def _fresh_state():
 
 
 def test_switch_invokes_time_panel_hook(monkeypatch):
-    from qpu_mapper.ui.backend_switch import setup_backend_switch
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    from iqmapper.ui.backend_switch import setup_backend_switch
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'Heron r1'))
 
     events = []
@@ -127,10 +127,10 @@ def test_switch_invokes_time_panel_hook(monkeypatch):
 
 
 def test_switch_rollback_invokes_hook(monkeypatch):
-    from qpu_mapper.ui.backend_switch import setup_backend_switch
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    from iqmapper.ui.backend_switch import setup_backend_switch
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'Heron r1'))
 
     events = []

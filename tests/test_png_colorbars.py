@@ -12,8 +12,8 @@ import pytest
 pytest.importorskip('plotly')
 import plotly.graph_objects as go     # noqa: E402
 
-from qpu_mapper import plot            # noqa: E402  (constants + _trace_by_meta only)
-from qpu_mapper.ui.png_export import _append_live_colorbars  # noqa: E402
+from iqmapper import plot            # noqa: E402  (constants + _trace_by_meta only)
+from iqmapper.ui.png_export import _append_live_colorbars  # noqa: E402
 
 
 def _cb_trace(meta, *, showscale, cmin, cmax, title):
@@ -85,7 +85,7 @@ def _walk(node):
 
 def test_export_site_invokes_helper(monkeypatch, tmp_path):
     from ipywidgets import Text, Button, HTML, Output, Layout
-    from qpu_mapper.ui import png_export as pe
+    from iqmapper.ui import png_export as pe
 
     events = []
 

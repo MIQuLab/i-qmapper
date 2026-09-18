@@ -4,7 +4,7 @@ title: "I-QMapper"
 authors:
   - family-names: "Bazayeva"
     given-names: "Milana"
-version: 0.0.5
+version: 0.1.0.dev0
 license: Apache-2.0
 preferred-citation:
   type: article

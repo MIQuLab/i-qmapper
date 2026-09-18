@@ -1,4 +1,4 @@
-# qpu_mapper (I-QMapper) — runtime dependencies.
+# I-QMapper — runtime dependencies.
 # Mirrors [project.dependencies] in pyproject.toml (the source of truth).
 # Install with:  pip install -r requirements.txt
 # Requires Python >= 3.10.

@@ -38,12 +38,12 @@ def _sweep(k_max_effective=1):
 
 
 def _build(monkeypatch):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "stub"
@@ -63,7 +63,7 @@ def _build(monkeypatch):
 
 
 def _patch_targets(monkeypatch, names=('ibm_a',)):
-    import qpu_mapper.qpu_scan as qs
+    import iqmapper.qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': n, 'family': 'Heron', 'eligible': True, 'reason': None}
         for n in names])
@@ -71,8 +71,8 @@ def _patch_targets(monkeypatch, names=('ibm_a',)):
 
 def _patch_engine(monkeypatch, sweep_fn):
     """Drive _scan_backends: per-target sweep + a stub props factory."""
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", sweep_fn)
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts", sweep_fn)
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: SimpleNamespace(
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
 
@@ -117,8 +117,8 @@ def test_k_not_capped_no_note(monkeypatch):
 def test_notices_capture_and_dedup(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
-    lg = logging.getLogger('qpu_mapper')
+    import iqmapper.qpu_scan as qs
+    lg = logging.getLogger('iqmapper')
 
     def sweep_warns(norb, backend, props, **kw):
         # Runs while _scan['current'] == 'ibm_a' (set by the 'start' event).
@@ -142,7 +142,7 @@ def test_notices_capture_and_dedup(monkeypatch):
 def test_logger_restored_after_scan(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    lg = logging.getLogger('qpu_mapper')
+    lg = logging.getLogger('iqmapper')
     h0, p0 = list(lg.handlers), lg.propagate
 
     _patch_engine(monkeypatch, lambda *a, **k: _sweep())

@@ -18,7 +18,7 @@ import pytest
 def test_resync_helper_snapshots_state():
     pytest.importorskip('plotly')
     import plotly.graph_objects as go
-    from qpu_mapper.ui.inter_qpu import _resync_widget_state
+    from iqmapper.ui.inter_qpu import _resync_widget_state
 
     fig = go.FigureWidget()
     fig.add_trace(go.Scatter(x=[1.0, 2.0, 3.0], y=[0.0, 0.0, 0.0],
@@ -33,7 +33,7 @@ def test_resync_helper_snapshots_state():
 
 
 def test_resync_helper_never_raises():
-    from qpu_mapper.ui.inter_qpu import _resync_widget_state
+    from iqmapper.ui.inter_qpu import _resync_widget_state
     # Non-figure object → the plotly-private attribute access fails; the guard
     # swallows it and returns False (never fatal to the connect).
     assert _resync_widget_state(object()) is False
@@ -97,14 +97,14 @@ _CAND = {'alpha': [0], 'beta': [1], 'ancillas': [2]}
 
 
 def test_paint_resyncs_before_mount(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
 
     events = []
 
     def _rec_resync(fig):
         events.append(('resync', fig))
         return True
-    monkeypatch.setattr("qpu_mapper.ui.inter_qpu._resync_widget_state",
+    monkeypatch.setattr("iqmapper.ui.inter_qpu._resync_widget_state",
                         _rec_resync)
 
     def _fake_build(s2, is_secondary=False, return_widgets=False):
@@ -118,12 +118,12 @@ def test_paint_resyncs_before_mount(monkeypatch):
                              plot_h_slider=SimpleNamespace(value=0))
         return (full_ui, fig, w2) if return_widgets else (full_ui, fig)
 
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'chip'))
-    monkeypatch.setattr("qpu_mapper.ui.build_mapper_ui", _fake_build)
-    monkeypatch.setattr("qpu_mapper.plot.refresh_plot", lambda fig, st, w: None)
+    monkeypatch.setattr("iqmapper.ui.build_mapper_ui", _fake_build)
+    monkeypatch.setattr("iqmapper.plot.refresh_plot", lambda fig, st, w: None)
 
     state = SimpleNamespace(
         available_backends=['ibm_k'], active_backend_name='ibm_here',

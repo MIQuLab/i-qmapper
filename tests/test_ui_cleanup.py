@@ -42,12 +42,12 @@ def _canned():
 
 
 def _build(monkeypatch):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "ibm_here"
@@ -84,7 +84,7 @@ def test_local_block_above_scan(monkeypatch):
 
 def test_clear_scan_results(monkeypatch):
     b = _build(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
+    import iqmapper.qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_other', 'family': 'Heron', 'eligible': True,
          'reason': None}])
@@ -106,7 +106,7 @@ def test_clear_scan_results(monkeypatch):
 
 def test_new_scan_auto_clears(monkeypatch):
     b = _build(monkeypatch)
-    import qpu_mapper.qpu_scan as qs
+    import iqmapper.qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_other', 'family': 'Heron', 'eligible': True,
          'reason': None}])
@@ -165,7 +165,7 @@ def _inter_ctx():
 
 
 def test_staged_banner_then_cleared_on_connect():
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     ctx, state = _inter_ctx()
     setup_inter_qpu(ctx)
     stage = ctx.handoff_cell[0]
@@ -185,7 +185,7 @@ def test_staged_banner_then_cleared_on_connect():
 
 def test_label_disambiguation(monkeypatch):
     b = _build(monkeypatch)
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned())
     b.lucj_ancilla_dd.value = -1                       # sweep mode
     b.btn_lucj_run.click()

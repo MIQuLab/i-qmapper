@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from qpu_mapper.ui.lucj_panel import _format_sweep_status
+from iqmapper.ui.lucj_panel import _format_sweep_status
 
 
 def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
@@ -72,14 +72,14 @@ def _targets():
 
 
 def _build(monkeypatch, spawn=_sync_spawn, marshal=None):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
     if marshal is not None:
         monkeypatch.setattr(au, 'marshal_to_main', marshal)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
 
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
 
     state = SessionState()
     state.active_backend = object()
@@ -102,9 +102,9 @@ def _build(monkeypatch, spawn=_sync_spawn, marshal=None):
 
 def _patch_scan(monkeypatch, sweeps=None, props=None, targets=None):
     """Drive _scan_backends: canned per-target sweep + stub props factory."""
-    import qpu_mapper.qpu_scan as qs
-    import qpu_mapper.ancilla_sweep as asw
-    import qpu_mapper.props_shim as ps
+    import iqmapper.qpu_scan as qs
+    import iqmapper.ancilla_sweep as asw
+    import iqmapper.props_shim as ps
     monkeypatch.setattr(qs, 'list_scan_targets',
                         lambda *a, **k: targets or _targets())
     sweeps = sweeps or {'ibm_b': _sweep(0.60, 0.50), 'ibm_a': _sweep(0.40, 0.30),
@@ -290,10 +290,10 @@ def test_scan_live_vintage(monkeypatch):
 
 def test_scan_fetch_failure_error_row(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _sweep(0.6, 0.5))
 
     def get_props(state):
@@ -302,7 +302,7 @@ def test_scan_fetch_failure_error_row(monkeypatch):
                 raise RuntimeError("network down fetching calibration")
             return _StubProps(0.6, 'live · 09:30')
         return gp
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props", get_props)
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props", get_props)
 
     b.btn_scan_qpus.click()
     assert 'network down' in _detail_by_name(b, 'ibm_a')   # honest error row
@@ -312,7 +312,7 @@ def test_scan_fetch_failure_error_row(monkeypatch):
 # ── stability filter still reads the cache for HISTORY ────────────────
 
 def test_stability_history_reads_cache(monkeypatch):
-    from qpu_mapper.state import SessionState
+    from iqmapper.state import SessionState
     b = _build(monkeypatch, marshal=lambda cb: cb())
     # Enable the filter (needs local history available) + the scan sub-filter.
     b.state.cal_history_dates = ['2026-07-01']
@@ -322,18 +322,18 @@ def test_stability_history_reads_cache(monkeypatch):
     b.chk_stability_filter.value = True
     b.chk_scan_stability.value = True
 
-    from qpu_mapper import data
+    from iqmapper import data
     loads = []
     monkeypatch.setattr(data, 'list_known_calibrations',
                         lambda name, date=None: [{'last_update': '2026-07-05 08:00:00'}])
     monkeypatch.setattr(data, '_load_calibration',
                         lambda name, ts: loads.append(name) or
                         ({'readout_error': [0.01] * 8}, {'cz_error': [0.001] * 7}))
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: {**_sweep(0.6, 0.5), 'stability': {'available': True}})
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: _StubProps(0.6, 'live · 09:30')))
 
     b.btn_scan_qpus.click()
@@ -347,11 +347,11 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     calls = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, bk, pr, **kw: calls.append(kw) or _sweep(0.6, 0.5))
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets",
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets",
                         lambda *a, **k: _targets())
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: _StubProps(0.6)))
 
     b.chk_deep_search.value = False                 # a non-default value
@@ -381,12 +381,12 @@ def test_active_backend_skipped_with_reference(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     swept = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, bk, pr, **kw: swept.append(bk.name) or _sweep(0.6, 0.5))
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'stub', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: _StubProps(0.6)))
 
     b.btn_scan_qpus.click()
@@ -403,11 +403,11 @@ def test_scan_honors_hybrid_checkbox(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     calls = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, bk, pr, **kw: calls.append(kw) or _sweep(0.6, 0.5))
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets",
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets",
                         lambda *a, **k: _targets())
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: _StubProps(0.6)))
 
     b.chk_deep_search.value = True
@@ -424,11 +424,11 @@ def _scan_html(b):
 
 
 def _patch_one_target(monkeypatch, sweep, props_obj):
-    monkeypatch.setattr("qpu_mapper.qpu_scan.list_scan_targets", lambda *a, **k: [
+    monkeypatch.setattr("iqmapper.qpu_scan.list_scan_targets", lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: sweep)
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: props_obj))
 
 

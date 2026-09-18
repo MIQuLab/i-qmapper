@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import rustworkx
 
-from qpu_mapper.ancilla_sweep import sweep_ancilla_layouts
+from iqmapper.ancilla_sweep import sweep_ancilla_layouts
 
 NORB = 8
 CAP = 2                      # smaller than block A's embedding count → truncates

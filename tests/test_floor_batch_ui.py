@@ -44,11 +44,11 @@ def _canned(**extra):
 
 
 def _build(monkeypatch, spawn=_sync_spawn):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_16)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_16)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "stub"
@@ -77,7 +77,7 @@ def _build(monkeypatch, spawn=_sync_spawn):
 def test_floor_excludes_outlier_by_default(monkeypatch):
     b, state = _build(monkeypatch)
     cap = {}
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda norb, bk, pr, **k: cap.update(k) or _canned())
     b.lucj_ancilla_dd.value = -1                  # sweep mode
     b.btn_lucj_run.click()
@@ -90,7 +90,7 @@ def test_floor_excludes_outlier_by_default(monkeypatch):
 def test_floor_off_at_sigma_zero(monkeypatch):
     b, state = _build(monkeypatch)
     cap = {}
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda norb, bk, pr, **k: cap.update(k) or _canned())
     b.ft_stability_floor.value = 0                # off
     b.lucj_ancilla_dd.value = -1
@@ -106,13 +106,13 @@ def test_floor_and_filter_no_double(monkeypatch):
     state.cal_history = {'2026-07-01': {'qubit_props': {'readout_error': [0.01] * 16},
                                         'gate_props': {}}}
     sws = {}
-    monkeypatch.setattr("qpu_mapper.stability_filter.sweep_with_stability",
+    monkeypatch.setattr("iqmapper.stability_filter.sweep_with_stability",
                         lambda *a, **k: sws.update(k) or _canned(
                             stability={'available': True, 'relaxed': False,
                                        'excluded_final': [5], 'window_days': 14,
                                        'n_floor_excluded': 1, 'floor_qubits': [5]}))
     plain = []
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: plain.append(k) or _canned())
     b.chk_stability_filter.disabled = False          # history available
     b.chk_stability_filter.value = True
@@ -128,7 +128,7 @@ def test_floor_and_filter_no_double(monkeypatch):
 
 def test_scan_floor_per_backend(monkeypatch):
     b, state = _build(monkeypatch)
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None},
         {'name': 'ibm_b', 'family': 'Heron', 'eligible': True, 'reason': None}])
@@ -139,10 +139,10 @@ def test_scan_floor_per_backend(monkeypatch):
              'ibm_b': SimpleNamespace(_readout=np.array([0.01] * 16), n_qubits=16,
                                       vintage='live',
                                       score_layout=lambda q: {'fidelity': 0.5})}
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: props[backend.name]))
     seen = {}
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda norb, bk, pr, **k: seen.setdefault(bk.name, k) or _canned())
     b.btn_scan_qpus.click()
     assert 5 in (seen['ibm_a'].get('exclude_qubits') or set())
@@ -154,11 +154,11 @@ def test_scan_floor_per_backend(monkeypatch):
 def test_legacy_paths_untouched(monkeypatch):
     b, state = _build(monkeypatch)
     single = []
-    monkeypatch.setattr("qpu_mapper.auto_lucj.get_all_zigzag_layouts",
+    monkeypatch.setattr("iqmapper.auto_lucj.get_all_zigzag_layouts",
                         lambda **k: single.append(k) or ([{'rank': 1, 'score': 0.1,
                                                            'alpha': [0, 1], 'beta': [2, 3]}], 1))
     multi = []
-    monkeypatch.setattr("qpu_mapper.auto_lucj.get_multi_circuit_layouts",
+    monkeypatch.setattr("iqmapper.auto_lucj.get_multi_circuit_layouts",
                         lambda **k: multi.append(k) or [
                             {'circuit_idx': 0, 'norb': 8, 'num_bridges': 2,
                              'all_candidates': [{'layout': [0, 1, 2, 3],
@@ -192,7 +192,7 @@ def _batch_result_row(name, total_lqs, ks, failed_at=None):
 
 def test_batch_scan_rows_sorted_and_failed_labeled(monkeypatch):
     b, state = _build(monkeypatch)
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [])
     # scan_qpus returns a ready-ranked batch result (ibm_hi first).
     monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {'results': [
@@ -225,11 +225,11 @@ def test_batch_scan_rows_sorted_and_failed_labeled(monkeypatch):
 
 def test_batch_scan_sweep_fn_gets_multi_knobs(monkeypatch):
     b, state = _build(monkeypatch)
-    from qpu_mapper import qpu_scan as qs
-    from qpu_mapper import multi_sweep as ms
+    from iqmapper import qpu_scan as qs
+    from iqmapper import multi_sweep as ms
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_a', 'family': 'Heron', 'eligible': True, 'reason': None}])
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state: (lambda backend: SimpleNamespace(
                             _readout=np.array([0.01] * 16), n_qubits=16,
                             vintage='live', score_layout=lambda q: {'fidelity': 0.5})))
@@ -256,7 +256,7 @@ def test_batch_scan_sweep_fn_gets_multi_knobs(monkeypatch):
 
 def test_batch_selector_handoff_payload(monkeypatch):
     b, state = _build(monkeypatch)
-    from qpu_mapper import qpu_scan as qs
+    from iqmapper import qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [])
     monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {'results': [
         _batch_result_row('ibm_hi', 0.61, 2)],

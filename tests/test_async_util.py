@@ -1,4 +1,4 @@
-"""Regression tests for qpu_mapper.async_util.
+"""Regression tests for iqmapper.async_util.
 
 Two invariants pinned here:
 
@@ -257,9 +257,9 @@ def _build_ui(monkeypatch):
                 np.array([0.01 * (i + 1) for i in range(n)]),
                 np.array([0.001 * (i + 1) for i in range(n - 1)]))
 
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = 'stub'

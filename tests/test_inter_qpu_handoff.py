@@ -88,11 +88,11 @@ def _stub_connect_deps(monkeypatch):
                              plot_h_slider=SimpleNamespace(value=0))
         return (full_ui, fig, w2) if return_widgets else (full_ui, fig)
 
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'chip_label'))
-    monkeypatch.setattr("qpu_mapper.ui.build_mapper_ui", _fake_build)
+    monkeypatch.setattr("iqmapper.ui.build_mapper_ui", _fake_build)
 
 
 _CAND = {'alpha': [0], 'beta': [1], 'ancillas': [2]}
@@ -101,7 +101,7 @@ _CAND = {'alpha': [0], 'beta': [1], 'ancillas': [2]}
 # ── selection triggers connect once; staged→connecting→connected ────────
 
 def test_selection_auto_connects_once(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     _stub_connect_deps(monkeypatch)
     calls = []
     ctx, state = _ctx(spawn=_sync_spawn, backend_calls=calls)
@@ -120,7 +120,7 @@ def test_selection_auto_connects_once(monkeypatch):
 # ── connect raising → staged fallback + error, trigger re-enabled ───────
 
 def test_connect_failure_falls_back_to_staged(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     _stub_connect_deps(monkeypatch)
     calls = []
     ctx, state = _ctx(spawn=_sync_spawn, backend_calls=calls, raise_connect=True)
@@ -140,7 +140,7 @@ def test_connect_failure_falls_back_to_staged(monkeypatch):
 # ── in-flight guard — a second selection does not double-connect ────────
 
 def test_in_flight_guard_no_double_connect(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     _stub_connect_deps(monkeypatch)
     calls = []
     queued = []
@@ -166,10 +166,10 @@ def test_in_flight_guard_no_double_connect(monkeypatch):
 # ── same backend already connected → apply + repaint, no reconnect ──────
 
 def test_same_backend_applies_without_reconnect(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     _stub_connect_deps(monkeypatch)
     repaints = []
-    monkeypatch.setattr("qpu_mapper.plot.refresh_plot",
+    monkeypatch.setattr("iqmapper.plot.refresh_plot",
                         lambda fig, st, w: repaints.append(st))
     calls = []
     ctx, state = _ctx(spawn=_sync_spawn, backend_calls=calls)
@@ -192,7 +192,7 @@ def test_same_backend_applies_without_reconnect(monkeypatch):
 # ── batch handoff: a LIST of candidates applies to C1..Cn on QPU-2 ──────────
 
 def test_batch_handoff_applies_all_circuits(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
     captured = {}
 
     def _fake_build(s2, is_secondary=False, return_widgets=False):
@@ -207,11 +207,11 @@ def test_batch_handoff_applies_all_circuits(monkeypatch):
                              plot_h_slider=SimpleNamespace(value=0))
         return (full_ui, fig, w2) if return_widgets else (full_ui, fig)
 
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'chip'))
-    monkeypatch.setattr("qpu_mapper.ui.build_mapper_ui", _fake_build)
+    monkeypatch.setattr("iqmapper.ui.build_mapper_ui", _fake_build)
 
     ctx, state = _ctx(spawn=_sync_spawn, backend_calls=[])
     setup_inter_qpu(ctx)
@@ -231,7 +231,7 @@ def test_batch_handoff_applies_all_circuits(monkeypatch):
 #    proves the candidate both LANDS on QPU-2 state AND reaches the figure.
 
 def _qubit_trace(fig):
-    from qpu_mapper.plot import _META_QUBITS
+    from iqmapper.plot import _META_QUBITS
     return next((tr for tr in fig.data
                  if getattr(tr, 'meta', None) == _META_QUBITS), None)
 
@@ -269,17 +269,17 @@ def _primary_with_stubs(monkeypatch, spawn=_sync_spawn):
                 np.array([0.01 * (i + 1) for i in range(n)]),
                 np.array([0.001 * (i + 1) for i in range(n - 1)]))
 
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([(i, 0) for i in range(8)], 'chip'))
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
 
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = 'ibm_here'
@@ -296,7 +296,7 @@ def _primary_with_stubs(monkeypatch, spawn=_sync_spawn):
     b = MapperUIBuilder(state)
     b.build()
 
-    import qpu_mapper.ui as ui_pkg
+    import iqmapper.ui as ui_pkg
     real = ui_pkg.build_mapper_ui
     cap = {}
 
@@ -372,7 +372,7 @@ def test_batch_handoff_keeps_base_map_real_build(monkeypatch):
 
 def test_paint_runs_on_main_thread(monkeypatch):
     b, cap = _primary_with_stubs(monkeypatch)
-    import qpu_mapper.ui as ui_pkg
+    import iqmapper.ui as ui_pkg
     inner = ui_pkg.build_mapper_ui
     build_threads = []
 
@@ -390,7 +390,7 @@ def test_paint_runs_on_main_thread(monkeypatch):
 
 def test_continuation_failure_falls_back_to_staged(monkeypatch):
     b, cap = _primary_with_stubs(monkeypatch)
-    import qpu_mapper.ui as ui_pkg
+    import iqmapper.ui as ui_pkg
 
     def _boom_build(*a, **k):
         raise RuntimeError('build boom')

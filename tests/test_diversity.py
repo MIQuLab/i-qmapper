@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import rustworkx
 
-from qpu_mapper.ancilla_sweep import (
+from iqmapper.ancilla_sweep import (
     _jaccard, _select_with_diversity, sweep_ancilla_layouts,
 )
 

@@ -15,7 +15,7 @@ from .mapper import launch_mapper
 
 
 def run():
-    """Launch the QPU Mapper UI (sidebar layout)."""
+    """Launch the I-QMapper UI (sidebar layout)."""
     # Capture the kernel main loop HERE — run() is called from a notebook cell,
     # which is GUARANTEED to be the main thread with the kernel loop up. This is
     # the earliest, most reliable capture point; later build() calls are

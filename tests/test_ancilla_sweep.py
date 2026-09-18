@@ -1,4 +1,4 @@
-"""Tests for qpu_mapper.ancilla_sweep — the one-shot bridge-subtraction sweep.
+"""Tests for iqmapper.ancilla_sweep — the one-shot bridge-subtraction sweep.
 
 Deterministic and fully offline (no qiskit, no network). A synthetic backend
 is built from two disconnected width-8 heavy-hex-like "ladder" blocks:
@@ -30,7 +30,7 @@ import rustworkx
 
 from types import SimpleNamespace
 
-from qpu_mapper.ancilla_sweep import sweep_ancilla_layouts
+from iqmapper.ancilla_sweep import sweep_ancilla_layouts
 
 GOOD_QUBITS = set(range(24))   # ids 0..23 are the low-error "good region"
 

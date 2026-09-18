@@ -35,7 +35,7 @@ _SNAP_T2 = np.array([80.0, 82.0, 84.0, 86.0, 88.0])        # µs
 
 
 def _build(monkeypatch, *, snapshot, ancilla=0):
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
     captured = {}
     monkeypatch.setattr(
         "iqmapper.auto_lucj.get_all_zigzag_layouts",
@@ -144,7 +144,7 @@ def test_sweep_uses_snapshot_not_live(monkeypatch):
                 'mapping_cap': None, 'k_max_effective': None}
 
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", _fake_sweep)
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts", _fake_sweep)
     b, state, _ = _build(monkeypatch, snapshot=True, ancilla=-1)
     b.btn_lucj_run.click()
     pr = swept['props']

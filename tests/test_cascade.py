@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import rustworkx
 
-from qpu_mapper.ancilla_sweep import sweep_ancilla_layouts
+from iqmapper.ancilla_sweep import sweep_ancilla_layouts
 
 NORB = 12
 GOOD = set(range(100, 126))          # region G qubit ids

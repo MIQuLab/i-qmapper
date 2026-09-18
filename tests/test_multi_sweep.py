@@ -1,4 +1,4 @@
-"""Tests for qpu_mapper.multi_sweep — the sequential multi-circuit orchestrator.
+"""Tests for iqmapper.multi_sweep — the sequential multi-circuit orchestrator.
 
 Offline, deterministic. Two synthetic hosts:
   * TWO-BLOCK: two disjoint width-8 ladder blocks (ids 0..23 and 24..47), the
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import rustworkx
 
-from qpu_mapper.multi_sweep import sweep_multi_circuits, replan_from
+from iqmapper.multi_sweep import sweep_multi_circuits, replan_from
 
 
 def _block(base, edges):

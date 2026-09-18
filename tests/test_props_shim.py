@@ -1,4 +1,4 @@
-"""Tests for qpu_mapper.props_shim — the cache-aware props adapter.
+"""Tests for iqmapper.props_shim — the cache-aware props adapter.
 
 t1 (the crux): CachedPropsShim built from B0.a-shaped dicts answers
 readout_error(q) and gate_error(name, pair) for both edge orders, and
@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from qpu_mapper.props_shim import CachedPropsShim, make_scan_get_props
+from iqmapper.props_shim import CachedPropsShim, make_scan_get_props
 
 
 def _fixtures():
@@ -98,7 +98,7 @@ def _fake_remote_backend(name='ibm_remote', n=4):
 
 def test_remote_scoring_is_live_never_cache_read(monkeypatch):
     from datetime import datetime
-    from qpu_mapper import data
+    from iqmapper import data
     reads, saves, fetched = [], [], []
     monkeypatch.setattr(data, 'list_known_calibrations',
                         lambda *a, **k: reads.append('list') or [])
@@ -136,7 +136,7 @@ def test_active_backend_uses_state_props_not_cache(monkeypatch):
         properties=lambda: (_ for _ in ()).throw(
             AssertionError("must not fetch live for active backend")))
 
-    from qpu_mapper import data
+    from iqmapper import data
     cache_calls = []
     monkeypatch.setattr(data, 'list_known_calibrations',
                         lambda name, date=None: cache_calls.append(name) or [])
@@ -153,7 +153,7 @@ def test_active_backend_uses_state_props_not_cache(monkeypatch):
     assert props.vintage == 'live'
 
     # Score equals the C1 wrapper on the same fixture (identical data path).
-    from qpu_mapper.export.scoring import estimate_circuit_fidelity
+    from iqmapper.export.scoring import estimate_circuit_fidelity
     st = SimpleNamespace(
         layouts_data={0: {'alpha': ['0', '1'], 'beta': ['2', '3'],
                           'other': [], 'ancilla': []}},
@@ -166,7 +166,7 @@ def test_active_backend_uses_state_props_not_cache(monkeypatch):
 # ── a fetch failure raises (no cached fallback) ──────────────────────
 
 def test_remote_fetch_failure_raises_no_cache_fallback(monkeypatch):
-    from qpu_mapper import data
+    from iqmapper import data
     # A cached snapshot EXISTS, but it must NOT be used as a fallback.
     monkeypatch.setattr(data, 'list_known_calibrations',
                         lambda *a, **k: [{'last_update': '2026-07-05 08:00:00'}])
@@ -216,7 +216,7 @@ def test_qubit_length_mismatch_raises():
 # ── end-to-end pin — shim score == core hand-built from same snapshot ─
 
 def test_shim_score_matches_core_handbuilt():
-    from qpu_mapper.export.scoring import estimate_fidelity_core
+    from iqmapper.export.scoring import estimate_fidelity_core
     qp = {'readout_error': [0.01, 0.02, 0.03, 0.04]}
     gp = {'cz_error': [0.001, 0.002, 1.0]}       # (2,3) dead
     edges = [(0, 1), (1, 2), (2, 3)]
@@ -236,7 +236,7 @@ def test_shim_score_matches_core_handbuilt():
 # ── SYM-1 t1: score_layout scores the FULL directed surface (== C1 core) ─────
 
 def test_score_layout_full_directed_surface():
-    from qpu_mapper.export.scoring import estimate_fidelity_core
+    from iqmapper.export.scoring import estimate_fidelity_core
     # Bidirectional coupling map + an INCIDENTAL edge (0,2) among the set
     # (not on the chain path) carrying a large error.
     edges = [(0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)]

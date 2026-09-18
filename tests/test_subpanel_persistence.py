@@ -55,12 +55,12 @@ def _mresult():
 
 
 def _build(monkeypatch):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()              # no .coords → Auto allowed
     state.active_backend_name = "ibm_here"
@@ -83,7 +83,7 @@ def _build(monkeypatch):
 
 def test_multi_generate_keeps_multi_subpanel(monkeypatch):
     b, state = _build(monkeypatch)
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     monkeypatch.setattr(ms, 'sweep_multi_circuits', lambda *a, **k: _mresult())
 
     b.intra_qpu_mode.value = True                # reveal the Multi subpanel
@@ -188,7 +188,7 @@ def _on_multi(b):
 
 def test_multi_generate_no_rebuild(monkeypatch):
     b, state = _build(monkeypatch)
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     monkeypatch.setattr(ms, 'sweep_multi_circuits', lambda *a, **k: _mresult())
     tab_before = _on_multi(b)
     content_before = b.content_box.children[0]
@@ -207,7 +207,7 @@ def test_multi_generate_no_rebuild(monkeypatch):
 
 def test_multi_generate_targeted_widgets_refreshed(monkeypatch):
     b, state = _build(monkeypatch)
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     monkeypatch.setattr(ms, 'sweep_multi_circuits', lambda *a, **k: _mresult())
     _on_multi(b)
 
@@ -242,7 +242,7 @@ def test_checkbox_toggle_still_rebuilds(monkeypatch):
 def test_legacy_multi_generate_no_rebuild(monkeypatch):
     b, state = _build(monkeypatch)
     monkeypatch.setattr(
-        "qpu_mapper.auto_lucj.get_multi_circuit_layouts",
+        "iqmapper.auto_lucj.get_multi_circuit_layouts",
         lambda **k: [
             {'circuit_idx': i, 'norb': 8, 'num_bridges': 0,
              'all_candidates': [{'layout': [0, 1, 2, 3], 'alpha': [0, 1],

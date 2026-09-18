@@ -1,6 +1,6 @@
 """NOTICE CAPTURE FOR ALL SWEEP PATHS.
 
-The scan already captured qpu_mapper WARNING+ into its loud '⚠ notices' bar via
+The scan already captured iqmapper WARNING+ into its loud '⚠ notices' bar via
 a scoped handler. These tests pin the SAME capture for the LOCAL sweep and the
 MULTI sweep + replan: warnings render into the respective notices widget,
 deduplicate (message ×count), and NEVER leak to the root logger (propagate is
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-_QLOG = 'qpu_mapper'
+_QLOG = 'iqmapper'
 
 
 def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
@@ -58,12 +58,12 @@ def _multi_result():
 
 
 def _build(monkeypatch):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "ibm_here"
@@ -94,7 +94,7 @@ class _RootSpy(logging.Handler):
 
 
 def _capture_handlers():
-    from qpu_mapper.ui.lucj_panel import _ScanNoticeCapture
+    from iqmapper.ui.lucj_panel import _ScanNoticeCapture
     return [h for h in logging.getLogger(_QLOG).handlers
             if isinstance(h, _ScanNoticeCapture)]
 
@@ -111,7 +111,7 @@ def test_local_sweep_notice_captured_not_leaked(monkeypatch):
         def warn_sweep(norb, backend, props, **kw):
             lg.warning("Requested 6 bridges does not fit; falling back")
             return _sweep()
-        monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                             warn_sweep)
 
         b.lucj_ancilla_dd.value = -1             # Auto → stratified sweep path
@@ -140,7 +140,7 @@ def test_local_sweep_dedup_count(monkeypatch):
         lg.warning("vf2 truncating to 2000")
         lg.warning("bridge fallback")
         return _sweep()
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", warn_sweep)
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts", warn_sweep)
 
     b.lucj_ancilla_dd.value = -1
     b.btn_lucj_run.click()
@@ -165,7 +165,7 @@ def test_local_sweep_restores_on_error(monkeypatch):
     def boom_sweep(norb, backend, props, **kw):
         lg.warning("partial notice before the crash")
         raise RuntimeError("sweep exploded")
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", boom_sweep)
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts", boom_sweep)
 
     b.lucj_ancilla_dd.value = -1
     b.btn_lucj_run.click()                            # handler catches → error banner
@@ -183,7 +183,7 @@ def test_multi_sweep_restores_on_error(monkeypatch):
     def boom_multi(*a, **k):
         lg.warning("multi partial notice")
         raise RuntimeError("multi exploded")
-    monkeypatch.setattr("qpu_mapper.multi_sweep.sweep_multi_circuits", boom_multi)
+    monkeypatch.setattr("iqmapper.multi_sweep.sweep_multi_circuits", boom_multi)
 
     b.lucj_multi_norbs.value = "8"
     b.btn_lucj_multi_sweep.click()
@@ -203,7 +203,7 @@ def test_multi_sweep_notice_captured(monkeypatch):
         lg.warning("Requested 6 bridges does not fit; falling back")
         lg.warning("Requested 6 bridges does not fit; falling back")
         return _multi_result()
-    monkeypatch.setattr("qpu_mapper.multi_sweep.sweep_multi_circuits", warn_multi)
+    monkeypatch.setattr("iqmapper.multi_sweep.sweep_multi_circuits", warn_multi)
 
     b.lucj_multi_norbs.value = "8"
     b.btn_lucj_multi_sweep.click()

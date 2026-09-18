@@ -1,4 +1,4 @@
-"""Tests for qpu_mapper.qpu_scan — the multi-QPU scan engine.
+"""Tests for iqmapper.qpu_scan — the multi-QPU scan engine.
 
 Offline, deterministic, no qiskit, no network. Fake backends are
 SimpleNamespaces exposing exactly what family/size detection reads
@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from qpu_mapper.qpu_scan import list_scan_targets, scan_qpus
+from iqmapper.qpu_scan import list_scan_targets, scan_qpus
 
 
 def _mk_backend(name, family, n_qubits):
@@ -85,7 +85,7 @@ def test_scan_happy_path_sorted_and_progress(monkeypatch):
 
     def fake_sweep(norb, backend, props, **kw):
         return _canned_sweep({2: [_entry(scores[backend.name], 2)]})
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", fake_sweep)
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts", fake_sweep)
 
     backends = {'ibm_a': _mk_backend('ibm_a', 'Heron', 156),
                 'ibm_b': _mk_backend('ibm_b', 'Heron', 156)}
@@ -113,7 +113,7 @@ def test_scan_happy_path_sorted_and_progress(monkeypatch):
 
 def test_scan_isolation_on_props_failure(monkeypatch):
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, backend, props, **kw: _canned_sweep({2: [_entry(0.4, 2)]}))
 
     backends = {'ibm_a': _mk_backend('ibm_a', 'Heron', 156),
@@ -149,7 +149,7 @@ def test_best_lqs_extraction(monkeypatch):
         1: [_entry(0.90, 1)],
     }
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, backend, props, **kw: _canned_sweep(strata))
 
     out = scan_qpus(
@@ -174,7 +174,7 @@ def test_scan_skips_ineligible_targets(monkeypatch):
     """Ineligible targets are skipped (never swept), counted in n_skipped."""
     called = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: called.append(1) or _canned_sweep({2: [_entry(0.4, 2)]}))
 
     targets = [{'name': 'ibm_x', 'family': 'Nighthawk', 'eligible': False,
@@ -220,7 +220,7 @@ def test_sweep_fn_none_uses_sweep_ancilla_layouts(monkeypatch):
     """sweep_fn=None (default) is byte-compatible: the built-in sweep runs."""
     seen = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, b, p, **k: seen.append(k) or _canned_sweep({1: [{'product_score': 0.4}]}))
     out = scan_qpus([{'name': 'a', 'family': 'H', 'eligible': True}], 6,
                     get_backend=lambda n: SimpleNamespace(name=n),

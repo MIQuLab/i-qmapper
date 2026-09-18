@@ -24,9 +24,9 @@ def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
 
 @pytest.fixture
 def builder(monkeypatch):
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
 
     state = SessionState()
     state.active_backend = object()          # non-None, and NO .coords attr
@@ -86,7 +86,7 @@ def _fake_sweep_result(vf2_truncated=False):
 # ── label/status formatters prefer circuit-level LQS ─────────────────
 
 def test_formatters_use_lqs_circuit():
-    from qpu_mapper.ui.lucj_panel import _entry_lqs_pct, _format_best_per_k
+    from iqmapper.ui.lucj_panel import _entry_lqs_pct, _format_best_per_k
 
     circ = {'product_score': 0.30, 'lqs_circuit': 0.42, 'ancillas': [4]}
     pct, is_tmpl = _entry_lqs_pct(circ)
@@ -107,7 +107,7 @@ def test_formatters_use_lqs_circuit():
 def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: (calls.append((a, k)) or _fake_sweep_result()))
 
     b = builder
@@ -152,7 +152,7 @@ def _fake_sweep_topn(*a, **k):
 #    numbers were taken at different moments), not a bug.
 
 def test_local_sweep_status_shows_live_vintage(builder, monkeypatch):
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _fake_sweep_result())
     b = builder
     b.btn_lucj_run.click()
@@ -164,7 +164,7 @@ def test_local_sweep_status_shows_live_vintage(builder, monkeypatch):
 
 
 def test_local_sweep_status_vintage_uses_past_date(builder, monkeypatch):
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _fake_sweep_result())
     b = builder
     # A selected PAST date → the vintage names that date, not live.
@@ -178,7 +178,7 @@ def test_local_sweep_status_vintage_uses_past_date(builder, monkeypatch):
 
 
 def test_top_n_field_controls_dropdown_entries(builder, monkeypatch):
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         _fake_sweep_topn)
     b = builder
     b.lucj_top_n.value = 7                            # Show top = 7
@@ -195,14 +195,14 @@ def test_top_n_field_controls_dropdown_entries(builder, monkeypatch):
 def test_legacy_mode_skips_sweep(builder, monkeypatch):
     sweep_calls, legacy_calls = [], []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: sweep_calls.append(1) or _fake_sweep_result())
 
     def fake_legacy(*a, **k):
         legacy_calls.append((a, k))
         return ([{'alpha': [0, 1], 'beta': [2, 3], 'score': 0.05, 'rank': 1}], 2)
     monkeypatch.setattr(
-        "qpu_mapper.auto_lucj.get_all_zigzag_layouts", fake_legacy)
+        "iqmapper.auto_lucj.get_all_zigzag_layouts", fake_legacy)
 
     b = builder
     b.lucj_ancilla_dd.value = 2                     # exact count → legacy
@@ -218,7 +218,7 @@ def test_legacy_mode_skips_sweep(builder, monkeypatch):
 
 def test_apply_derived_candidate_places_chains_and_ancillas(builder, monkeypatch):
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: _fake_sweep_result())
 
     b = builder
@@ -243,7 +243,7 @@ def test_apply_derived_candidate_places_chains_and_ancillas(builder, monkeypatch
 
 def test_truncation_banner(builder, monkeypatch):
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: _fake_sweep_result(vf2_truncated=True))
     b = builder
     b.btn_lucj_run.click()
@@ -254,7 +254,7 @@ def test_truncation_banner(builder, monkeypatch):
 
     # False → hidden (empty).
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: _fake_sweep_result(vf2_truncated=False))
     b.btn_lucj_run.click()
     assert b.lbl_lucj_trunc.value == ""
@@ -267,7 +267,7 @@ def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
         raise ValueError("min_bridges=99 out of range; must satisfy "
                          "1 <= min_bridges <= k_max_effective (3).")
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", boom)
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts", boom)
 
     b = builder
     b.lucj_min_ancilla.value = 99
@@ -284,7 +284,7 @@ def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
 def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
     calls = []
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda *a, **k: (calls.append(k) or _fake_sweep_result()))
     b = builder
     b.chk_deep_search.value = False
@@ -296,7 +296,7 @@ def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
 
 
 def test_sweep_mode_label():
-    from qpu_mapper.ui.lucj_panel import _sweep_mode_label
+    from iqmapper.ui.lucj_panel import _sweep_mode_label
     hy = {'k_max_effective': 3,
           'per_stratum': {3: {'n_direct': 5, 'n_derived': 0},
                           2: {'n_direct': 2, 'n_derived': 3},
@@ -328,7 +328,7 @@ def test_diverse_entry_label_suffix(builder, monkeypatch):
                                 'truncated': False, 'shuffled': False}},
             'mapping_cap': 2000,
         }
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts", _fake)
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts", _fake)
     b = builder
     b.btn_lucj_run.click()
     labels = _labels(b.dd_lucj_layout)

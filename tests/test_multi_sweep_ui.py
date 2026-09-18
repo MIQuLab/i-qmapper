@@ -67,11 +67,11 @@ def _result(failed_at=None):
 
 
 def _build(monkeypatch, spawn=_sync_spawn):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', spawn)
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()                 # no .coords → Auto allowed
     state.active_backend_name = "stub"
@@ -91,7 +91,7 @@ def _build(monkeypatch, spawn=_sync_spawn):
 
 
 def _patch_engine(monkeypatch, result):
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     seen = {}
     monkeypatch.setattr(ms, 'sweep_multi_circuits',
                         lambda *a, **k: seen.update(sweep_kwargs=k, sweep_args=a) or result)
@@ -184,7 +184,7 @@ def test_multi_sweep_override(monkeypatch):
     b, state = _build(monkeypatch)
     result, c0_alt = _result()
     _patch_engine(monkeypatch, result)
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     calls = []
     # replan returns a new result where C0 = the alt and C1 re-swept.
     new_c0 = _circuit(0, c0_alt, {1: [c0_alt]})
@@ -233,7 +233,7 @@ def test_multi_sweep_override_in_flight_guard(monkeypatch):
     b, state = _build(monkeypatch, spawn=qspawn)
     result, _ = _result()
     _patch_engine(monkeypatch, result)
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     monkeypatch.setattr(ms, 'replan_from', lambda res, i, choice: result)
 
     b.btn_lucj_multi_sweep.click()
@@ -255,7 +255,7 @@ def test_multi_sweep_kwargs_parity(monkeypatch):
     result, _ = _result()
     seen = _patch_engine(monkeypatch, result)
     local = {}
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda norb, bk, pr, **k: local.update(k) or result['circuits'][0]
                         and {'strata': {}, 'k_max_effective': 1, 'min_bridges': 1,
                              'vf2_truncated': False, 'n_raw_embeddings': 0,
@@ -283,7 +283,7 @@ def test_multi_sweep_kwargs_parity(monkeypatch):
 def test_legacy_multi_button_unchanged(monkeypatch):
     b, state = _build(monkeypatch)
     calls = []
-    monkeypatch.setattr("qpu_mapper.auto_lucj.get_multi_circuit_layouts",
+    monkeypatch.setattr("iqmapper.auto_lucj.get_multi_circuit_layouts",
                         lambda **k: calls.append(k) or [
                             {'circuit_idx': 0, 'norb': 8, 'num_bridges': 2,
                              'all_candidates': [{'layout': [0, 1, 2, 3],
@@ -291,7 +291,7 @@ def test_legacy_multi_button_unchanged(monkeypatch):
                                                  'score': 0.03, 'rank': 1,
                                                  'layout_full': [0, 1, 2, 3, 4]}]}])
     ms_calls = []
-    import qpu_mapper.multi_sweep as ms
+    import iqmapper.multi_sweep as ms
     monkeypatch.setattr(ms, 'sweep_multi_circuits',
                         lambda *a, **k: ms_calls.append(1) or _result()[0])
 

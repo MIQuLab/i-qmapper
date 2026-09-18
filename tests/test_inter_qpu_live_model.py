@@ -80,7 +80,7 @@ _CAND = {'alpha': [0], 'beta': [1], 'ancillas': [2]}
 
 
 def test_auto_connect_paints_on_main_thread(monkeypatch):
-    from qpu_mapper.ui.inter_qpu import setup_inter_qpu
+    from iqmapper.ui.inter_qpu import setup_inter_qpu
 
     main_thread = threading.current_thread()
     build_threads = []
@@ -98,12 +98,12 @@ def test_auto_connect_paints_on_main_thread(monkeypatch):
                              plot_h_slider=SimpleNamespace(value=0))
         return (full_ui, fig, w2) if return_widgets else (full_ui, fig)
 
-    monkeypatch.setattr("qpu_mapper.connection._check_properties",
+    monkeypatch.setattr("iqmapper.connection._check_properties",
                         lambda b, n: (object(), None))
-    monkeypatch.setattr("qpu_mapper.constants.resolve_coords",
+    monkeypatch.setattr("iqmapper.constants.resolve_coords",
                         lambda b: ([], 'chip_label'))
-    monkeypatch.setattr("qpu_mapper.ui.build_mapper_ui", _fake_build)
-    monkeypatch.setattr("qpu_mapper.plot.refresh_plot",
+    monkeypatch.setattr("iqmapper.ui.build_mapper_ui", _fake_build)
+    monkeypatch.setattr("iqmapper.plot.refresh_plot",
                         lambda fig, st, w: refresh_threads.append(
                             threading.current_thread()))
 

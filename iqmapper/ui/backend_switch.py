@@ -24,12 +24,6 @@ also handled here for symmetry.
 Public API:
   setup_backend_switch(ctx) -> on_backend_switch_handler
 
-Optional ctx keys (absent → the corresponding refresh is skipped):
-  refresh_qpu1_label — single-element cell holding ui.inter_qpu's hook.
-  refresh_time_panel — zero-arg callable re-rendering the time/delta panel
-      so its "Showing:" header names the new backend. Called on the success
-      path (after the graph reload) and again on the rollback path.
-
 The handler is returned so callers (e.g. tests) can invoke it
 explicitly. `ctx.switching_backend` is shared with
 `_load_device_graph` — both routines need to see the same flag for
@@ -143,26 +137,6 @@ def setup_backend_switch(ctx):
     # [None] until inter-QPU is wired). Absent entirely in callers/tests that
     # don't build the inter-QPU panel — treat as "no hook".
     refresh_qpu1_label_cell = getattr(ctx, 'refresh_qpu1_label', None)
-    # Optional: zero-arg callable that re-renders the time/delta panel so its
-    # "Showing:" header stops naming the previous backend. Absent in callers
-    # and tests that don't build the time panel — treat as "no hook".
-    refresh_time_panel_hook = getattr(ctx, 'refresh_time_panel', None)
-
-    def _refresh_time_panel():
-        """Best-effort re-render of the time/delta panel after a switch.
-
-        The panel's header caches the backend name it was last built with, so
-        without this it keeps showing the OLD backend after a switch. A header
-        refresh must NEVER break a backend switch, so failures are logged and
-        swallowed. No-op when no hook was supplied.
-        """
-        if refresh_time_panel_hook is None:
-            return
-        try:
-            _log.debug("Rebuilding time/delta panel after backend switch")
-            refresh_time_panel_hook()
-        except Exception:
-            _log.exception("Time panel refresh after backend switch failed")
 
     def _refresh_qpu1_label():
         """Best-effort refresh of the QPU-1 switcher label after a switch.
@@ -285,11 +259,6 @@ def setup_backend_switch(ctx):
             # default guard inside _load_device_graph would (correctly)
             # reject this call.
             load_device_graph(force=True)
-
-            # The graph reload has just reset the time state for the new
-            # backend; re-render the time/delta panel so its "Showing:"
-            # header names the new backend instead of the previous one.
-            _refresh_time_panel()
 
             # ── Layout preservation ──────────────────────────────────
             layout_msg = ""

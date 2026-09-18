@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- Stratified ancilla sweep: a single VF2 solve at `k_max` feeding a
+  bridge-subtraction cascade down to `k_min`, with a hybrid mode, a shuffled
+  search for hard instances, and region-diversity selection across the chip.
+- Stability filter with an always-on quality floor, so layouts that score well
+  on one calibration epoch but drift across neighbouring ones are rejected.
+- Multi-circuit sweep: sequential orchestration over several circuits with
+  replan-from-step to recover a run without restarting it.
+- Multi-QPU scan across the available backends, with one-click inter-QPU
+  handoff that reopens the chosen layout on the second QPU.
+- Epoch-consistent scoring: fidelity and ranking read a single pinned
+  calibration epoch, so comparisons within a sweep stay commensurable.
+
 ## [0.0.5] — 2026-08
 
 First public-ready release.

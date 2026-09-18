@@ -34,9 +34,9 @@ def _canned():
 
 
 def _build(monkeypatch):
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "ibm_here"
@@ -96,11 +96,11 @@ def test_multi_subpanel_has_two_buttons_no_legacy(monkeypatch):
 # ── R3 t2: the legacy handler + engine stay defined (source pin) ────────────
 
 def test_legacy_handler_and_engine_still_defined():
-    panel = Path('qpu_mapper/ui/lucj_panel.py').read_text()
+    panel = Path('iqmapper/ui/lucj_panel.py').read_text()
     assert 'def _on_lucj_multi(' in panel                    # handler retained
     assert 'get_multi_circuit_layouts' in panel              # engine path retained
     # And the widget object is still wired (clickable) for the pinned tests.
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.ui.builder import MapperUIBuilder
     assert hasattr(MapperUIBuilder, '_build_auto_lucj_view')
 
 
@@ -108,7 +108,7 @@ def test_legacy_handler_and_engine_still_defined():
 
 def test_detail_panel_counts_not_qubit_lists(monkeypatch):
     b, state = _build(monkeypatch)
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned())
     b.lucj_ancilla_dd.value = -1                             # sweep mode
     b.btn_lucj_run.click()
@@ -123,7 +123,7 @@ def test_detail_panel_counts_not_qubit_lists(monkeypatch):
 # ── t5: an applied batch (C1..Cn) is auto-reflected in the export ──────────
 
 def test_export_reads_applied_batch():
-    from qpu_mapper.export.codegen import get_qiskit_layout_code
+    from iqmapper.export.codegen import get_qiskit_layout_code
     state = SimpleNamespace(layouts_data={
         0: {'alpha': ['0', '1'], 'beta': ['2', '3'], 'other': [], 'name': 'C1'},
         1: {'alpha': ['4', '5'], 'beta': ['6', '7'], 'other': [], 'name': 'C2'},

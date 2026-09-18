@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import numpy as np
 import rustworkx
 
-from qpu_mapper.stability_filter import (
+from iqmapper.stability_filter import (
     compute_qubit_volatility, sweep_with_stability,
 )
 
@@ -127,12 +127,12 @@ def _canned():
 
 
 def _build(monkeypatch, *, past_date=None):
-    import qpu_mapper.async_util as au
+    import iqmapper.async_util as au
     monkeypatch.setattr(au, 'default_spawn_bg', _sync_spawn)
     monkeypatch.setattr(au, 'marshal_to_main', lambda cb: cb())
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = SimpleNamespace(name='ibm_here')
     state.active_backend_name = "ibm_here"
@@ -170,7 +170,7 @@ def test_prerank_uses_selected_date_not_live_props(monkeypatch):
     b, state = _build(monkeypatch, past_date='2026-07-01 08:00:00')
     captured = {}
     monkeypatch.setattr(
-        "qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+        "iqmapper.ancilla_sweep.sweep_ancilla_layouts",
         lambda norb, bk, pr, **kw: captured.update(props=pr) or _canned())
 
     b.btn_lucj_run.click()
@@ -187,15 +187,15 @@ def test_prerank_uses_selected_date_not_live_props(monkeypatch):
 
 def test_scan_header_notes_epoch_mix_on_past_date(monkeypatch):
     b, state = _build(monkeypatch, past_date='2026-07-01 08:00:00')
-    import qpu_mapper.qpu_scan as qs
+    import iqmapper.qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_other', 'family': 'Heron', 'eligible': True,
          'reason': None}])
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state, **k: (lambda backend: SimpleNamespace(
                             vintage='live · 09:30',
                             score_layout=lambda q: {'fidelity': 0.5})))
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned())
 
     b.btn_scan_qpus.click()
@@ -207,15 +207,15 @@ def test_scan_header_notes_epoch_mix_on_past_date(monkeypatch):
 
 def test_scan_header_absent_in_live_mode(monkeypatch):
     b, state = _build(monkeypatch, past_date=None)     # live
-    import qpu_mapper.qpu_scan as qs
+    import iqmapper.qpu_scan as qs
     monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
         {'name': 'ibm_other', 'family': 'Heron', 'eligible': True,
          'reason': None}])
-    monkeypatch.setattr("qpu_mapper.props_shim.make_scan_get_props",
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
                         lambda state, **k: (lambda backend: SimpleNamespace(
                             vintage='live · 09:30',
                             score_layout=lambda q: {'fidelity': 0.5})))
-    monkeypatch.setattr("qpu_mapper.ancilla_sweep.sweep_ancilla_layouts",
+    monkeypatch.setattr("iqmapper.ancilla_sweep.sweep_ancilla_layouts",
                         lambda *a, **k: _canned())
 
     b.btn_scan_qpus.click()

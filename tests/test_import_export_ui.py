@@ -14,9 +14,9 @@ def _fake_device(state, vendor, chip, date, prefetched_props=None):
 
 
 def _build(monkeypatch):
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device)
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device)
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()
     state.active_backend_name = "ibm_here"
@@ -70,7 +70,7 @@ def test_unified_io_tab(monkeypatch):
 
     # Import path still wired: firing the upload handler reaches its reader.
     up = []
-    monkeypatch.setattr("qpu_mapper.ui.builder._read_upload",
+    monkeypatch.setattr("iqmapper.ui.builder._read_upload",
                         lambda w: up.append(1) or None)
     b._on_unified_upload({'new': [object()]})
     assert up
