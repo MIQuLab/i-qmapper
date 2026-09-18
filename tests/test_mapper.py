@@ -1,5 +1,5 @@
 """
-tests/test_mapper.py — Automated tests for QPU Mapper.
+tests/test_mapper.py — Automated tests for I-QMapper.
 
 Covers the highest-value targets:
 1. Cache save/load round-trip
@@ -19,7 +19,7 @@ import numpy as np
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock, patch
 
-from qpu_mapper.paths import safe_path
+from iqmapper.paths import safe_path
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -41,13 +41,13 @@ def fake_props():
     Generates a value for EVERY key listed in QUBIT_PROP_OPTIONS /
     GATE_PROP_OPTIONS so that the round-trip through _save_calibration
     → _load_calibration doesn't trip the stale-cache rejection
-    (qpu_mapper.data._load_calibration removes any cache file that
+    (iqmapper.data._load_calibration removes any cache file that
     doesn't carry every expected property key). The previous version
     only populated 3 qubit + 2 gate keys and `test_save_and_load`
     therefore broke as soon as the cache validator started enforcing
     the full key set.
     """
-    from qpu_mapper.constants import QUBIT_PROP_OPTIONS, GATE_PROP_OPTIONS
+    from iqmapper.constants import QUBIT_PROP_OPTIONS, GATE_PROP_OPTIONS
     n_q, n_e = 10, 12
     rng = np.random.default_rng(42)
     # Reasonable per-key ranges; values don't matter for I/O round-trip,
@@ -117,7 +117,7 @@ class TestCacheSystem:
 
     def test_save_and_load(self, tmp_cache_dir, fake_props):
         """Save calibration, load it back, verify data is identical."""
-        from qpu_mapper.data import (
+        from iqmapper.data import (
             _save_calibration, _load_calibration, _cache_dirs_created,
         )
         qp, gp, _, _ = fake_props
@@ -125,7 +125,7 @@ class TestCacheSystem:
         ts = '2026-01-20 19:18:17'
 
         # Patch cache dir
-        with patch('qpu_mapper.data._CACHE_DIR', str(tmp_cache_dir)):
+        with patch('iqmapper.data._CACHE_DIR', str(tmp_cache_dir)):
             _cache_dirs_created.clear()
             _save_calibration(backend, ts, qp, gp)
             result = _load_calibration(backend, ts)
@@ -139,19 +139,19 @@ class TestCacheSystem:
 
     def test_load_nonexistent(self, tmp_cache_dir):
         """Loading a non-existent calibration returns None."""
-        from qpu_mapper.data import _load_calibration, _cache_dirs_created
-        with patch('qpu_mapper.data._CACHE_DIR', str(tmp_cache_dir)):
+        from iqmapper.data import _load_calibration, _cache_dirs_created
+        with patch('iqmapper.data._CACHE_DIR', str(tmp_cache_dir)):
             _cache_dirs_created.clear()
             result = _load_calibration('fake_backend', '2099-01-01 00:00:00')
         assert result is None
 
     def test_index_populated(self, tmp_cache_dir, fake_props):
         """Saving a calibration adds it to the index."""
-        from qpu_mapper.data import (
+        from iqmapper.data import (
             _save_calibration, _load_index, _cache_dirs_created,
         )
         qp, gp, _, _ = fake_props
-        with patch('qpu_mapper.data._CACHE_DIR', str(tmp_cache_dir)):
+        with patch('iqmapper.data._CACHE_DIR', str(tmp_cache_dir)):
             _cache_dirs_created.clear()
             _save_calibration('test_be', '2026-01-20 10:00:00', qp, gp)
             _save_calibration('test_be', '2026-01-20 18:00:00', qp, gp)
@@ -163,12 +163,12 @@ class TestCacheSystem:
 
     def test_list_known_calibrations_by_date(self, tmp_cache_dir, fake_props):
         """list_known_calibrations filters by date."""
-        from qpu_mapper.data import (
+        from iqmapper.data import (
             _save_calibration, list_known_calibrations, _cache_dirs_created,
         )
         from datetime import date
         qp, gp, _, _ = fake_props
-        with patch('qpu_mapper.data._CACHE_DIR', str(tmp_cache_dir)):
+        with patch('iqmapper.data._CACHE_DIR', str(tmp_cache_dir)):
             _cache_dirs_created.clear()
             _save_calibration('be', '2026-01-20 10:00:00', qp, gp)
             _save_calibration('be', '2026-01-20 18:00:00', qp, gp)
@@ -189,7 +189,7 @@ class TestCacheSystem:
 
 class TestSafePath:
     """Test path traversal prevention against the REAL safe_path
-    (qpu_mapper.paths.safe_path), not a buggy inline reimplementation.
+    (iqmapper.paths.safe_path), not a buggy inline reimplementation.
 
     The previous version of this class had an inline `_safe_path` that
     used `str.startswith` — the same bypass-prone check that paths.py
@@ -234,15 +234,15 @@ class TestTimezone:
     """Test UTC normalization and sanitization."""
 
     def test_sanitize_ts_basic(self):
-        from qpu_mapper.data import _sanitize_ts
+        from iqmapper.data import _sanitize_ts
         assert _sanitize_ts('2026-01-20 14:18:17') == '2026-01-20T14-18-17'
 
     def test_sanitize_ts_none(self):
-        from qpu_mapper.data import _sanitize_ts
+        from iqmapper.data import _sanitize_ts
         assert _sanitize_ts(None) == 'unknown'
 
     def test_extract_last_update_converts_to_utc(self):
-        from qpu_mapper.data import _extract_last_update
+        from iqmapper.data import _extract_last_update
         # Simulate IBM returning Eastern time (-05:00)
         eastern = timezone(timedelta(hours=-5))
         mock_props = MagicMock()
@@ -253,7 +253,7 @@ class TestTimezone:
         assert result == '2026-01-20 19:18:17'
 
     def test_extract_last_update_naive_passthrough(self):
-        from qpu_mapper.data import _extract_last_update
+        from iqmapper.data import _extract_last_update
         mock_props = MagicMock()
         mock_props.last_update_date = datetime(2026, 1, 20, 14, 18, 17)
         result = _extract_last_update(mock_props)
@@ -261,7 +261,7 @@ class TestTimezone:
 
     def test_same_moment_different_tz_same_key(self):
         """Same calibration reported in different timezones → same cache key."""
-        from qpu_mapper.data import _extract_last_update, _sanitize_ts
+        from iqmapper.data import _extract_last_update, _sanitize_ts
         eastern = timezone(timedelta(hours=-5))
         utc = timezone.utc
 
@@ -283,7 +283,7 @@ class TestLUCJDedup:
     """Test that alpha/beta swap deduplication works."""
 
     def test_dedup_removes_swaps(self):
-        from qpu_mapper.auto_lucj import _deduplicate_layouts
+        from iqmapper.auto_lucj import _deduplicate_layouts
         layouts = [
             {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
              'score': 0.01, 'rank': 1},
@@ -296,7 +296,7 @@ class TestLUCJDedup:
         assert len(result) == 2  # one swap removed
 
     def test_dedup_keeps_different(self):
-        from qpu_mapper.auto_lucj import _deduplicate_layouts
+        from iqmapper.auto_lucj import _deduplicate_layouts
         layouts = [
             {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
              'score': 0.01, 'rank': 1},
@@ -315,7 +315,7 @@ class TestScoring:
     """Test layout scoring with mock props."""
 
     def test_scoring_returns_sorted(self):
-        from qpu_mapper.auto_lucj import lightweight_layout_error_scoring
+        from iqmapper.auto_lucj import lightweight_layout_error_scoring
         mock_props = MagicMock()
         # Layout 1: edges (0,1) and (2,3) — low error
         # Layout 2: edges (4,5) and (6,7) — high error
@@ -344,7 +344,7 @@ class TestScoring:
         assert result[0][1] < result[1][1]
 
     def test_scoring_none_props_raises(self):
-        from qpu_mapper.auto_lucj import lightweight_layout_error_scoring
+        from iqmapper.auto_lucj import lightweight_layout_error_scoring
         with pytest.raises(RuntimeError, match="No calibration"):
             lightweight_layout_error_scoring(None, [], [], 'cz')
 
@@ -357,7 +357,7 @@ class TestExport:
     """Test export includes metadata."""
 
     def test_metadata_present(self, mock_state):
-        from qpu_mapper.export import get_export_data
+        from iqmapper.export import get_export_data
         result = get_export_data(mock_state, 'lucj', 'Split (Alpha/Beta/...)', 1)
         assert '_metadata' in result
         assert result['_metadata']['backend'] == 'test_backend'
@@ -372,7 +372,7 @@ class TestBuildCandidates:
     """Test the _build_candidates helper."""
 
     def test_with_scores(self):
-        from qpu_mapper.auto_lucj import _build_candidates
+        from iqmapper.auto_lucj import _build_candidates
         scores_list = [
             ([10, 11, 12, 13, 99], 0.03),
             ([20, 21, 22, 23, 99], 0.05),
@@ -385,7 +385,7 @@ class TestBuildCandidates:
         assert len(result[0]['layout']) == 4  # bridges trimmed
 
     def test_without_scores(self):
-        from qpu_mapper.auto_lucj import _build_candidates
+        from iqmapper.auto_lucj import _build_candidates
         raw = [[10, 11, 12, 13, 99], [20, 21, 22, 23, 99]]
         result = _build_candidates(raw, None, 2, 1)
         assert len(result) == 2
@@ -401,14 +401,14 @@ class TestNaNAudit:
     """Test NaN fraction auditing."""
 
     def test_no_warnings_clean_data(self):
-        from qpu_mapper.data import _audit_nan_fraction
+        from iqmapper.data import _audit_nan_fraction
         qp = {'readout_error': np.array([0.01, 0.02, 0.03])}
         gp = {'cz_error': np.array([0.001, 0.002])}
         warnings = _audit_nan_fraction(qp, gp)
         assert len(warnings) == 0
 
     def test_warns_partial_nan(self):
-        from qpu_mapper.data import _audit_nan_fraction
+        from iqmapper.data import _audit_nan_fraction
         qp = {'readout_error': np.array([0.01, np.nan, np.nan, np.nan])}  # 75% NaN
         gp = {}
         warnings = _audit_nan_fraction(qp, gp, threshold=0.10)
@@ -417,7 +417,7 @@ class TestNaNAudit:
 
     def test_silent_all_nan(self):
         """100% NaN = unsupported property, not a warning."""
-        from qpu_mapper.data import _audit_nan_fraction
+        from iqmapper.data import _audit_nan_fraction
         qp = {'rx_error': np.array([np.nan, np.nan, np.nan])}
         gp = {}
         warnings = _audit_nan_fraction(qp, gp)

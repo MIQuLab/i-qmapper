@@ -1,4 +1,4 @@
-"""Unit tests for qpu_mapper.stability.analyze_property_stability.
+"""Unit tests for iqmapper.stability.analyze_property_stability.
 
 Covers seven cases:
   1. Error kind, happy path (stable series)
@@ -12,7 +12,7 @@ Covers seven cases:
 import numpy as np
 import pytest
 
-from qpu_mapper.stability import analyze_property_stability
+from iqmapper.stability import analyze_property_stability
 
 
 def test_error_happy_path_stable_series():

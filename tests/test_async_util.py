@@ -18,7 +18,7 @@ import threading
 
 import pytest
 
-import qpu_mapper.async_util as async_util
+import iqmapper.async_util as async_util
 
 
 @pytest.fixture

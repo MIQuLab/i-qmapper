@@ -1,5 +1,5 @@
 """
-mapper.py — Thin orchestrator for QPU Mapper.
+mapper.py — Thin orchestrator for I-QMapper.
 
 Receives connection parameters as a dict from __init__.py,
 builds SessionState, and launches the UI.

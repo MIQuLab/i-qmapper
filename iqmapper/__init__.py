@@ -1,8 +1,8 @@
 """
-Interactive QPU Mapper — Quantum circuit layout visualization tool.
+I-QMapper — Quantum circuit layout visualization tool.
 
 Usage:
-    from qpu_mapper import run
+    from iqmapper import run
     run()                # sidebar UI
 
 Architecture:

@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from qpu_mapper.state import SessionState
+from iqmapper.state import SessionState
 
 
 def test_fresh_state_has_default_circuits():

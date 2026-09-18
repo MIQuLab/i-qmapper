@@ -1,5 +1,5 @@
 """
-state.py — Centralised mutable state for QPU Mapper.
+state.py — Centralised mutable state for I-QMapper.
 
 One SessionState = one QPU; inter-QPU mode creates multiple instances.
 No swap magic, no slot system — each QPU is fully independent.
@@ -352,17 +352,17 @@ class SessionState:
         if version is None:
             raise ValueError(
                 "Session file is missing the `_version` field — "
-                "this does not look like a QPU Mapper session.")
+                "this does not look like an I-QMapper session.")
         if version > self._MAX_SUPPORTED_VERSION:
             raise ValueError(
                 f"Session file _version={version} is newer than this "
                 f"build supports (max v{self._MAX_SUPPORTED_VERSION}). "
-                f"Upgrade qpu_mapper to read this session, or re-save it "
+                f"Upgrade iqmapper to read this session, or re-save it "
                 f"from the build that created it.")
         if version < 3:
             raise ValueError(
                 f"Session file _version={version} is too old — please "
-                f"re-save from a newer qpu_mapper build (v3+).")
+                f"re-save from a newer iqmapper build (v3+).")
 
         self.active_backend_name = session.get('backend_name')
         self.active_chip = session.get('chip')
@@ -425,7 +425,7 @@ class SessionState:
 
     def to_style_dict(self, widget_values=None):
         style = {
-            '_type': 'qpu_mapper_style',
+            '_type': 'iqmapper_style',
             'colorscale': self.current_colorscale,
             'custom_colors': list(self.custom_colors),
             'circuit_colors': {},

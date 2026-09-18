@@ -9,7 +9,7 @@ import os
 import json
 
 
-# Backward-compat: WidgetsRef moved to qpu_mapper/ui/widgets_ref.py (it
+# Backward-compat: WidgetsRef moved to iqmapper/ui/widgets_ref.py (it
 # was the only non-pure thing in this module). PEP 562 ``__getattr__``
 # keeps ``from .constants import WidgetsRef`` working without an eager
 # top-of-file import that would close the cycle
@@ -19,7 +19,7 @@ def __getattr__(name):
         from .ui.widgets_ref import WidgetsRef as _WidgetsRef
         return _WidgetsRef
     raise AttributeError(
-        f"module 'qpu_mapper.constants' has no attribute {name!r}")
+        f"module 'iqmapper.constants' has no attribute {name!r}")
 
 # ── Coordinate helpers ──────────────────────────────────────────────
 

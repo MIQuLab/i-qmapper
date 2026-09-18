@@ -1268,7 +1268,7 @@ def _auto_ref_hint(state) -> str:
 
 def _self_test():
     """Construct the panel with dummy stubs, verify no exceptions.
-    Run with: python -m qpu_mapper.ui.time_panel"""
+    Run with: python -m iqmapper.ui.time_panel"""
     import types
 
     class _StubState:

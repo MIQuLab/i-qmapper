@@ -1,4 +1,4 @@
-"""Regression tests for qpu_mapper.export.layout_io — .npy and .qpy paths.
+"""Regression tests for iqmapper.export.layout_io — .npy and .qpy paths.
 
 Historical bug: the module used `io.BytesIO(...)` at two sites without
 importing `io`, so the .npy and .qpy import paths NameError'd at call
@@ -13,7 +13,7 @@ import io
 import numpy as np
 import pytest
 
-from qpu_mapper.export.layout_io import (
+from iqmapper.export.layout_io import (
     _extract_layout_from_qpy,
     import_layout_file,
     import_npy_layout,
@@ -55,7 +55,7 @@ def test_npy_rejects_oversized_payload(make_state, make_slot):
     """MAX_IMPORT_BYTES gate fires before np.load, so a crafted-oversize
     file cannot exhaust memory before validation."""
     st = make_state(qubit_ids=['0', '1'], layouts={0: make_slot()})
-    from qpu_mapper.export import MAX_IMPORT_BYTES
+    from iqmapper.export import MAX_IMPORT_BYTES
     big = b'\x00' * (MAX_IMPORT_BYTES + 1)
     with pytest.raises(ValueError, match="too large"):
         import_npy_layout(st, big, 'general', n_circ=1)

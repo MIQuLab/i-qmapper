@@ -38,12 +38,12 @@ def _build(monkeypatch, *, snapshot, ancilla=0):
     monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
     captured = {}
     monkeypatch.setattr(
-        "qpu_mapper.auto_lucj.get_all_zigzag_layouts",
+        "iqmapper.auto_lucj.get_all_zigzag_layouts",
         lambda **kw: (captured.update(props=kw['props']) or
                       ([{'rank': 1, 'score': 0.1, 'alpha': [0, 1],
                          'beta': [2, 3]}], 1)))
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
     state = SessionState()
     state.active_backend = object()                 # no .coords → Auto allowed
     state.active_backend_name = "stub"

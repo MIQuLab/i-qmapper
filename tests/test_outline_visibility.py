@@ -1,4 +1,4 @@
-from qpu_mapper.plot import _ensure_visible_outline
+from iqmapper.plot import _ensure_visible_outline
 
 
 def test_line_only_outline_stays_visible():

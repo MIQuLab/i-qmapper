@@ -40,10 +40,10 @@ def _values(widget):
 @pytest.fixture
 def dummy_builder(monkeypatch):
     # Isolate the build from the data layer: deterministic, offline.
-    monkeypatch.setattr("qpu_mapper.data.generate_device_data", _fake_device_data)
+    monkeypatch.setattr("iqmapper.data.generate_device_data", _fake_device_data)
 
-    from qpu_mapper.state import SessionState
-    from qpu_mapper.ui.builder import MapperUIBuilder
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
 
     state = SessionState()
     state.active_backend = object()                    # non-None placeholder
@@ -100,7 +100,7 @@ def test_handler_smoke_no_bare_name_errors(dummy_builder):
 
 
 def test_on_clear_all_empties_layouts(dummy_builder):
-    from qpu_mapper.export.layout_io import apply_layout_to_circuit
+    from iqmapper.export.layout_io import apply_layout_to_circuit
     b = dummy_builder
     apply_layout_to_circuit(b.state, 0, [0, 1, 2], "general")
     assert b.state.layouts_data[0]["qubits"]                # populated before

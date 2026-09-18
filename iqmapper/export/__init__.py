@@ -4,7 +4,7 @@ export package — Export (JSON, PNG), import (.npy, .json, .qpy, .qasm),
 
 All file I/O for layout data. No widgets — receives state and returns data.
 Sub-modules are organised by responsibility; this __init__ re-exports the
-public API so `from qpu_mapper import export as export_mod; export_mod.foo(...)`
+public API so `from iqmapper import export as export_mod; export_mod.foo(...)`
 resolves unchanged.
 
 Shared constants live here because they are consumed by more than one

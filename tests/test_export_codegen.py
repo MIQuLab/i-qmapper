@@ -1,6 +1,6 @@
 import re
 
-from qpu_mapper.export.codegen import get_qiskit_layout_code
+from iqmapper.export.codegen import get_qiskit_layout_code
 
 
 def test_codegen_general_dict_and_flatlist(make_state, make_slot):

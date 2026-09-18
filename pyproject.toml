@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qpu-mapper"
-version = "0.1.0"
+name = "i-qmapper"
+version = "0.0.5"
 description = "Interactive, noise-aware QPU layout mapper for Jupyter Lab"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,14 +18,14 @@ classifiers = [
     "Framework :: Jupyter",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Physics",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Development Status :: 4 - Beta",
 ]
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 dependencies = [
     "numpy>=1.23",
     "plotly>=5.13",
@@ -44,11 +44,11 @@ timelapse = ["imageio", "imageio-ffmpeg"]
 dev = ["pytest>=7", "pytest-cov"]
 
 [project.urls]
-Homepage = "https://github.com/mbazayeva/qpu_mapper"
-Issues = "https://github.com/mbazayeva/qpu_mapper/issues"
-Changelog = "https://github.com/mbazayeva/qpu_mapper/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mbazayeva/i-qmapper"
+Issues = "https://github.com/mbazayeva/i-qmapper/issues"
+Changelog = "https://github.com/mbazayeva/i-qmapper/blob/main/CHANGELOG.md"
 Paper = "https://arxiv.org/abs/2606.27508"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["qpu_mapper", "qpu_mapper.*"]
+include = ["iqmapper", "iqmapper.*"]
