@@ -434,6 +434,16 @@ def setup_inter_qpu(ctx):
             _w2[0] = w2                 # kept for same-backend repaint
             _sidebar2[0] = sidebar2
             _zoom2[0] = zoom2_bar
+            # Reconnect: release the PREVIOUS QPU-2 widget tree before installing
+            # the new disposer. Overwriting without disposing leaked the entire
+            # prior UI + FigureWidget on every re-connect (observers keep the
+            # tree alive in ipywidgets' handler lists).
+            if _dispose2[0] is not None:
+                try:
+                    _dispose2[0]()
+                except Exception:                     # noqa: BLE001 - logged, never fatal
+                    _log.exception(
+                        "QPU2 disposer raised on reconnect; observers may be leaked")
             _dispose2[0] = lambda: _walk_unobserve_all(full_ui_2)
 
             if _qpu2_content_box[0] is not None:
