@@ -684,6 +684,61 @@ def setup_lucj_callbacks(ctx):
 
     btn_lucj_run.on_click(_on_lucj_generate)
 
+    # ── re-score the current candidates under a new epoch ─────────
+    def _rescore_current_candidates():
+        """Re-rank the candidate dropdown against the CURRENT epoch.
+
+        Called after `benchmark` installs a measured epoch: the entries were
+        ranked on the reported calibration, and the whole point of measuring
+        is that the ordering may now be different. Re-scores through the same
+        `_circuit_score` path the sweep itself uses, so the numbers stay
+        comparable, then re-seeds the dropdown in the sweep's own label
+        format. Legacy (explicit-count) entries carry 'score' instead of
+        'lqs_circuit' and are left alone — they are not LQS-ranked.
+
+        Returns the number of entries re-scored. Never raises: a benchmark
+        that succeeded must not be undone by a re-ranking problem.
+        """
+        entries = list(_lucj_all_layouts)
+        if not entries or not any('lqs_circuit' in e for e in entries):
+            return 0
+        try:
+            for entry in entries:
+                if 'lqs_circuit' in entry:
+                    try:
+                        entry['lqs_circuit'] = _circuit_score(entry)
+                    except Exception:
+                        entry['lqs_circuit'] = None
+            ranked = sorted(
+                entries,
+                key=lambda e: (e.get('lqs_circuit') is not None,
+                               e.get('lqs_circuit') or 0.0),
+                reverse=True)
+            dd_opts = []
+            for i, entry in enumerate(ranked):
+                pct, is_tmpl = _entry_lqs_pct(entry)
+                suffix = " (template)" if is_tmpl else ""
+                alt = " · alt region" if entry.get('diverse') else ""
+                k = entry.get('n_ancillas', len(entry.get('ancillas') or []))
+                dd_opts.append((
+                    f"k={k} · #{entry.get('rank_in_stratum', i + 1)} · "
+                    f"LQS {pct}{suffix}{alt} · measured", i))
+            _seed_layout_dropdown(ranked, dd_opts)
+            circ = [e['lqs_circuit'] for e in ranked
+                    if e.get('lqs_circuit') is not None]
+            _local_best_lqs[0] = max(circ) if circ else None
+            return len(ranked)
+        except Exception:
+            _log.exception("Re-ranking candidates under the measured epoch "
+                           "failed; the epoch itself is applied")
+            return 0
+
+    # Deferred wiring: ui.benchmark_panel calls this after applying a measured
+    # epoch. Same single-element-cell pattern as the inter-QPU handoff hook.
+    _rescore_cell = getattr(ctx, 'rescore_cell', None)
+    if _rescore_cell is not None:
+        _rescore_cell[0] = _rescore_current_candidates
+
     # ── sweep mode always scores → hide the score checkbox ───────
     def _on_ancilla_mode_change(change=None):
         # 'Auto' (-1) == sweep mode; the engine always computes LQS there,

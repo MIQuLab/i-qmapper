@@ -11,9 +11,10 @@ Prerequisites: [Installation](README.md#installation) and
 [4. Score & compare](#4-score--compare) ·
 [5. Travel in time](#5-travel-in-time) ·
 [6. Check stability](#6-check-stability) ·
-[7. Import & export](#7-import--export) ·
-[8. Save your session](#8-save-your-session) ·
-[9. Where your data lives](#9-where-your-data-lives)
+[7. Benchmark the live device](#7-benchmark-the-live-device-optional) ·
+[8. Import & export](#8-import--export) ·
+[9. Save your session](#9-save-your-session) ·
+[10. Where your data lives](#10-where-your-data-lives)
 
 ---
 
@@ -117,7 +118,51 @@ tells you (fetch more from the Time panel's Multi-day mode).
 
 ![Stability check flags volatile qubits](docs/img/stability-report.png)
 
-## 7. Import & export
+## 7. Benchmark the live device (optional)
+
+Everything so far has ranked layouts on the calibration IBM *reported* — good
+numbers, but up to a day old. Sidebar section **5. Benchmark** measures the
+hardware right now instead.
+
+It needs one extra install (`pip install "i-qmapper[benchmark]"`); without it
+the section shows the install hint and stays disabled.
+
+1. Pick **Targets** — what to measure:
+   - **Current layout(s)** — every qubit placed on the map, across all circuit
+     slots, however it got there. The default when something is placed.
+   - **Sweep candidates (top-K)** — the last sweep's best candidates. Offered
+     only once a sweep has run.
+   - **Whole QPU** — the entire device.
+   - **Custom** — type a qubit list, same format as the paste box.
+2. Pick a **Level**. Start with **1 Quick readout** — seconds, and its cost does
+   not grow with the number of qubits, so `Whole QPU` x Level 1 is a cheap way
+   to refresh the readout heatmap across the whole device. **2 Targeted** adds
+   two-qubit randomized benchmarking on the target edges (tens of seconds, and
+   this one does scale with edges). **3 Full chip** takes about four minutes.
+3. Read the summary line before clicking. It tells you how many qubits and
+   edges will be measured, the estimated QPU time, and the plan it detected.
+4. On the Open plan (or when the plan cannot be detected) Level 2 warns you and
+   Level 3 requires you to tick **I understand this uses QPU time**.
+5. Click **📡 Run benchmark**.
+
+In inter-QPU mode a **QPU 1 | QPU 2** selector appears above Targets. Everything
+then applies to the selected device — including layouts handed over from a scan,
+which show up under **Current layout(s)** on QPU 2.
+
+When it finishes, the calibration label changes to `measured HH:MM (L2, 38q/44e)`
+and the candidate dropdown re-ranks under the fresh numbers — a layout that
+looked best this morning may not be best now, which is the whole point. Only the
+elements actually measured are updated; the rest keep their reported values. If
+an individual fit fails, that element keeps its reported value and the notices
+bar says so.
+
+Re-running the sweep within the hour? The section offers **Reuse** for the last
+measurement instead of spending the QPU time again.
+
+Nothing here is automatic: no benchmark runs on connect, on a timer, or during a
+multi-QPU scan.
+
+## 8. Import & export
 
 From the **Export** tab:
 
@@ -135,7 +180,7 @@ From the **Export** tab:
 
 ![Publication-ready PNG export with legend](docs/img/hero.png)
 
-## 8. Save your session
+## 9. Save your session
 
 **Session save/restore** captures everything — layouts, colors, zoom, the
 backend context — into a single file, so you can close the notebook and pick
@@ -143,7 +188,7 @@ up exactly where you left off, or share a session file with a colleague.
 Style presets (palettes, color settings) can be saved and reused
 independently of sessions.
 
-## 9. Where your data lives
+## 10. Where your data lives
 
 | What | Where |
 |---|---|

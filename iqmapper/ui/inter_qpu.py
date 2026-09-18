@@ -33,6 +33,7 @@ the QPU-1 switcher label after a backend switch.
 """
 import contextlib
 import logging
+from types import SimpleNamespace
 
 from ipywidgets import VBox, HTML, ToggleButtons
 
@@ -614,6 +615,28 @@ def setup_inter_qpu(ctx):
 
         _spawn_bg(lambda: _connect_qpu2_fetch(backend_name),
                   on_done=_paint, on_error=_error)
+
+    def qpu2_handles():
+        """Read-only view of QPU 2's live objects, for other panels.
+
+        `ui.benchmark_panel` needs the secondary state, figure and widget-ref
+        to benchmark QPU 2, and these live in closure cells with no other
+        handle. Returns a snapshot namespace (or None when QPU 2 is not
+        connected) rather than the cells themselves, so a caller can read the
+        current objects but cannot rebind them and desynchronise the panel.
+        """
+        if _state2[0] is None:
+            return None
+        return SimpleNamespace(
+            state=_state2[0], fig=_fig2[0], widgets=_w2[0],
+            backend_name=getattr(_state2[0], 'active_backend_name', None),
+            connected=True)
+
+    # Publish the accessor on the shared cell so the benchmark panel — built
+    # before this function runs — can reach QPU 2 once it exists.
+    _qpu2_handles_cell = getattr(ctx, 'qpu2_handles_cell', None)
+    if _qpu2_handles_cell is not None:
+        _qpu2_handles_cell[0] = qpu2_handles
 
     # Expose the label-refresh hook so ui.backend_switch can call it after a
     # backend switch (the switcher has no other handle on this closure).

@@ -39,6 +39,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+benchmark = ["qiskit-experiments>=0.12"]
 png = ["kaleido"]
 timelapse = ["imageio", "imageio-ffmpeg"]
 dev = ["pytest>=7", "pytest-cov"]

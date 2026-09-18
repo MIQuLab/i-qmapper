@@ -56,6 +56,10 @@ inspectable, and reproducible**.
   publication-ready PNGs, time-lapse GIF/MP4 of calibration
   history, full session save/restore, and generated Qiskit code for your chosen
   layout.
+- 📡 **Real-time benchmarking (optional)** — re-measure your candidate qubits and
+  edges on the live device and re-rank against what the hardware is doing *now*,
+  not what it reported this morning. Opt-in, tiered and costed up front; see
+  [Real-time benchmarking](#real-time-benchmarking-optional).
 - 🔒 **Local-first** — your IBM Quantum credentials never leave your machine; the
   tool talks to IBM through your own locally saved `QiskitRuntimeService` account.
 
@@ -75,6 +79,7 @@ Install from [PyPI](https://pypi.org/project/i-qmapper/):
 pip install i-qmapper
 pip install "i-qmapper[png]"
 pip install "i-qmapper[png,timelapse]"
+pip install "i-qmapper[benchmark]"
 ```
 
 ### From source (development)
@@ -182,6 +187,65 @@ on demand. Your IBM credentials are **not** stored by I-QMapper at all; they
 live in your own `qiskit-ibm-runtime` account store.
 
 </details>
+
+## Real-time benchmarking (optional)
+
+I-QMapper normally ranks layouts on the calibration IBM *reports*, which is
+refreshed about once a day. Qubits drift inside that window, so a layout chosen
+at 14:00 can sit on a qubit that degraded at 11:00. The Benchmark section in the
+**Auto** tab re-measures the hardware and feeds the result back as a "measured"
+calibration epoch — the heatmap, LQS, candidate ranking and exports all read it
+exactly as they read the reported one.
+
+It lives in the sidebar as **5. Benchmark** — beside Hardware rather than inside
+the Auto search, because benchmarking is a property of the backend: it serves
+hand-placed layouts as readily as swept ones, every circuit slot, the whole QPU,
+and the second panel in inter-QPU mode.
+
+Install the extra first:
+
+```bash
+pip install "i-qmapper[benchmark]"
+```
+
+Three levels, each measuring only what it needs to:
+
+| Level | What it measures | Scope | Rough QPU cost |
+|-------|------------------|-------|----------------|
+| **1 Quick readout** | Readout assignment error | Candidate qubits | Seconds |
+| **2 Targeted** | Level 1 + two-qubit RB | Candidate qubits and edges | Tens of seconds |
+| **3 Full chip** | T1, T2 (Hahn), readout, 1Q RB, 2Q RB | Whole device | ~4 minutes |
+
+Pick what to measure with **Targets**: the currently placed layout(s) across
+every circuit slot, the last sweep's top candidates, the whole QPU, or an
+explicit qubit list. Levels 1 and 2 are targeted, which is why they are cheap;
+Level 3 reproduces the full-chip suite from IBM's "Real-time benchmarking for
+qubit selection" tutorial.
+
+Worth knowing: **Level 1 does not get more expensive as you measure more
+qubits** — readout is two circuits whatever the width — so `Whole QPU` x Level 1
+is the cheap way to refresh the readout heatmap across the device. Levels 2 and
+3 scale with the number of edges and are not cheap.
+
+In inter-QPU mode a **QPU 1 | QPU 2** selector appears; everything — targets,
+cost, run, the resulting epoch and its cache file — then applies to whichever
+device is selected.
+
+**It is never automatic.** Nothing benchmarks on connect, on a timer, or inside
+the multi-QPU scan. A run happens only when you click **Run benchmark**, and the
+estimated cost is on screen before you can click it.
+
+**Mind your plan.** The cost estimates are wall-clock QPU seconds, and on an
+Open-plan account a Level 3 run can consume a large part of a monthly
+allowance. I-QMapper detects your plan where it can and assumes the Open plan
+when it cannot, so Level 2 warns and Level 3 requires an explicit
+acknowledgement. The estimate itself is calibrated from a single published
+figure — treat it as the right order of magnitude, not a quote.
+
+Measured values replace reported ones only for the elements actually measured;
+everything else keeps its reported value, and the calibration label tells you
+which epoch you are looking at. Any experiment or fit that fails falls back to
+the reported value for that element with a notice, never a crash.
 
 ## Extending to other vendors
 

@@ -39,7 +39,9 @@ def _build(monkeypatch):
     state.custom_colors = []
     state.cal_history_dates = ["_seed_"]
     b = MapperUIBuilder(state)
-    b.build()
+    # build() returns the assembled tree rather than storing it; keep it so
+    # tests can walk the real sidebar/figure widget graph.
+    b._test_full_ui, _fig = b.build()
     return b, state
 
 
@@ -168,3 +170,61 @@ def test_score_checkbox_owns_its_layout(monkeypatch):
     # The visual properties W supplied are preserved on the private copy.
     assert (chk.layout.width, chk.layout.margin) == \
            (b.chk_lucj_diverse.layout.width, b.chk_lucj_diverse.layout.margin)
+
+
+# ── t5: benchmark lives in the sidebar, not the Auto tab ───────────────────
+
+def _sidebar_accordion(b):
+    """The numbered settings accordion from the assembled sidebar."""
+    from ipywidgets import Accordion
+    for w in _descendants(b._test_full_ui):
+        if isinstance(w, Accordion) and w.get_title(0) == '1. Hardware':
+            return w
+    raise AssertionError('numbered settings accordion not found')
+
+
+def test_benchmark_is_sidebar_section_5_not_an_auto_tab_block(monkeypatch):
+    """Benchmarking is a property of the BACKEND, so it belongs beside
+    Hardware — it has to serve hand-placed layouts, every circuit slot, the
+    whole QPU and the inter-QPU second panel, none of which the Auto tab
+    covers."""
+    b, _ = _build(monkeypatch)
+
+    acc = _sidebar_accordion(b)
+    assert acc.get_title(3) == '4. Multi-Programming'
+    assert acc.get_title(4) == '5. Benchmark', 'section 5 missing'
+    assert any(w is b.bench_box for w in _descendants(acc.children[4])), \
+        'the benchmark controls are not inside section 5'
+
+    # ...and gone from the Auto tab.
+    b._build_auto_lucj_view()
+    auto = _descendants(b._auto_single_panel)
+    for widget, name in ((b.bench_box, 'bench_box'),
+                         (b.btn_bench_run, 'btn_bench_run'),
+                         (b.dd_bench_target, 'dd_bench_target')):
+        assert not any(w is widget for w in auto), \
+            f'{name} still mounted in the Auto tab'
+
+
+def test_benchmark_widgets_do_not_share_a_mutated_layout(monkeypatch):
+    """Same bug class as the score checkbox: `W` is ONE shared Layout, so a
+    widget whose .layout.display is toggled at runtime must own its own."""
+    b, _ = _build(monkeypatch)
+    mutated = [('txt_bench_custom', b.txt_bench_custom),
+               ('tb_bench_qpu', b.tb_bench_qpu),
+               ('chk_bench_ack', b.chk_bench_ack),
+               ('btn_bench_reuse', b.btn_bench_reuse)]
+
+    everything = _descendants(b._test_full_ui)
+    for name, widget in mutated:
+        assert widget.layout is not b.txt_auto.layout, (
+            f'{name} shares the shared W Layout — toggling its display '
+            f'would hide every widget built with W')
+        sharers = [w for w in everything
+                   if getattr(w, 'layout', None) is widget.layout]
+        assert len(set(id(w) for w in sharers)) <= 1, (
+            f'{name} shares its Layout with {len(sharers) - 1} other widget(s)')
+
+    # Hidden-by-default widgets really do start hidden.
+    assert b.txt_bench_custom.layout.display == 'none'
+    assert b.tb_bench_qpu.layout.display == 'none'

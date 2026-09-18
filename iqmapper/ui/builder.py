@@ -309,6 +309,14 @@ class MapperUIBuilder:
         # (reveal QPU-2 + prefill dropdown + stage candidate). Same
         # deferred-wiring pattern as the QPU-1 title-refresh cell.
         self._inter_qpu_handoff = [None]
+        # Shared cell: ui.lucj_panel populates [0] with the candidate
+        # re-ranking hook, which ui.benchmark_panel calls after installing a
+        # measured epoch. Same deferred-wiring pattern as the handoff cell.
+        self._bench_rescore = [None]
+        # Shared cell: ui.inter_qpu publishes a read-only accessor for QPU 2's
+        # live state/figure here, so the benchmark panel — built before
+        # setup_inter_qpu runs — can reach QPU 2 once it connects.
+        self._qpu2_handles = [None]
         _lucj_ctx = _NS(
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
@@ -333,6 +341,7 @@ class MapperUIBuilder:
             num_circuits=self.num_circuits, intra_qpu_mode=self.intra_qpu_mode, dd_mode=self.dd_mode,
             set_num_circuits=self._set_num_circuits_silent,
             lucj_all_layouts=self._lucj_all_layouts,
+            rescore_cell=self._bench_rescore,
             lucj_multi_results=self._lucj_multi_results,
             lucj_multi_norbs_list=self._lucj_multi_norbs,
             lucj_multi_ancillas_list=self._lucj_multi_ancillas,
@@ -359,6 +368,34 @@ class MapperUIBuilder:
         )
         setup_lucj_callbacks(_lucj_ctx)
         self._refresh_stability_filter_availability()
+
+        # ── 📡 Benchmark section (ui.benchmark_panel) ────────────────
+        # After setup_lucj_callbacks, so the re-ranking hook cell is filled
+        # by the time the panel could call it. Opt-in only: nothing here
+        # runs unless the user clicks Run benchmark.
+        from .benchmark_panel import setup_benchmark_panel
+        _bench_ctx = _NS(
+            state=state,
+            dd_bench_target=self.dd_bench_target,
+            txt_bench_custom=self.txt_bench_custom,
+            tb_bench_qpu=self.tb_bench_qpu,
+            dd_bench_level=self.dd_bench_level,
+            lbl_bench_summary=self.lbl_bench_summary,
+            chk_bench_ack=self.chk_bench_ack,
+            btn_bench_run=self.btn_bench_run,
+            lbl_bench_status=self.lbl_bench_status,
+            lbl_bench_reuse=self.lbl_bench_reuse,
+            btn_bench_reuse=self.btn_bench_reuse,
+            lbl_lucj_notices=self.lbl_lucj_notices,
+            lucj_all_layouts=self._lucj_all_layouts,
+            rescore_cell=self._bench_rescore,
+            refresh=self._refresh,
+            chk_inter_qpu=self.chk_inter_qpu,
+            qpu2_handles_cell=self._qpu2_handles,
+            bench_spawn_bg=default_spawn_bg,
+            bench_runner_factory=None,      # production: built at click time
+        )
+        self._bench_api = setup_benchmark_panel(_bench_ctx)
 
         # ── PNG save popup ───────────────────────────────────────────
         # ui.png_export builds the popup + sliders + checkbox and wires
@@ -557,6 +594,7 @@ class MapperUIBuilder:
                 qpu2_fig_box=_qpu2_fig_box,
                 full_ui=full_ui,
                 handoff_cell=self._inter_qpu_handoff,
+                qpu2_handles_cell=self._qpu2_handles,
             ))
 
         return full_ui, self.fig
@@ -1288,6 +1326,79 @@ class MapperUIBuilder:
                     "different chip regions (Jaccard ≤ 0.8). The top half "
                     "is always the absolute best — diversity never "
                     "demotes it.")
+        # ── 📡 Benchmark widgets (mounted as sidebar section 5) ───
+        # Never automatic: see iqmapper/benchmark.py. The target dropdown,
+        # level dropdown, cost line and acknowledgement all exist so the QPU
+        # cost is on screen before the button can be clicked.
+        #
+        # Benchmarking is a property of the BACKEND, not of the auto search,
+        # so this lives in the sidebar rather than in the Auto tab: it has to
+        # serve hand-placed layouts, every circuit slot, the whole QPU, and
+        # the inter-QPU second panel.
+        from .. import benchmark as _bench
+        # Its OWN Layout: benchmark_panel toggles .layout.display on this to
+        # hide the field unless Custom is selected, and the shared `W`
+        # instance would hide every widget built with W.
+        _own = lambda: Layout(width=W.width, margin=W.margin,
+                              min_width=W.min_width)
+        self.dd_bench_target = Dropdown(
+            options=[(_bench.TARGET_LABELS[_bench.TARGET_CURRENT],
+                      _bench.TARGET_CURRENT)],
+            value=_bench.TARGET_CURRENT,
+            description='Targets:',
+            layout=Layout(width='280px'),
+            style={'description_width': '110px'},
+            tooltip='What to measure: the placed layout(s), the last sweep\'s '
+                    'top candidates, the whole QPU, or an explicit qubit list.')
+        _custom_layout = _own()
+        _custom_layout.display = 'none'     # revealed only for Targets=Custom
+        self.txt_bench_custom = Text(
+            value='', description='Qubits:', placeholder='0, 1, 2, 5, 8',
+            layout=_custom_layout, style={'description_width': '110px'})
+        _qpu_layout = _own()
+        _qpu_layout.display = 'none'        # revealed only when QPU 2 is up
+        self.tb_bench_qpu = ToggleButtons(
+            options=[('QPU 1', 1), ('QPU 2', 2)], value=1,
+            layout=_qpu_layout)
+        self.dd_bench_level = Dropdown(
+            options=_bench.LEVEL_OPTIONS,
+            value=_bench.LEVEL_QUICK_READOUT,
+            description='Level:',
+            layout=Layout(width='280px'),
+            style={'description_width': '110px'},
+            tooltip='1 = readout (2 circuits, cost does not grow with qubit '
+                    'count); 2 = adds 2Q RB on the target edges; '
+                    '3 = the full-chip tutorial suite (~4 min).')
+        self.lbl_bench_summary = HTML("")
+        self.chk_bench_ack = Checkbox(
+            value=False,
+            description='I understand this uses QPU time',
+            layout=_own())
+        self.btn_bench_run = Button(
+            description='📡 Run benchmark',
+            button_style='warning', layout=W, disabled=True)
+        self.lbl_bench_reuse = HTML("")
+        self.btn_bench_reuse = Button(
+            description='Reuse', button_style='info', disabled=True,
+            layout=Layout(width='120px', margin='2px 0px'))
+        self.lbl_bench_status = HTML("")
+        self.bench_box = VBox([
+            HTML("<div style='font-size:14px;color:#6c757d;"
+                 "margin-bottom:4px;'>Re-measure the live device and re-rank "
+                 "against what the hardware is doing now. Opt-in: nothing "
+                 "runs until you click.</div>"),
+            self.tb_bench_qpu,
+            self.dd_bench_target,
+            self.txt_bench_custom,
+            self.dd_bench_level,
+            self.lbl_bench_summary,
+            self.chk_bench_ack,
+            self.btn_bench_run,
+            HBox([self.lbl_bench_reuse, self.btn_bench_reuse],
+                 layout=Layout(align_items='center')),
+            self.lbl_bench_status,
+        ], layout=W)
+
         # Expert knobs, collapsed out of the primary flow (ancilla dropdown
         # -> Run). The defaults are right for nearly everyone, and the notices
         # bar already reports when the cap truncated a search.
@@ -3530,11 +3641,20 @@ class MapperUIBuilder:
                  self.chk_inter_qpu,
                  self.dd_backend_qpu2, self.btn_connect_qpu2, self.lbl_qpu2_status]
             )),
+            # 5th section: benchmarking. A property of the backend, so it
+            # belongs beside Hardware rather than inside the Auto search.
+            VBox([
+                HTML("<div style='font-size:15px;font-weight:bold;"
+                     "color:#1a5276;margin:4px 0;'>📡 Real-time benchmarking"
+                     "</div>"),
+                self.bench_box,
+            ]),
         ])
         acc_settings.set_title(0, '1. Hardware')
         acc_settings.set_title(1, '2. Display')
         acc_settings.set_title(2, '3. Colors')
         acc_settings.set_title(3, '4. Multi-Programming')
+        acc_settings.set_title(4, '5. Benchmark')
 
         sidebar_title = HTML(
             f"<h3 style='margin:0 0 6px 0; color:#2C3E50;'>🎛️ QPU Map Editor</h3>"

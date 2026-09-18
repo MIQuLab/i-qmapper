@@ -6,6 +6,15 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- Opt-in real-time benchmarking (`iqmapper.benchmark`, extra
+  `pip install "i-qmapper[benchmark]"`): three tiers that re-measure the
+  candidate qubits and edges with `qiskit-experiments` and feed the result
+  back as a "measured" calibration epoch, so the heatmap, LQS, re-ranking and
+  export all read fresh numbers. Never automatic, never inside the multi-QPU
+  scan, and the QPU cost estimate is shown before the run can be started.
+  Lives in the sidebar as "5. Benchmark" with selectable targets (current
+  layouts / sweep candidates / whole QPU / a custom qubit list) and, in
+  inter-QPU mode, a QPU 1 | QPU 2 selector.
 - Stratified ancilla sweep: a single VF2 solve at `k_max` feeding a
   bridge-subtraction cascade down to `k_min`, with a hybrid mode, a shuffled
   search for hard instances, and region-diversity selection across the chip.
