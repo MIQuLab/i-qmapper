@@ -265,7 +265,7 @@ def test_multi_sweep_kwargs_parity(monkeypatch):
     b.lucj_top_n.value = 7
     b.lucj_search_cap.value = 5000
     b.chk_deep_search.value = False
-    b.chk_lucj_diverse.value = True
+    b.chk_lucj_diverse.value = False                 # non-default (default is ON)
 
     b.lucj_ancilla_dd.value = -1                      # sweep mode
     b.btn_lucj_run.click()                            # local sweep
@@ -275,7 +275,7 @@ def test_multi_sweep_kwargs_parity(monkeypatch):
     for key in ('top_n', 'hybrid', 'mapping_cap', 'diversity_threshold'):
         assert mk[key] == local[key], key
     assert mk['top_n'] == 7 and mk['mapping_cap'] == 5000
-    assert mk['hybrid'] is False and mk['diversity_threshold'] == 0.8
+    assert mk['hybrid'] is False and mk['diversity_threshold'] is None
 
 
 # ── legacy Generate untouched — still calls the old engine ──────────────

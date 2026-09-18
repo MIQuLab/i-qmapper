@@ -358,7 +358,7 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     b.lucj_min_ancilla.value = 2
     b.lucj_top_n.value = 7                           # non-default top_n
     b.lucj_search_cap.value = 5000                   # non-default cap
-    b.chk_lucj_diverse.value = True                 # non-default diversity
+    b.chk_lucj_diverse.value = False                # non-default diversity
 
     b.btn_lucj_run.click()                          # local sweep
     local_kw = calls[-1]
@@ -372,7 +372,8 @@ def test_local_and_scan_identical_sweep_kwargs(monkeypatch):
     # Show-top, Search-cap, diversity reach BOTH paths — parity.
     assert local_kw['top_n'] == 7 and scan_kw['top_n'] == 7
     assert local_kw['mapping_cap'] == 5000 and scan_kw['mapping_cap'] == 5000
-    assert local_kw['diversity_threshold'] == 0.8 and scan_kw['diversity_threshold'] == 0.8
+    assert (local_kw['diversity_threshold'] is None
+            and scan_kw['diversity_threshold'] is None)
 
 
 # ── active backend skipped-with-reference (never re-searched) ───────────

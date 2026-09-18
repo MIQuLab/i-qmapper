@@ -242,14 +242,14 @@ def test_batch_scan_sweep_fn_gets_multi_knobs(monkeypatch):
     b.lucj_top_n.value = 7
     b.lucj_search_cap.value = 5000
     b.chk_deep_search.value = False
-    b.chk_lucj_diverse.value = True
+    b.chk_lucj_diverse.value = False                 # non-default (default is ON)
     b.lucj_multi_norbs.value = '8, 6'
     b.btn_scan_batch.click()
 
     assert seen['norbs'] == [8, 6]
     k = seen['kwargs']
     assert k['top_n'] == 7 and k['mapping_cap'] == 5000
-    assert k['hybrid'] is False and k['diversity_threshold'] == 0.8
+    assert k['hybrid'] is False and k['diversity_threshold'] is None
 
 
 # ── batch handoff fires from the selector's open button (right payload) ──────

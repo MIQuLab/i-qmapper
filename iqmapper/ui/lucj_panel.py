@@ -684,17 +684,22 @@ def setup_lucj_callbacks(ctx):
 
     btn_lucj_run.on_click(_on_lucj_generate)
 
-    # ── sweep mode always scores → grey out the score checkbox ────
+    # ── sweep mode always scores → hide the score checkbox ───────
     def _on_ancilla_mode_change(change=None):
         # 'Auto' (-1) == sweep mode; the engine always computes LQS there,
         # so the legacy "Score layouts" toggle is meaningless.
         sweep_mode = (lucj_ancilla_dd.value is not None
                       and lucj_ancilla_dd.value < 0)
         lucj_chk_score.disabled = sweep_mode
-        lucj_chk_score.tooltip = ('Sweep always scores' if sweep_mode
-                                  else 'Score layouts (pick lowest error)')
+        # Hide rather than grey out. 'Auto' is the default, so a permanently
+        # disabled checkbox was the first thing every user saw. The widget
+        # stays in the tree (the legacy path still reads .value on run) and
+        # only its display is toggled.
+        lucj_chk_score.layout.display = 'none' if sweep_mode else ''
+        if not sweep_mode:
+            lucj_chk_score.tooltip = 'Score layouts (pick lowest error)'
     lucj_ancilla_dd.observe(_on_ancilla_mode_change, names='value')
-    _on_ancilla_mode_change()  # set initial state (default -1 → disabled)
+    _on_ancilla_mode_change()  # set initial state (default -1 → hidden)
 
     # ── Multi-QPU scan ─────────────────────────────────
     btn_scan_qpus = ctx.btn_scan_qpus

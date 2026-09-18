@@ -1260,25 +1260,42 @@ class MapperUIBuilder:
             description='Search cap:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
-            tooltip='max VF2 mappings enumerated per search — higher = more '
-                    'exhaustive, slower')
+            tooltip='Max VF2 embeddings enumerated per search (default 2000). '
+                    'When the cap truncates, the notices bar says so; raise it '
+                    'for a more exhaustive (slower) search.')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
-            layout=W)
+            # Its OWN Layout, not the shared `W` instance: lucj_panel toggles
+            # .layout.display on this widget to hide it in sweep mode, and a
+            # shared Layout would hide every other widget built with W.
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width))
         self.chk_deep_search = Checkbox(
             value=True,
             description='Deep search per ancilla count',
             layout=W,
             tooltip='adds a direct search per k — complete but slower; '
                     'off = fast derivation from k_max only')
-        # Region diversity in the top-N slice. Default OFF.
+        # Region diversity in the top-N slice. Default ON: it never costs
+        # quality (ancilla_sweep._select_with_diversity keeps the first
+        # ceil(top_n/2) slots as the absolute best) and it widens the choice.
         self.chk_lucj_diverse = Checkbox(
-            value=False,
+            value=True,
             description='Prefer diverse regions',
             layout=W,
-            tooltip='reserve top-N slots for layouts from different chip '
-                    'regions (Jaccard > 0.8 = same region)')
+            tooltip="Second half of each stratum's list favors layouts on "
+                    "different chip regions (Jaccard ≤ 0.8). The top half "
+                    "is always the absolute best — diversity never "
+                    "demotes it.")
+        # Expert knobs, collapsed out of the primary flow (ancilla dropdown
+        # -> Run). The defaults are right for nearly everyone, and the notices
+        # bar already reports when the cap truncated a search.
+        self.lucj_advanced_acc = Accordion(
+            children=[VBox([self.lucj_search_cap, self.chk_deep_search])],
+            layout=W)
+        self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
+        self.lucj_advanced_acc.selected_index = None   # collapsed on open
         self.btn_lucj_run = Button(
             description='🤖 Generate LUCJ Layout',
             button_style='success', layout=W)
@@ -1798,9 +1815,7 @@ class MapperUIBuilder:
             self.lucj_ancilla_dd,
             self.lucj_min_ancilla,
             self.lucj_top_n,
-            self.lucj_search_cap,
             self.lucj_chk_score,
-            self.chk_deep_search,
             self.chk_lucj_diverse,
             self.ft_stability_floor,
             self.chk_stability_filter,
@@ -1810,6 +1825,7 @@ class MapperUIBuilder:
             self.lbl_lucj_trunc,
             self.lbl_lucj_status,
             self.lbl_lucj_notices,
+            self.lucj_advanced_acc,
             HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
             HTML(f"<div style='font-size:14px;font-weight:bold;color:#1a5276;"
                  f"margin:3px 0;'>📍 This backend ({name})</div>"),
