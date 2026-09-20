@@ -46,6 +46,8 @@ def setup_benchmark_panel(ctx):
     chk_bench_ack = ctx.chk_bench_ack
     btn_bench_run = ctx.btn_bench_run
     lbl_bench_status = ctx.lbl_bench_status
+    chk_bench_absolute = getattr(ctx, 'chk_bench_absolute', None)
+    lbl_bench_consistency = getattr(ctx, 'lbl_bench_consistency', None)
     lbl_bench_reuse = ctx.lbl_bench_reuse
     btn_bench_reuse = ctx.btn_bench_reuse
     btn_bench_reanalyze = getattr(ctx, 'btn_bench_reanalyze', None)
@@ -269,6 +271,7 @@ def setup_benchmark_panel(ctx):
         feature must never produce.
         """
         state, refresh_fn = active_target()
+        _check_consistency(state, epoch)
         if getattr(epoch, 'is_empty', False):
             _surface_notices(epoch)
             lbl_bench_status.value = (
@@ -317,6 +320,52 @@ def setup_benchmark_panel(ctx):
                 f"measured {esc(coverage)} (L{epoch.level}){rank_txt}</div>")
         _refresh_reuse_offer()
         return True
+
+    def _check_consistency(state, epoch):
+        """Compare against the reported calibration; rescale if it is off.
+
+        A measured epoch whose median sits 2.8x away from the reported one
+        across 351 edges is not describing drift — a whole chip does not move
+        uniformly in one direction. That is an estimator mismatch, and its
+        absolute values must not reach the LQS. Relative mode keeps the
+        per-element ratios (the collapsed couplers, which ARE real) and
+        discards only the offset.
+        """
+        if lbl_bench_consistency is None:
+            return
+        try:
+            reported_q = getattr(state, '_reported_qubit_props', None) or {}
+            reported_g = getattr(state, '_reported_gate_props', None) or {}
+            if not reported_q and not reported_g:
+                lbl_bench_consistency.value = ''
+                return
+            stats = bench.consistency_stats(epoch, reported_q, reported_g)
+            epoch.consistency = stats
+            offenders = bench.consistency_offenders(stats)
+            summary = esc(bench.consistency_summary(stats))
+
+            if offenders and not bool(getattr(chk_bench_absolute, 'value',
+                                              False)):
+                bench.apply_relative_mode(epoch, reported_q, reported_g,
+                                          stats)
+                names = ', '.join(
+                    f"{k} \u00d7{v['ratio_of_medians']:.1f}"
+                    for k, v in offenders.items())
+                lbl_bench_consistency.value = (
+                    f"<div style='font-size:13px;color:#8a4b00;"
+                    f"background:#fff3cd;padding:4px 8px;border-radius:4px;"
+                    f"border:1px solid #ffe08a;margin:2px 0;'>\u26a0 "
+                    f"systematic offset vs reported ({esc(names)}) — "
+                    f"estimator mismatch suspected; measured values applied "
+                    f"in RELATIVE mode<br>{summary}</div>")
+            else:
+                lbl_bench_consistency.value = (
+                    f"<div style='font-size:13px;color:#1a5276;"
+                    f"background:#f4f8fb;padding:4px 8px;border-radius:4px;"
+                    f"border:1px solid #d6e4f0;margin:2px 0;'>"
+                    f"{summary}</div>")
+        except Exception:
+            _log.exception('consistency check failed')
 
     def _surface_notices(epoch):
         if notices_label is not None and getattr(epoch, 'notices', None):
@@ -386,6 +435,10 @@ def setup_benchmark_panel(ctx):
         reported_g = dict(getattr(state, 'gate_props_data', {}) or {})
         edges = list(getattr(state, 'edges_list', None) or [])
         backend_name = getattr(state, 'active_backend_name', None)
+        # Kept for the consistency check, which has to compare against what
+        # was reported BEFORE the measured epoch replaces it.
+        setattr(state, '_reported_qubit_props', reported_q)
+        setattr(state, '_reported_gate_props', reported_g)
 
         import time as _time
         started_at = _time.time()
@@ -429,8 +482,15 @@ def setup_benchmark_panel(ctx):
                 except Exception:
                     _log.debug('raw dump failed', exc_info=True)
             try:
+                # `when=started_at` deliberately: the epoch, its _jobs.json and
+                # its _raw.json must share one timestamp. On 20 Sept they did
+                # not — the dumps were named by submission time (12:38:08) and
+                # the epoch by completion time (12:50:10), so the three
+                # artifacts of a single run looked like unrelated files and the
+                # raw dump appeared to be missing.
                 epoch = bench.results_to_epoch(raw, plan, reported_q,
-                                               reported_g, edges)
+                                               reported_g, edges,
+                                               when=started_at)
             except Exception as exc:          # noqa: BLE001 - reported
                 _log.exception("folding benchmark results failed")
                 lbl_bench_status.value = _err(exc)
@@ -441,8 +501,19 @@ def setup_benchmark_panel(ctx):
             _refresh_reanalyze_offer()
 
         def _failed(exc):
-            """Main thread: the reported epoch is left exactly as it was."""
+            """Main thread: the reported epoch is left exactly as it was.
+
+            The raw dump is written here too: a failed run is precisely when
+            the diagnostic artefact is most needed.
+            """
             btn_bench_run.disabled = False
+            expdata = getattr(exc, 'expdata', None)
+            if backend_name and expdata:
+                try:
+                    bench.save_raw_results(backend_name, started_at, expdata)
+                except Exception:
+                    _log.debug('raw dump on failure path failed',
+                               exc_info=True)
             _log.exception("benchmark run failed: %s", exc)
             if isinstance(exc, bench.BenchmarkRunError):
                 ids = ', '.join(exc.job_ids) if exc.job_ids else 'none'

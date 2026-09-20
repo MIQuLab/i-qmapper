@@ -18,6 +18,8 @@ absent, so the default suite stays runnable on a bare install:
 
     python -m pytest -m integration -q
 """
+import os
+
 import numpy as np
 import pytest
 
@@ -294,3 +296,187 @@ def test_reanalysis_reproduces_the_direct_run(monkeypatch, fake_backend,
         again.qubit_props['readout_error'][list(targets.qubits)],
         direct.qubit_props['readout_error'][list(targets.qubits)],
         rtol=1e-9)
+
+
+# ── v3.1: the 20 Sept live bugs, against REAL objects ──────────────
+
+def test_readout_yields_finite_values_with_real_mitigator(monkeypatch,
+                                                           fake_backend,
+                                                           local_api):
+    """§2.1 — must FAIL pre-fix with "not 'method'", PASS after.
+
+    `LocalReadoutError` returns one `LocalReadoutMitigator` whose
+    `assignment_matrix` is a METHOD. Reading it as an attribute is what made
+    all 156 qubits fail on 20 Sept.
+    """
+    targets = bench.Targets([0, 1, 2], [])
+    coupling = _coupling_of(fake_backend)
+    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT, targets,
+                            fake_backend.num_qubits, coupling)._replace(
+                                shots=100)
+
+    raw, _ = _run_through_production_runner(monkeypatch, local_api,
+                                            fake_backend, plan)
+    qp, gp = _reported(fake_backend.num_qubits, len(coupling))
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.n_measured_qubits == 3, epoch.notices
+    assert not any('method' in n for n in epoch.notices), epoch.notices
+    values = epoch.qubit_props['readout_error'][list(targets.qubits)]
+    assert np.all(np.isfinite(values)) and np.all((values >= 0) & (values <= 0.5))
+
+
+def test_t1_t2_populate_every_qubit_with_real_results(monkeypatch,
+                                                       fake_backend,
+                                                       local_api):
+    """§2.3 — pre-fix all results landed on qubit 0 ("measured qubits: 1")."""
+    coupling = _coupling_of(fake_backend)
+    n_q = fake_backend.num_qubits
+    plan = bench.build_plan(bench.LEVEL_FULL, bench.Targets([], []), n_q,
+                            coupling)
+    specs = []
+    for spec in plan.specs:
+        params = dict(spec.params)
+        if spec.kind in ('t1', 't2hahn'):
+            params['delays'] = [1e-6, 20e-6, 40e-6]
+        if spec.kind in ('rb1q', 'rb2q_layer'):
+            params['lengths'] = [2, 4]
+            params['num_samples'] = 2
+        specs.append(spec._replace(params=params))
+    plan = plan._replace(specs=specs, shots=100)
+
+    raw, _ = _run_through_production_runner(monkeypatch, local_api,
+                                            fake_backend, plan)
+    qp, gp = _reported(n_q, len(coupling))
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.n_measured_qubits >= n_q - 1, (
+        f'only {epoch.n_measured_qubits}/{n_q} qubits measured: '
+        f'{epoch.notices}')
+    finite = np.isfinite(epoch.qubit_props['t1'])
+    assert finite.all()
+    # Microseconds, not seconds.
+    assert np.median(epoch.qubit_props['t1']) > 1.0
+
+
+def test_one_qubit_epgs_are_kept_per_qubit(monkeypatch, fake_backend,
+                                            local_api):
+    """§2.2 — per (qubit, gate) results collapsed to one EPG per qubit."""
+    coupling = _coupling_of(fake_backend)
+    targets = bench.Targets([0, 1], [coupling[0]])
+    plan = bench.build_plan(bench.LEVEL_TARGETED, targets,
+                            fake_backend.num_qubits, coupling)
+    specs = []
+    for spec in plan.specs:
+        params = dict(spec.params)
+        if spec.kind in ('rb1q', 'rb2q_layer'):
+            params['lengths'] = [2, 4]
+            params['num_samples'] = 2
+        specs.append(spec._replace(params=params))
+    plan = plan._replace(specs=specs, shots=100)
+
+    raw, _ = _run_through_production_runner(monkeypatch, local_api,
+                                            fake_backend, plan)
+    qp, gp = _reported(fake_backend.num_qubits, len(coupling))
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    epg = epoch.extra.get('epg_1q') or {}
+    assert epg, epoch.notices
+    assert set(epg) <= set(targets.qubits)
+    note = next((n for n in epoch.notices if '1Q RB' in n), '')
+    assert f'{len(epg)} qubit' in note, note
+
+
+def test_one_qubit_subtraction_lowers_the_two_qubit_epg(monkeypatch,
+                                                         fake_backend,
+                                                         local_api):
+    """§3.3 — with the 1Q EPGs supplied, the 2Q number must come out lower.
+
+    Ordering only: the absolute value depends on the simulator's noise model.
+    """
+    coupling = _coupling_of(fake_backend)
+    pair = coupling[0]
+    targets = bench.Targets(list(pair), [pair])
+
+    def _epg_for(with_subtraction):
+        plan = bench.build_plan(bench.LEVEL_TARGETED, targets,
+                                fake_backend.num_qubits, coupling)
+        specs = []
+        for spec in plan.specs:
+            if spec.kind == 'rb1q' and not with_subtraction:
+                continue                      # no 1Q RB -> nothing to subtract
+            params = dict(spec.params)
+            if spec.kind in ('rb1q', 'rb2q_layer'):
+                params['lengths'] = [2, 4, 8]
+                params['num_samples'] = 3
+            specs.append(spec._replace(params=params))
+        plan = plan._replace(specs=specs, shots=200)
+        raw, _ = _run_through_production_runner(monkeypatch, local_api,
+                                                fake_backend, plan)
+        qp, gp = _reported(fake_backend.num_qubits, len(coupling))
+        epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+        return epoch.gate_props['cz_error'][coupling.index(pair)]
+
+    without = _epg_for(False)
+    with_sub = _epg_for(True)
+    assert np.isfinite(without) and np.isfinite(with_sub)
+    assert with_sub <= without, (
+        f'1Q subtraction did not lower the 2Q EPG: {with_sub} vs {without}')
+
+
+def test_raw_dump_is_written_for_a_successful_run(monkeypatch, fake_backend,
+                                                  local_api, tmp_path):
+    """§2.5 — a completed run must leave a _raw.json beside its epoch."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    targets = bench.Targets([0, 1, 2], [])
+    coupling = _coupling_of(fake_backend)
+    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT, targets,
+                            fake_backend.num_qubits, coupling)._replace(
+                                shots=100)
+
+    _raw, expdata = _run_through_production_runner(monkeypatch, local_api,
+                                                   fake_backend, plan)
+    when = 1_700_000_000.0
+    path = bench.save_raw_results('ibm_fake', when, expdata)
+    assert path and os.path.exists(path)
+    # ...and it pairs with the epoch by sharing the timestamp.
+    assert os.path.basename(path).startswith(
+        os.path.basename(bench._measured_path('ibm_fake', when))
+        .replace('.json', ''))
+    text = bench.diagnose_raw(path)
+    assert 'NO analysis results' not in text, text
+
+
+def test_calibration_check_runs_both_ways(monkeypatch, fake_backend,
+                                          local_api):
+    """§4.3 — parallel and sequential over the same edges, and a verdict."""
+    coupling = _coupling_of(fake_backend)
+    edges = coupling[:2]
+    targets = bench.Targets(sorted({q for e in edges for q in e}), edges)
+    par_plan, seq_plan = bench.build_calibration_check_plans(
+        targets, fake_backend.num_qubits, coupling, n_edges=2)
+
+    def _shrink(plan):
+        specs = []
+        for spec in plan.specs:
+            params = dict(spec.params)
+            if spec.kind in ('rb1q', 'rb2q_layer'):
+                params['lengths'] = [2, 4]
+                params['num_samples'] = 2
+            specs.append(spec._replace(params=params))
+        return plan._replace(specs=specs, shots=100)
+
+    qp, gp = _reported(fake_backend.num_qubits, len(coupling))
+    epochs = []
+    for plan in (_shrink(par_plan), _shrink(seq_plan)):
+        raw, _ = _run_through_production_runner(monkeypatch, local_api,
+                                                fake_backend, plan)
+        epochs.append(bench.results_to_epoch(raw, plan, dict(qp), dict(gp),
+                                             coupling))
+
+    table = bench.calibration_check_table(coupling, gp['cz_error'],
+                                          epochs[0], epochs[1])
+    assert table['rows'], 'the check produced no rows'
+    assert table['verdict']
+    assert table['ratio_parallel'] is not None
+    assert table['ratio_sequential'] is not None

@@ -164,12 +164,19 @@ def test_batch_is_run_with_sampler_and_shots(api):
 
 
 def test_results_are_collected_per_experiment(api):
+    """Every spec gets an entry, keyed by its index in the PLAN.
+
+    The runner submits in two phases (non-2Q first, so its 1Q EPGs can be fed
+    to the 2Q analyses), so a spec's position within its batch is not its
+    position in the plan — the mapping must be by plan index.
+    """
     plan = _plan()
     runner = bench.make_runtime_runner(object())
     out = runner(plan)
 
-    assert set(out) == set(range(len(plan.specs)))
-    assert out[0] == ['result-0']
+    indices = {k for k in out if isinstance(k, int)}
+    assert indices == set(range(len(plan.specs)))
+    assert all(out[i] is not None for i in indices)
 
 
 def test_session_closes_even_when_the_run_raises(api):
@@ -197,13 +204,33 @@ def test_session_closes_even_when_the_run_raises(api):
 
 
 def test_experiments_are_built_for_every_spec(api):
+    """Across both phases, every spec is built exactly once."""
     plan = _plan(bench.LEVEL_FULL)
     runner = bench.make_runtime_runner(object())
     runner(plan)
 
-    batch = _FakeBatch.instances[0]
-    assert len(batch.experiments) == len(plan.specs)
-    assert batch.kwargs == {'flatten_results': False}
+    built = sum(len(b.experiments) for b in _FakeBatch.instances)
+    assert built == len(plan.specs)
+    assert all(b.kwargs == {'flatten_results': False}
+               for b in _FakeBatch.instances)
+
+
+def test_two_qubit_rb_is_submitted_after_one_qubit_rb(api):
+    """Ordering is the whole point of the phase split.
+
+    The 2Q analyses can only subtract single-qubit error if the 1Q EPGs exist
+    when they are CONSTRUCTED, so 1Q RB must be a separate, earlier submission.
+    """
+    plan = _plan(bench.LEVEL_FULL)
+    runner = bench.make_runtime_runner(object())
+    runner(plan)
+
+    assert len(_FakeBatch.instances) == 2, 'expected a two-phase submission'
+    first, second = _FakeBatch.instances
+    assert len(first.experiments) + len(second.experiments) == len(plan.specs)
+    # The 2Q layers are all in the SECOND submission.
+    n_2q = len([s for s in plan.specs if s.kind == 'rb2q_layer'])
+    assert len(second.experiments) == n_2q
 
 
 def test_runner_is_not_built_when_the_extra_is_missing(monkeypatch):

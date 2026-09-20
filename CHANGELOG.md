@@ -20,7 +20,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   across jobs when it would exceed IBM's per-job shot limit. A rejected or
   errored job now reports IBM's own message with the job ids, and a run that
   measured nothing is reported as a failure instead of being applied and
-  labelled "measured".
+  labelled "measured". Measured values are checked against the reported
+  calibration after every run; a systematic offset (median more than 2x away)
+  is treated as an estimator mismatch and the epoch is applied in relative
+  mode, preserving per-element ratios so outlying couplers still stand out.
+  Two-qubit RB now subtracts the measured single-qubit error rates, and a
+  calibration-check mode separates estimator bias from crosstalk.
 - Stratified ancilla sweep: a single VF2 solve at `k_max` feeding a
   bridge-subtraction cascade down to `k_min`, with a hybrid mode, a shuffled
   search for hard instances, and region-diversity selection across the chip.

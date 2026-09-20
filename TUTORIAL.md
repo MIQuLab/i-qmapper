@@ -145,6 +145,15 @@ the section shows the install hint and stays disabled.
    Level 3 requires you to tick **I understand this uses QPU time**.
 5. Click **📡 Run benchmark**.
 
+After the run, a consistency line compares what was measured with what the
+backend reported. A ratio near ×1 means the two agree. A ratio far from ×1
+across many elements is an estimator mismatch rather than drift, and the values
+are applied in *relative mode* — rescaled to the reported median, so the
+outliers (a collapsed coupler reading 10× its neighbours) stay visible while the
+absolute level is not trusted. **Apply absolute values** overrides this. Use
+**Calibration check** to find out whether an offset comes from the estimator or
+from crosstalk.
+
 In inter-QPU mode a **QPU 1 | QPU 2** selector appears above Targets. Everything
 then applies to the selected device — including layouts handed over from a scan,
 which show up under **Current layout(s)** on QPU 2.

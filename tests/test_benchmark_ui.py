@@ -7,6 +7,7 @@ the important one: it pins the rule that the multi-QPU scan never benchmarks.
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from iqmapper import benchmark as bench
 
@@ -97,6 +98,8 @@ def _ctx(*, state=None, candidates=None, runner=None, spawn=None,
         chk_bench_ack=_Dropdown(value=False),
         btn_bench_run=_Stub(disabled=True),
         lbl_bench_status=_RecLabel(),
+        chk_bench_absolute=_Dropdown(value=False),
+        lbl_bench_consistency=_RecLabel(),
         lbl_bench_reuse=_RecLabel(),
         btn_bench_reuse=_Stub(disabled=True),
         lbl_lucj_notices=_RecLabel(),
@@ -110,15 +113,30 @@ def _ctx(*, state=None, candidates=None, runner=None, spawn=None,
     )
 
 
+class _MitigatorStub:
+    """assignment_matrix is a METHOD, as the real mitigator's is."""
+
+    def __init__(self, errors):
+        self._e = dict(errors)
+
+    def assignment_matrix(self, qubits=None):
+        e = self._e[int(list(qubits)[0])]
+        return np.array([[1 - e, e], [e, 1 - e]])
+
+
 def _fake_runner(plan):
     """Plausible results for whatever the plan asked for."""
     out = {}
     for idx, spec in enumerate(plan.specs):
         if spec.kind == 'readout':
+            # One mitigator for the whole target set, with assignment_matrix
+            # as a METHOD — the real shape. Errors sit just above the
+            # reported 0.05 so the run stays inside the consistency band and
+            # is applied in absolute mode.
             out[idx] = [SimpleNamespace(
-                qubits=[q], value=SimpleNamespace(
-                    assignment_matrix=np.array([[0.99, 0.01], [0.01, 0.99]])))
-                for q in spec.qubits]
+                name='Local Readout Mitigator',
+                device_components=[f'Q{q}' for q in spec.qubits],
+                value=_MitigatorStub({q: 0.06 for q in spec.qubits}))]
         elif spec.kind == 'rb2q':
             out[idx] = [SimpleNamespace(name='EPG', value=0.002)]
         else:
@@ -213,8 +231,8 @@ def test_successful_run_applies_measured_epoch_and_reranks(monkeypatch,
     # readout was re-measured on the candidate qubits only
     epoch = state._measured_epoch
     assert list(np.where(epoch.measured_qubit_mask)[0]) == [0, 1, 2, 3]
-    assert state.qubit_props_data['readout_error'][0] < 0.05
-    assert state.qubit_props_data['readout_error'][7] == 0.05
+    assert state.qubit_props_data['readout_error'][0] == pytest.approx(0.06)
+    assert state.qubit_props_data['readout_error'][7] == 0.05  # unmeasured
     assert reranked, 'candidates must be re-ranked under the measured epoch'
     assert '✅' in ctx.lbl_bench_status.value
     assert '4 candidate(s) re-ranked' in ctx.lbl_bench_status.value
@@ -828,3 +846,78 @@ def test_summary_states_circuits_shots_and_jobs(monkeypatch, tmp_path):
     _setup(ctx)
     summary = ctx.lbl_bench_summary.value
     assert 'circuits' in summary and 'shots' in summary and 'job' in summary
+
+
+# ── v3.1: consistency check and relative mode in the panel ─────────
+
+def _offset_runner(factor):
+    """A runner whose readout comes back `factor` times the reported value."""
+    def _run(plan):
+        out = {}
+        for idx, spec in enumerate(plan.specs):
+            if spec.kind == 'readout':
+                out[idx] = [SimpleNamespace(
+                    name='Local Readout Mitigator',
+                    device_components=[f'Q{q}' for q in spec.qubits],
+                    value=_MitigatorStub({q: 0.05 * factor
+                                          for q in spec.qubits}))]
+            else:
+                out[idx] = []
+        return out
+    return _run
+
+
+def test_a_systematic_offset_triggers_relative_mode(monkeypatch, tmp_path):
+    """The 20 Sept signature: everything uniformly worse than reported."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_offset_runner(3.0))
+    api = _setup(ctx)
+    api['run']()
+
+    consistency = ctx.lbl_bench_consistency.value
+    assert 'systematic offset' in consistency, consistency
+    assert 'RELATIVE mode' in consistency
+    assert 'readout_error' in consistency
+    # Applied, and the label says which mode.
+    assert 'measured' in state.calibration_data_label
+    assert 'relative' in state.calibration_data_label
+    # Rescaled back onto the reported median.
+    epoch = state._measured_epoch
+    mask = epoch.measured_qubit_mask
+    assert np.median(epoch.qubit_props['readout_error'][mask]) == \
+        pytest.approx(0.05, rel=1e-6)
+
+
+def test_absolute_checkbox_opts_into_the_raw_values(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_offset_runner(3.0))
+    ctx.chk_bench_absolute = _Dropdown(value=True)
+    api = _setup(ctx)
+    api['run']()
+
+    epoch = state._measured_epoch
+    mask = epoch.measured_qubit_mask
+    assert np.median(epoch.qubit_props['readout_error'][mask]) == \
+        pytest.approx(0.15, rel=1e-6), 'absolute mode must not rescale'
+    assert 'relative' not in state.calibration_data_label
+
+
+def test_an_in_band_run_stays_absolute(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_offset_runner(1.2))
+    api = _setup(ctx)
+    api['run']()
+
+    consistency = ctx.lbl_bench_consistency.value
+    assert 'systematic offset' not in consistency, consistency
+    assert 'readout_error' in consistency
+    assert 'relative' not in state.calibration_data_label

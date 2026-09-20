@@ -242,6 +242,34 @@ when it cannot, so Level 2 warns and Level 3 requires an explicit
 acknowledgement. The estimate itself is calibrated from a single published
 figure — treat it as the right order of magnitude, not a quote.
 
+### Trusting the numbers
+
+Randomized benchmarking and the provider's calibration are *different
+estimators* of the same quantity. A two-qubit Clifford contains roughly 1.5
+two-qubit gates and 8-10 single-qubit ones, so the RB analysis is given the
+measured single-qubit error rates and subtracts them; without that step the
+single-qubit error lands on the two-qubit gate and every edge reads a few times
+worse than reported.
+
+After every run I-QMapper compares the measured values with the reported ones
+per property and shows the result (`cz_error: ×1.1 median vs reported · 3 of
+351 >2× worse`). If a property's median is more than 2× away in either
+direction, that is a systematic offset rather than drift — a whole chip does not
+degrade uniformly overnight — and the epoch is applied in **relative mode**:
+each value is rescaled so the median matches the reported one, which removes the
+offset while preserving every per-element ratio. Tick **Apply absolute values**
+to use the raw numbers instead.
+
+This matters because the point of benchmarking is the **outliers**: a coupler
+that has collapsed since the last calibration shows up as 10× worse than its
+neighbours, and that signal survives rescaling intact. The absolute level is
+what you should not read too closely.
+
+**Calibration check** runs a handful of edges twice — once with the pairs
+driven in parallel, once one at a time — and prints both against the reported
+values. If both come back offset it is the estimator; if only the parallel run
+is offset it is crosstalk between simultaneously driven pairs.
+
 A run reports what it actually measured: `measured 156/156 qubits` when complete,
 `⚠ partial` when some elements failed to fit, and `⚠ no usable measurements —
 reported epoch kept` when nothing came back. A rejected or failed job shows IBM's

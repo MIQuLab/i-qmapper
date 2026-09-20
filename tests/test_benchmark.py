@@ -861,3 +861,263 @@ def test_diagnose_raw_says_so_when_nothing_was_produced():
 
 def test_diagnose_raw_on_a_missing_file():
     assert 'Could not read' in bench.diagnose_raw('/nonexistent/path.json')
+
+
+# ── v3.1: the 20 Sept live-run symptoms, reproduced offline ────────
+#
+# Each of these fails against the pre-v3.1 parser with the exact error the
+# live run produced. The shapes are taken from the real raw dump
+# (measured_20260920T123808_raw.json), not from what we assumed.
+
+class _Mitigator:
+    """LocalReadoutMitigator: assignment_matrix is a METHOD, not an attribute.
+
+    Reading it as an attribute is what produced
+    "float() argument must be a string or a real number, not 'method'"
+    for all 156 qubits.
+    """
+
+    def __init__(self, matrices):
+        self._m = dict(matrices)
+
+    def assignment_matrix(self, qubits=None):
+        if qubits is None:
+            raise TypeError('qubits required')
+        q = list(qubits)[0]
+        return np.asarray(self._m[int(q)], dtype=float)
+
+
+def _readout_result(qubits, matrices):
+    """ONE result covering every qubit, as the live dump shows."""
+    return SimpleNamespace(
+        name=bench.RESULT_READOUT_MITIGATOR,
+        device_components=[f'Q{q}' for q in qubits],
+        value=_Mitigator(matrices))
+
+
+def test_readout_assignment_matrix_is_called_not_read():
+    """Live symptom 2: readout failed for all 156 qubits."""
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(1, bench.Targets([0, 1, 2], []), 8, coupling)
+
+    good = [[0.99, 0.01], [0.01, 0.99]]
+    skewed = [[0.9, 0.1], [0.2, 0.8]]
+    raw = {0: [_readout_result([0, 1, 2],
+                               {0: good, 1: skewed, 2: good})]}
+
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.n_measured_qubits == 3, epoch.notices
+    assert epoch.qubit_props['readout_error'][1] == pytest.approx(0.15)
+    assert epoch.qubit_props['readout_error'][0] == pytest.approx(0.01)
+    values = epoch.qubit_props['readout_error'][[0, 1, 2]]
+    assert np.all((values >= 0.0) & (values <= 0.5))
+
+
+def test_t1_t2_are_attributed_by_device_components():
+    """Live symptom 3: 156 T1 results existed, but only 1 qubit was measured.
+
+    The parser read `.qubits`, which these results do not carry, and fell back
+    to `spec.qubits[0]` — so every one of the 156 results was written onto
+    qubit 0.
+    """
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(3, bench.Targets([], []), 8, coupling)
+
+    raw = {}
+    for idx, spec in enumerate(plan.specs):
+        if spec.kind == 't1':
+            # Shape from the live dump: device_components=['Q0'], seconds.
+            raw[idx] = [SimpleNamespace(name='T1', device_components=[f'Q{q}'],
+                                        value=1.0e-4 + q * 1e-5)
+                        for q in range(8)]
+        elif spec.kind == 't2hahn':
+            raw[idx] = [SimpleNamespace(name='T2', device_components=[f'Q{q}'],
+                                        value=8.0e-5)
+                        for q in range(8)]
+        else:
+            raw[idx] = []
+
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.n_measured_qubits == 8, (
+        f'expected every qubit, got {epoch.n_measured_qubits}: {epoch.notices}')
+    # Seconds -> microseconds, and each result on its OWN qubit.
+    assert epoch.qubit_props['t1'][0] == pytest.approx(100.0)
+    assert epoch.qubit_props['t1'][3] == pytest.approx(130.0)
+    assert epoch.qubit_props['t2'][5] == pytest.approx(80.0)
+
+
+def test_one_qubit_rb_counts_qubits_not_gate_results():
+    """Live symptom 4: '1Q RB: median EPG over 624 qubit(s)' — 156 x 4 gates."""
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(3, bench.Targets([], []), 8, coupling)
+
+    raw = {}
+    for idx, spec in enumerate(plan.specs):
+        if spec.kind == 'rb1q':
+            raw[idx] = [
+                SimpleNamespace(name=f'EPG_{g}', device_components=[f'Q{q}'],
+                                value=7e-4)
+                for q in range(8) for g in ('rz', 'sx', 'x')]
+        else:
+            raw[idx] = []
+
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    note = next((n for n in epoch.notices if '1Q RB' in n), '')
+    assert note, epoch.notices
+    assert '8 qubit' in note, f'counted gate results, not qubits: {note!r}'
+    assert '24' not in note
+    # The per-qubit EPGs are kept for the 2Q analysis (Part B).
+    assert epoch.extra.get('epg_1q'), 'per-qubit 1Q EPGs must be retained'
+    assert set(epoch.extra['epg_1q']) == set(range(8))
+
+
+def test_notices_are_summarised_not_a_list_of_indices():
+    """Live symptom 5: a notice listing all 156 qubit indices verbatim."""
+    qp, gp = _reported(n_q=40, n_e=39)
+    coupling = _line_edges(40)
+    plan = bench.build_plan(1, bench.Targets(list(range(40)), []), 40,
+                            coupling)
+
+    epoch = bench.results_to_epoch({0: []}, plan, qp, gp, coupling)
+
+    joined = ' '.join(epoch.notices)
+    assert '[0, 1, 2, 3, 4, 5' not in joined, (
+        f'notice still lists indices: {joined[:120]}')
+    assert any('40' in n for n in epoch.notices), epoch.notices
+    assert len(joined) < 400, f'notice too verbose ({len(joined)} chars)'
+
+
+# ── v3.1 Part B: 1Q EPG subtraction wiring ─────────────────────────
+
+def test_level2_now_includes_one_qubit_rb():
+    """The 2Q analysis cannot subtract what was never measured."""
+    coupling = _line_edges(8)
+    plan = bench.build_plan(2, bench.Targets([0, 1, 2, 3], coupling[:3]), 8,
+                            coupling)
+    kinds = [s.kind for s in plan.specs]
+    assert 'rb1q' in kinds, kinds
+    # ...and it comes before the two-qubit layers.
+    assert kinds.index('rb1q') < kinds.index('rb2q_layer')
+    assert bench.plan_circuit_count(plan) == 2 + 30 + 2 * 30
+
+
+def test_epg_options_are_set_from_the_one_qubit_results():
+    captured = {}
+
+    class _Analysis:
+        def set_options(self, **kw):
+            captured.update(kw)
+
+    experiment = SimpleNamespace(analysis=_Analysis())
+    notices = []
+    ok = bench.apply_epg_1q_options(experiment, [(0, 1)],
+                                    {0: 7e-4, 1: 8e-4}, {}, notices)
+    assert ok is True
+    assert 'epg_1_qubit' in captured
+    assert not notices
+
+
+def test_epg_options_fall_back_to_the_reported_error():
+    captured = {}
+
+    class _Analysis:
+        def set_options(self, **kw):
+            captured.update(kw)
+
+    notices = []
+    ok = bench.apply_epg_1q_options(SimpleNamespace(analysis=_Analysis()),
+                                    [(0, 1)], {0: 7e-4}, {1: 9e-4}, notices)
+    assert ok is True
+    assert any('1Q EPG unavailable' in n for n in notices), notices
+
+
+def test_an_unsupported_epg_option_is_a_notice_not_a_crash():
+    class _Analysis:
+        def set_options(self, **kw):
+            raise TypeError('unexpected keyword epg_1_qubit')
+
+    notices = []
+    ok = bench.apply_epg_1q_options(SimpleNamespace(analysis=_Analysis()),
+                                    [(0, 1)], {0: 7e-4, 1: 8e-4}, {}, notices)
+    assert ok is False
+    assert any('did not accept epg_1_qubit' in n for n in notices), notices
+
+
+# ── v3.1 Part C: consistency and relative mode ─────────────────────
+
+def _epoch_with(measured_gate, reported_gate, mask):
+    qp = {'readout_error': np.full(4, 0.01)}
+    gp = {'cz_error': np.asarray(measured_gate, dtype=float)}
+    return bench.MeasuredEpoch(qp, gp, np.zeros(4, dtype=bool), mask, 2,
+                               1_700_000_000.0)
+
+
+def test_consistency_stats_reports_both_ratio_statistics():
+    """They differ on skewed data — quoting one as 'the' ratio misleads."""
+    reported = np.array([1e-3, 1e-3, 1e-3, 1e-3])
+    measured = np.array([2e-3, 2e-3, 2e-3, 20e-3])
+    mask = np.ones(4, dtype=bool)
+    epoch = _epoch_with(measured, reported, mask)
+
+    stats = bench.consistency_stats(epoch, {}, {'cz_error': reported})
+    cz = stats['cz_error']
+    assert cz['n'] == 4
+    assert cz['median_ratio'] == pytest.approx(2.0)
+    assert cz['ratio_of_medians'] == pytest.approx(2.0)
+    assert cz['n_worse_2x'] == 1          # only the 20x outlier is >2x
+    assert cz['top_degradations'][0]['index'] == 3
+
+
+def test_an_untouched_property_is_not_reported():
+    reported = np.array([1e-3, 2e-3, 3e-3, 4e-3])
+    epoch = _epoch_with(reported.copy(), reported, np.ones(4, dtype=bool))
+    assert 'cz_error' not in bench.consistency_stats(
+        epoch, {}, {'cz_error': reported})
+
+
+def test_relative_mode_matches_medians_and_preserves_ratios():
+    """The uniform offset goes; the outlier stays an outlier."""
+    reported = np.array([1e-3, 1e-3, 1e-3, 1e-3])
+    measured = np.array([3e-3, 3e-3, 3e-3, 30e-3])
+    mask = np.ones(4, dtype=bool)
+    epoch = _epoch_with(measured.copy(), reported, mask)
+
+    stats = bench.consistency_stats(epoch, {}, {'cz_error': reported})
+    assert list(bench.consistency_offenders(stats)) == ['cz_error']
+
+    before = epoch.gate_props['cz_error'].copy()
+    n = bench.apply_relative_mode(epoch, {}, {'cz_error': reported}, stats)
+    after = epoch.gate_props['cz_error']
+
+    assert n == 1 and epoch.relative is True
+    assert np.median(after[mask]) == pytest.approx(np.median(reported[mask]))
+    # Every pairwise ratio is untouched — that is what makes outliers survive.
+    np.testing.assert_allclose(after / after[0], before / before[0])
+    assert after[3] / after[0] == pytest.approx(10.0)
+
+
+def test_relative_mode_is_a_no_op_inside_the_band():
+    reported = np.array([1e-3, 1e-3, 1e-3, 1e-3])
+    measured = np.array([1.2e-3, 1.1e-3, 1.3e-3, 1.2e-3])
+    epoch = _epoch_with(measured.copy(), reported, np.ones(4, dtype=bool))
+    stats = bench.consistency_stats(epoch, {}, {'cz_error': reported})
+    assert bench.consistency_offenders(stats) == {}
+    assert bench.apply_relative_mode(epoch, {}, {'cz_error': reported},
+                                     stats) == 0
+    assert epoch.relative is False
+
+
+def test_relative_label_says_so():
+    state = _state(4)
+    epoch = _epoch_with(np.full(3, 3e-3), np.full(3, 1e-3),
+                        np.ones(3, dtype=bool))
+    epoch.qubit_props = {'readout_error': np.full(4, 0.01)}
+    epoch.relative = True
+    assert bench.apply_measured_epoch(state, epoch) is True
+    assert 'relative' in state.calibration_data_label

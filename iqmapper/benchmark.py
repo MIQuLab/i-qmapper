@@ -71,6 +71,7 @@ import logging
 import os
 import tempfile
 import time
+import warnings
 from collections import namedtuple
 from types import SimpleNamespace
 
@@ -168,11 +169,12 @@ class MeasuredEpoch:
 
     __slots__ = ('qubit_props', 'gate_props', 'measured_qubit_mask',
                  'measured_edge_mask', 'level', 'when', 'notices',
-                 'planned_count')
+                 'planned_count', 'extra', 'consistency', 'relative')
 
     def __init__(self, qubit_props, gate_props, measured_qubit_mask,
                  measured_edge_mask, level, when, notices=None,
-                 planned_count=None):
+                 planned_count=None, extra=None, consistency=None,
+                 relative=False):
         self.qubit_props = qubit_props
         self.gate_props = gate_props
         self.measured_qubit_mask = np.asarray(measured_qubit_mask, dtype=bool)
@@ -184,6 +186,16 @@ class MeasuredEpoch:
         # measured_count so the UI can tell "complete", "partial" and "nothing
         # came back" apart — the last of which must never read as success.
         self.planned_count = tuple(planned_count or (0, 0))
+        # Side data the arrays have no column for: per-qubit 1Q EPGs (used to
+        # subtract single-qubit error from the 2Q Clifford decay), and
+        # anything else diagnostic.
+        self.extra = dict(extra or {})
+        # Filled by `consistency_stats` after folding: how the measured values
+        # compare with the reported ones, per property.
+        self.consistency = dict(consistency or {})
+        # True when the values were rescaled to the reported medians because a
+        # systematic offset was detected (see `apply_relative_mode`).
+        self.relative = bool(relative)
 
     # ── convenience ────────────────────────────────────────────
     @property
@@ -517,7 +529,12 @@ def build_plan(level, targets, n_qubits, coupling_edges):
     if qubits:
         specs.append(ExperimentSpec('readout', tuple(qubits), {}, 0))
 
-    if level == LEVEL_FULL and qubits:
+    # 1Q RB runs at L2 as well as L3, and BEFORE the two-qubit layers: its
+    # per-qubit EPGs are what lets the 2Q analysis subtract single-qubit error
+    # from the Clifford decay. Without that subtraction a 2Q Clifford's ~8-10
+    # single-qubit gates are all attributed to the two-qubit gate, which on
+    # 20 Sept inflated every measured cz_error by roughly 2-3x uniformly.
+    if level in (LEVEL_TARGETED, LEVEL_FULL) and qubits:
         specs.append(ExperimentSpec(
             'rb1q', tuple(qubits),
             {'lengths': list(RB_1Q_LENGTHS), 'num_samples': RB_1Q_SAMPLES}, 0))
@@ -897,10 +914,13 @@ class BenchmarkRunError(RuntimeError):
     panel still reported success.
     """
 
-    def __init__(self, message, job_ids=None, chunk=None):
+    def __init__(self, message, job_ids=None, chunk=None, expdata=None):
         super().__init__(message)
         self.job_ids = list(job_ids or [])
         self.chunk = chunk
+        # Carried so the panel can still write a raw dump on the failure path,
+        # which is exactly when the diagnostic artefact matters most.
+        self.expdata = list(expdata or [])
 
 
 #: Analysis-result names the tutorial's experiments produce. Kept in one place
@@ -912,7 +932,7 @@ RESULT_READOUT_MITIGATOR = 'Local Readout Mitigator'
 RESULT_EPG_PREFIXES = ('EPG', 'EPC')
 
 
-def _build_experiment(spec, api):
+def _build_experiment(spec, api, context=None):
     """One `ExperimentSpec` → ONE composite qiskit-experiments object.
 
     Every branch returns a single experiment covering all of the spec's qubits
@@ -939,16 +959,83 @@ def _build_experiment(spec, api):
             flatten_results=True)
     if spec.kind == 'rb2q_layer':
         pairs = [tuple(p) for p in spec.params['pairs']]
-        return api.ParallelExperiment(
-            [api.StandardRB(pair, lengths=spec.params['lengths'],
-                            num_samples=spec.params['num_samples'])
-             for pair in pairs],
-            flatten_results=True)
+        epg_1q = (context or {}).get('epg_1q') or {}
+        reported_1q = (context or {}).get('reported_1q') or {}
+        notices = (context or {}).setdefault('notices', []) \
+            if context is not None else []
+        inner = []
+        for pair in pairs:
+            rb = api.StandardRB(pair, lengths=spec.params['lengths'],
+                                num_samples=spec.params['num_samples'])
+            if epg_1q or reported_1q:
+                apply_epg_1q_options(rb, [pair], epg_1q, reported_1q, notices)
+            inner.append(rb)
+        return api.ParallelExperiment(inner, flatten_results=True)
     if spec.kind == 'rb2q':                   # legacy single-pair spec
         return api.StandardRB(tuple(physical),
                               lengths=spec.params['lengths'],
                               num_samples=spec.params['num_samples'])
     raise ValueError(f'unknown experiment kind: {spec.kind}')
+
+
+def apply_epg_1q_options(experiment, pairs, epg_1q, reported_1q=None,
+                         notices=None):
+    """Give a 2Q RB analysis the single-qubit EPGs so it can subtract them.
+
+    A two-qubit Clifford decomposes into roughly 1.5 two-qubit gates plus 8-10
+    single-qubit gates. `StandardRB`'s analysis reports the error per Clifford;
+    to turn that into an error per CZ it has to be told what the single-qubit
+    gates cost, otherwise their contribution is folded into the two-qubit
+    number. With a 1Q EPG of ~6.9e-4 that is ~6e-3 of single-qubit error per
+    Clifford — already larger than a typical reported CZ error, which is why
+    the 20 Sept run measured every edge ~2-3x worse than reported, uniformly.
+    A uniform factor across 351 edges is an estimator mismatch, not drift.
+
+    qiskit-experiments exposes this as the analysis option `epg_1_qubit`. The
+    accepted shape has moved between versions (analysis-result objects in some,
+    plain values in others) and the option is absent entirely in older ones, so
+    every form is attempted and a failure downgrades to a notice rather than
+    breaking the run — an un-subtracted EPG is still usable for RANKING, which
+    is what `consistency_stats` and relative mode exist to make safe.
+
+    Returns True when the option was accepted.
+    """
+    notices = notices if notices is not None else []
+    epg_1q = dict(epg_1q or {})
+    reported_1q = dict(reported_1q or {})
+
+    qubits = sorted({q for pair in pairs for q in pair})
+    values = {}
+    missing = []
+    for q in qubits:
+        if q in epg_1q:
+            values[q] = float(epg_1q[q])
+        elif q in reported_1q:
+            values[q] = float(reported_1q[q])
+            missing.append(q)
+        else:
+            missing.append(q)
+    if missing:
+        notices.append(
+            f'1Q EPG unavailable for {len(missing)} qubit(s); '
+            f'{"fell back to the reported 1Q gate error" if reported_1q else "no subtraction applied"}')
+    if not values:
+        return False
+
+    analysis = getattr(experiment, 'analysis', None)
+    if analysis is None or not hasattr(analysis, 'set_options'):
+        return False
+
+    ordered = [values[q] for q in qubits if q in values]
+    for candidate in (ordered, {q: values[q] for q in qubits if q in values}):
+        try:
+            analysis.set_options(epg_1_qubit=candidate)
+            return True
+        except Exception:
+            continue
+    notices.append('the installed qiskit-experiments did not accept '
+                   'epg_1_qubit; 2Q EPG is NOT 1Q-subtracted')
+    return False
 
 
 def _job_ids_of(expdata):
@@ -1016,6 +1103,19 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
     api = preload_runtime()
 
     def _runner(plan):
+        # Two phases inside ONE session: everything that is not two-qubit RB
+        # first, then the 2Q layers built with the 1Q EPGs the first phase
+        # produced. The ordering is what makes the subtraction possible —
+        # a StandardRB analysis cannot be told the single-qubit error after
+        # it has been constructed and run.
+        has_2q = any(sp.kind in ('rb2q_layer', 'rb2q') for sp in plan.specs)
+        if has_2q:
+            phase1 = [sp for sp in plan.specs
+                      if sp.kind not in ('rb2q_layer', 'rb2q')]
+            phase2 = [sp for sp in plan.specs
+                      if sp.kind in ('rb2q_layer', 'rb2q')]
+            if phase1:
+                return _run_phased(plan, phase1, phase2)
         chunks = split_for_submission(plan, plan.shots)
         merged = {}
         notices = []
@@ -1030,19 +1130,34 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
                                for spec in chunk.specs]
                 batch = api.BatchExperiment(
                     [exp for _s, exp in experiments], flatten_results=False)
-                data = batch.run(sampler=sampler, shots=plan.shots)
+                with warnings.catch_warnings():
+                    # qiskit-experiments' RB analysis divides by a per-Clifford
+                    # gate count that is zero for any basis gate the sequences
+                    # never use, emitting one RuntimeWarning per such gate.
+                    # It is library-side and harmless, but it floods the
+                    # notebook. Scoped to that module only: our own warnings,
+                    # and every other library's, still surface.
+                    warnings.filterwarnings(
+                        'ignore', category=RuntimeWarning,
+                        module=r'.*qiskit_experiments.*rb_analysis.*')
+                    data = batch.run(sampler=sampler, shots=plan.shots)
                 job_ids = _job_ids_of(data)
                 if on_jobs is not None:
                     try:
                         on_jobs(chunk.index, job_ids, 'submitted')
                     except Exception:
                         _log.debug('job-id callback failed', exc_info=True)
-                data.block_for_results()
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        'ignore', category=RuntimeWarning,
+                        module=r'.*qiskit_experiments.*rb_analysis.*')
+                    data.block_for_results()
 
                 try:
                     job_ids = _check_chunk_status(data, chunk.index)
                 except BenchmarkRunError as exc:
                     if len(chunks) == 1:
+                        exc.expdata = collected + [data]
                         raise
                     # Partial failure: keep what the other chunks produced and
                     # surface this one loudly rather than losing the whole run.
@@ -1073,6 +1188,68 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
         # The ExperimentData objects live on the runner, not in the result
         # mapping: `results_to_epoch` iterates that mapping by spec index, and
         # a stray key there would look like an extra experiment.
+        _runner.last_expdata = collected
+        return merged
+
+    def _run_phased(plan, phase1, phase2):
+        """Phase 1 (readout/T1/T2/1Q RB) then phase 2 (2Q RB), one session.
+
+        Phase 1's per-qubit EPGs are handed to phase 2's analyses so the
+        two-qubit numbers are 1Q-subtracted. If phase 1 yields no EPGs the run
+        still proceeds — the values are then comparable only in relative
+        terms, which `consistency_stats` detects and flags.
+        """
+        merged = {}
+        collected = []
+        context = {'epg_1q': {}, 'reported_1q': {}, 'notices': []}
+        index_of = {id(sp): i for i, sp in enumerate(plan.specs)}
+
+        def _submit(specs, session, sampler):
+            experiments = [(sp, _build_experiment(sp, api, context))
+                           for sp in specs]
+            batch = api.BatchExperiment([e for _s, e in experiments],
+                                        flatten_results=False)
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    'ignore', category=RuntimeWarning,
+                    module=r'.*qiskit_experiments.*rb_analysis.*')
+                data = batch.run(sampler=sampler, shots=plan.shots)
+                data.block_for_results()
+            _check_chunk_status(data, 0)
+            collected.append(data)
+            for local_idx, (sp, _exp) in enumerate(experiments):
+                try:
+                    merged[index_of[id(sp)]] = list(
+                        _iter_analysis_results(data.child_data(local_idx)))
+                except Exception as exc:      # noqa: BLE001 - per-experiment
+                    _log.warning('benchmark: no results for %s: %s',
+                                 sp.kind, exc)
+                    merged[index_of[id(sp)]] = None
+            return data
+
+        with api.Session(backend=backend) as session:
+            sampler = (sampler_factory(session) if sampler_factory is not None
+                       else api.SamplerV2(mode=session))
+            _submit(phase1, session, sampler)
+
+            # Harvest the 1Q EPGs before building the two-qubit experiments.
+            for sp in phase1:
+                if sp.kind != 'rb1q':
+                    continue
+                entry = merged.get(index_of[id(sp)]) or []
+                harvested = {}
+                _collect_rb1q(entry, sp, [], harvested)
+                context['epg_1q'].update(harvested.get('epg_1q', {}))
+
+            if not context['epg_1q']:
+                context['notices'].append(
+                    '1Q RB produced no EPGs; two-qubit errors are NOT '
+                    '1Q-subtracted and will read high versus reported')
+            if phase2:
+                _submit(phase2, session, sampler)
+
+        if context['notices']:
+            merged['_notices'] = list(context['notices'])
         _runner.last_expdata = collected
         return merged
 
@@ -1169,6 +1346,30 @@ def _components_to_qubits(item, fallback=()):
 
 # ── Results → epoch ─────────────────────────────────────────────────
 
+def _summarise_failures(notices, label, failures, total):
+    """One line per failure KIND, never a list of every index.
+
+    The 20 Sept run emitted a notice naming all 156 qubit indices verbatim,
+    which is unreadable and hides the one thing that matters — the error. Up
+    to five failures are still named individually, because at that size the
+    indices are the useful part.
+    """
+    if not failures:
+        return
+    if len(failures) <= 5:
+        for element, reason in failures:
+            notices.append(f'{label} q{element}: {reason}; kept reported value')
+        return
+    reasons = {}
+    for _element, reason in failures:
+        reasons[reason] = reasons.get(reason, 0) + 1
+    common = max(reasons.items(), key=lambda kv: kv[1])[0]
+    notices.append(f'{label}: {len(failures)}/{total} failed — {common}'
+                   + ('' if len(reasons) == 1
+                      else f' (+{len(reasons) - 1} other error(s))')
+                   + '; kept reported values')
+
+
 def _readout_error_from_matrix(matrix):
     """Symmetrised assignment error, as the tutorial computes it."""
     m = np.asarray(matrix, dtype=float)
@@ -1217,6 +1418,7 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
     q_mask = np.zeros(n_q, dtype=bool)
     e_mask = np.zeros(n_e, dtype=bool)
     notices = []
+    extra = {}
 
     edge_index = {tuple(e): i for i, e in enumerate(edges_list or [])}
     two_q_key = _two_qubit_key(gate_props)
@@ -1227,8 +1429,8 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
         # a runner that returns no analysis results must produce a visible
         # notice, never a silent no-op that looks like a successful run.
         if entry is None or (isinstance(entry, (list, tuple)) and not entry):
-            notices.append(f'{spec.kind} {list(spec.qubits)}: no results '
-                           f'returned, kept reported values')
+            notices.append(f'{spec.kind}: no results returned for '
+                           f'{len(spec.qubits)} qubit(s), kept reported values')
             continue
         try:
             if spec.kind == 'readout':
@@ -1247,7 +1449,7 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
             # carry per-gate sx/x/rz errors separately), so it is recorded in
             # the notices rather than written into an array.
             elif spec.kind == 'rb1q':
-                _note_rb1q(entry, spec, notices)
+                _collect_rb1q(entry, spec, notices, extra)
         except Exception as exc:              # noqa: BLE001 - never fatal
             _log.warning("benchmark: folding %s %s failed: %s",
                          spec.kind, spec.qubits, exc, exc_info=True)
@@ -1259,7 +1461,8 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
 
     planned = plan_planned_count(plan)
     return MeasuredEpoch(qubit_props, gate_props, q_mask, e_mask,
-                         plan.level, when, notices, planned_count=planned)
+                         plan.level, when, notices, planned_count=planned,
+                         extra=extra)
 
 
 def _two_qubit_key(gate_props):
@@ -1277,9 +1480,10 @@ def _apply_readout(entry, spec, qubit_props, q_mask, n_q, notices):
         return
     matrices = _readout_matrices(entry, spec)
     if not matrices:
-        notices.append(f'readout {list(spec.qubits)}: no assignment matrix in '
-                       f'the results, kept reported values')
+        notices.append(f'readout: no assignment matrix for '
+                       f'{len(spec.qubits)} qubit(s), kept reported values')
         return
+    failures = []
     for qubit, matrix in matrices.items():
         if not (0 <= qubit < n_q):
             continue
@@ -1287,24 +1491,50 @@ def _apply_readout(entry, spec, qubit_props, q_mask, n_q, notices):
             arr[qubit] = _readout_error_from_matrix(matrix)
             q_mask[qubit] = True
         except Exception as exc:              # noqa: BLE001 - per element
-            notices.append(f'q{qubit}: readout fit failed ({exc}), '
-                           f'kept reported value')
+            failures.append((qubit, str(exc)))
+    _summarise_failures(notices, 'readout', failures, len(matrices))
 
 
 def _readout_matrices(entry, spec):
-    """Map physical qubit → 2x2 assignment matrix from a readout result."""
+    """Map physical qubit → 2x2 assignment matrix from a readout result.
+
+    `LocalReadoutError` returns ONE analysis result for the whole target set,
+    whose value is a `LocalReadoutMitigator`. Its `assignment_matrix` is a
+    METHOD taking the qubits to report on — reading it as an attribute yields
+    the bound method itself, and `float()` on that raised
+
+        float() argument must be a string or a real number, not 'method'
+
+    for all 156 qubits on the 20 Sept run. The same class of bug as reading
+    `str.index` as an integer. Attributes are tried too, since older versions
+    and some stand-ins expose a plain array.
+    """
     out = {}
     items = entry if isinstance(entry, (list, tuple)) else [entry]
     for item in items:
         value = getattr(item, 'value', item)
-        matrix = getattr(value, 'assignment_matrix', None)
-        if matrix is None and isinstance(value, dict):
-            matrix = value.get('assignment_matrix')
-        if matrix is None:
+        qubits = _components_to_qubits(item, fallback=spec.qubits)
+        accessor = getattr(value, 'assignment_matrix', None)
+        if accessor is None and isinstance(value, dict):
+            accessor = value.get('assignment_matrix')
+
+        if callable(accessor):
+            # The live shape: one mitigator, queried per qubit.
+            for q in qubits:
+                try:
+                    matrix = np.asarray(accessor([int(q)]), dtype=float)
+                except Exception:
+                    try:
+                        matrix = np.asarray(accessor(int(q)), dtype=float)
+                    except Exception:
+                        continue
+                if matrix.shape == (2, 2):
+                    out[int(q)] = matrix
             continue
-        qubits = (getattr(item, 'qubits', None)
-                  or getattr(value, 'qubits', None) or spec.qubits)
-        matrix = np.asarray(matrix, dtype=float)
+
+        if accessor is None:
+            continue
+        matrix = np.asarray(accessor, dtype=float)
         if matrix.shape == (2, 2) and len(qubits) == 1:
             out[int(qubits[0])] = matrix
         elif matrix.ndim == 3:                # one 2x2 per qubit, stacked
@@ -1323,11 +1553,15 @@ def _apply_coherence(entry, spec, qubit_props, q_mask, n_q, notices):
         return
     items = entry if isinstance(entry, (list, tuple)) else [entry]
     if not items:
-        notices.append(f'{key.upper()} {list(spec.qubits)}: no results, '
-                       f'kept reported values')
+        notices.append(f'{key.upper()}: no results for {len(spec.qubits)} '
+                       f'qubit(s), kept reported values')
         return
+    failures = []
     for item in items:
-        qubits = getattr(item, 'qubits', None) or spec.qubits
+        # Identify the qubit from device_components. Falling back to
+        # spec.qubits[0] wrote all 156 of the 20 Sept T1 results onto qubit 0,
+        # which is why that run reported "measured qubits: 1".
+        qubits = _components_to_qubits(item)
         if not qubits:
             continue
         qubit = int(qubits[0])
@@ -1340,8 +1574,8 @@ def _apply_coherence(entry, spec, qubit_props, q_mask, n_q, notices):
             arr[qubit] = seconds * 1e6        # data.py stores µs
             q_mask[qubit] = True
         except Exception as exc:              # noqa: BLE001 - per element
-            notices.append(f'q{qubit}: {key.upper()} fit failed ({exc}), '
-                           f'kept reported value')
+            failures.append((qubit, str(exc)))
+    _summarise_failures(notices, key.upper(), failures, len(items))
 
 
 def _apply_rb2q(entry, spec, gate_props, e_mask, edge_index, two_q_key,
@@ -1433,20 +1667,277 @@ def _epg_from_rb(entry):
     raise ValueError('no EPG/EPC in RB results')
 
 
-def _note_rb1q(entry, spec, notices):
-    """Record 1Q RB as a notice: diagnostic, with no single array to own."""
-    try:
-        items = entry if isinstance(entry, (list, tuple)) else [entry]
-        values = []
-        for item in items:
-            name = getattr(item, 'name', None)
-            if name and str(name).upper().startswith(('EPG', 'EPC')):
-                values.append(_result_value(item))
-        if values:
-            notices.append(f'1Q RB: median EPG {np.median(values):.2e} over '
-                           f'{len(values)} qubit(s)')
-    except Exception as exc:                  # noqa: BLE001 - informational
-        notices.append(f'1Q RB: could not summarise ({exc})')
+def _collect_rb1q(entry, spec, notices, extra):
+    """Per-qubit 1Q EPGs, and a notice that counts QUBITS.
+
+    `StandardRB` reports one result per (qubit, basis gate) — rz, sx, x — so
+    the 20 Sept run saw 468 results for 156 qubits and announced "median EPG
+    over 624 qubit(s)". The per-gate values are averaged per qubit here and
+    kept in `epoch.extra['epg_1q']`, which is what the 2Q RB analysis needs to
+    subtract single-qubit error from the Clifford decay (see Part B).
+
+    These are NOT counted as measured qubit properties: the reported arrays
+    carry per-gate errors separately, and overwriting one of them with an RB
+    average would mix two estimators in the same column.
+    """
+    items = entry if isinstance(entry, (list, tuple)) else [entry]
+    per_qubit = {}
+    for item in items:
+        name = str(getattr(item, 'name', '') or '')
+        if not name.upper().startswith('EPG'):
+            continue
+        qubits = _components_to_qubits(item)
+        if len(qubits) != 1:
+            continue
+        try:
+            value = _result_value(item)
+        except Exception:
+            continue
+        if np.isfinite(value) and value >= 0:
+            per_qubit.setdefault(int(qubits[0]), []).append(float(value))
+
+    if not per_qubit:
+        notices.append(f'1Q RB: no usable results for {len(spec.qubits)} '
+                       f'qubit(s)')
+        return
+
+    averaged = {q: float(np.mean(v)) for q, v in per_qubit.items()}
+    extra.setdefault('epg_1q', {}).update(averaged)
+    notices.append(
+        f'1Q RB: median EPG {np.median(list(averaged.values())):.2e} over '
+        f'{len(averaged)} qubit(s)')
+
+
+# ── Consistency against the reported calibration ───────────────────
+#
+# The 20 Sept run measured 351 edges at a median 4.03e-3 against a reported
+# median 1.43e-3: 2.8x worse across the board, 238 edges more than 2x worse,
+# only 4 better. Real drift does not move an entire chip uniformly in one
+# direction — that signature is an ESTIMATOR MISMATCH. Believing those
+# absolute numbers would have made every layout look bad by the same factor,
+# which changes no ranking but corrupts every fidelity estimate shown.
+#
+# So a measured epoch is now checked against the reported one before it is
+# trusted, and when the medians disagree badly the values are rescaled to the
+# reported median. Rescaling preserves every per-element RATIO, which is where
+# the real signal lives: on 20 Sept the outliers (edge 190: 6.6e-2 -> 0.75, a
+# collapsed coupler) were genuine and are exactly what the feature is for.
+
+#: Median ratio outside this band means "do not trust the absolute values".
+CONSISTENCY_BAND = (0.5, 2.0)
+
+
+def _median_ratio_stats(measured, reported, mask):
+    measured = np.asarray(measured, dtype=float)
+    reported = np.asarray(reported, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+    n = min(len(measured), len(reported), len(mask))
+    sel = (mask[:n] & np.isfinite(measured[:n]) & np.isfinite(reported[:n])
+           & (reported[:n] > 0))
+    if not sel.any():
+        return None
+    m, r = measured[:n][sel], reported[:n][sel]
+    # Nothing was actually written to this property: the mask marks elements
+    # measured for SOME property, and a device carrying both cz_error and
+    # rzz_error will have one of them untouched and identical to reported.
+    # Reporting a x1.00 ratio for it is noise that hides the real offender.
+    if np.allclose(m, r, rtol=0, atol=0):
+        return None
+    ratios = m / r
+    idx = np.where(sel)[0]
+    worst = idx[np.argsort(-ratios)][:5]
+    return {
+        'n': int(sel.sum()),
+        'median_reported': float(np.median(r)),
+        'median_measured': float(np.median(m)),
+        # Two different statistics, and they differ on skewed data (20 Sept:
+        # 2.82 vs 2.43). `ratio_of_medians` is what rescaling corrects, so it
+        # is the one the policy uses; `median_ratio` describes the typical
+        # element. Both are reported because quoting one as "the" ratio has
+        # already caused confusion.
+        'ratio_of_medians': float(np.median(m) / np.median(r)),
+        'median_ratio': float(np.median(ratios)),
+        'frac_worse_2x': float((ratios > 2).mean()),
+        'frac_better_2x': float((ratios < 0.5).mean()),
+        'n_worse_2x': int((ratios > 2).sum()),
+        'n_better_2x': int((ratios < 0.5).sum()),
+        'top_degradations': [
+            {'index': int(i), 'reported': float(reported[i]),
+             'measured': float(measured[i]),
+             'ratio': float(measured[i] / reported[i])}
+            for i in worst],
+    }
+
+
+def consistency_stats(epoch, reported_qubit_props, reported_gate_props):
+    """Compare a measured epoch with the reported calibration, per property.
+
+    Only measured elements are compared — an unmeasured one still holds the
+    reported value, so including it would dilute the ratio towards 1 and hide
+    exactly the offset this is looking for.
+    """
+    out = {}
+    for key in ('readout_error', 't1', 't2'):
+        if key in epoch.qubit_props and key in (reported_qubit_props or {}):
+            stats = _median_ratio_stats(epoch.qubit_props[key],
+                                        reported_qubit_props[key],
+                                        epoch.measured_qubit_mask)
+            if stats:
+                out[key] = stats
+    for key in ('cz_error', 'rzz_error'):
+        if key in epoch.gate_props and key in (reported_gate_props or {}):
+            stats = _median_ratio_stats(epoch.gate_props[key],
+                                        reported_gate_props[key],
+                                        epoch.measured_edge_mask)
+            if stats:
+                out[key] = stats
+    return out
+
+
+def consistency_offenders(stats, band=CONSISTENCY_BAND):
+    """Properties whose ratio-of-medians falls outside the trust band."""
+    low, high = band
+    return {k: v for k, v in (stats or {}).items()
+            if not (low <= v['ratio_of_medians'] <= high)}
+
+
+def consistency_summary(stats, band=CONSISTENCY_BAND):
+    """One line per property, for the panel."""
+    parts = []
+    for key, v in (stats or {}).items():
+        flag = '' if (band[0] <= v['ratio_of_medians'] <= band[1]) else ' \u26a0'
+        parts.append(f"{key}: x{v['ratio_of_medians']:.2f} median vs reported "
+                     f"· {v['n_worse_2x']} of {v['n']} >2x worse{flag}")
+    return ' · '.join(parts)
+
+
+def apply_relative_mode(epoch, reported_qubit_props, reported_gate_props,
+                        stats=None, band=CONSISTENCY_BAND):
+    """Rescale offending properties so their median matches the reported one.
+
+    Each measured value is multiplied by (reported median / measured median)
+    for its property. That leaves every per-element ratio untouched — the
+    collapsed coupler stays 11x worse than its neighbours — while removing the
+    uniform offset that makes the absolute numbers unusable. Returns the
+    number of properties rescaled; mutates `epoch` in place and sets
+    `epoch.relative`.
+    """
+    stats = stats or consistency_stats(epoch, reported_qubit_props,
+                                       reported_gate_props)
+    offenders = consistency_offenders(stats, band)
+    if not offenders:
+        return 0
+
+    rescaled = 0
+    for key, v in offenders.items():
+        factor = v['median_reported'] / v['median_measured'] \
+            if v['median_measured'] else None
+        if not factor or not np.isfinite(factor):
+            continue
+        if key in epoch.qubit_props:
+            arr = epoch.qubit_props[key]
+            mask = epoch.measured_qubit_mask[:len(arr)]
+        elif key in epoch.gate_props:
+            arr = epoch.gate_props[key]
+            mask = epoch.measured_edge_mask[:len(arr)]
+        else:
+            continue
+        arr[:len(mask)][mask] = arr[:len(mask)][mask] * factor
+        rescaled += 1
+        epoch.notices.append(
+            f'{key}: rescaled by x{factor:.3f} to the reported median '
+            f'(relative mode; per-element ratios preserved)')
+    if rescaled:
+        epoch.relative = True
+    return rescaled
+
+
+# ── Calibration check: estimator bias vs crosstalk ─────────────────
+
+def build_calibration_check_plans(targets, n_qubits, coupling_edges,
+                                  n_edges=6):
+    """Two plans over the same few edges: one parallel, one sequential.
+
+    The 20 Sept offset has two plausible causes that a single run cannot
+    distinguish. An estimator mismatch (the 1Q EPGs not being subtracted from
+    the Clifford decay) inflates every edge whether or not its neighbours are
+    being driven. Crosstalk from running many pairs simultaneously only
+    inflates the parallel case. Measuring the same edges both ways separates
+    them: if both come back high, it is the estimator; if only the parallel
+    run is high, it is crosstalk.
+
+    Returns (parallel_plan, sequential_plan), each ~30 circuits plus the 1Q RB
+    they share.
+    """
+    edges = [tuple(e) for e in (targets.edges or [])][:max(1, int(n_edges))]
+    qubits = sorted({q for e in edges for q in e})
+    subset = Targets(qubits, edges)
+
+    parallel = build_plan(LEVEL_TARGETED, subset, n_qubits, coupling_edges)
+
+    # Sequential: one pair per layer, so nothing runs alongside anything else.
+    seq_specs = []
+    for spec in parallel.specs:
+        if spec.kind != 'rb2q_layer':
+            seq_specs.append(spec)
+            continue
+        for i, pair in enumerate(spec.params['pairs']):
+            params = dict(spec.params)
+            params['pairs'] = [tuple(pair)]
+            seq_specs.append(ExperimentSpec('rb2q_layer', tuple(pair), params,
+                                            len(seq_specs) + i))
+    sequential = parallel._replace(specs=seq_specs)
+    return parallel, sequential
+
+
+def calibration_check_table(edges, reported, parallel_epoch,
+                            sequential_epoch, gate_key='cz_error'):
+    """Rows of (edge, reported, parallel, sequential) plus the two ratios."""
+    rows = []
+    par = parallel_epoch.gate_props.get(gate_key)
+    seq = sequential_epoch.gate_props.get(gate_key)
+    rep = np.asarray(reported, dtype=float)
+    index = {tuple(sorted(e)): i for i, e in enumerate(edges)}
+    par_vals, seq_vals, rep_vals = [], [], []
+    for edge, i in sorted(index.items(), key=lambda kv: kv[1]):
+        if par is None or seq is None or i >= len(rep):
+            continue
+        rows.append({'edge': edge, 'reported': float(rep[i]),
+                     'parallel': float(par[i]), 'sequential': float(seq[i])})
+        rep_vals.append(rep[i])
+        par_vals.append(par[i])
+        seq_vals.append(seq[i])
+
+    def _ratio(values):
+        if not values or not rep_vals or np.median(rep_vals) == 0:
+            return None
+        return float(np.median(values) / np.median(rep_vals))
+
+    return {
+        'rows': rows,
+        'ratio_parallel': _ratio(par_vals),
+        'ratio_sequential': _ratio(seq_vals),
+        'verdict': _check_verdict(_ratio(par_vals), _ratio(seq_vals)),
+    }
+
+
+def _check_verdict(ratio_parallel, ratio_sequential):
+    """Read the two ratios into a one-line conclusion."""
+    if ratio_parallel is None or ratio_sequential is None:
+        return 'inconclusive (a run produced no usable values)'
+    low, high = CONSISTENCY_BAND
+    par_off = not (low <= ratio_parallel <= high)
+    seq_off = not (low <= ratio_sequential <= high)
+    if par_off and seq_off:
+        return ('estimator mismatch: both runs are offset, so it is not '
+                'crosstalk — the 2Q analysis is attributing single-qubit '
+                'error to the two-qubit gate')
+    if par_off and not seq_off:
+        return ('crosstalk: only the parallel run is offset, so driving '
+                'neighbouring pairs together is inflating the error')
+    if seq_off and not par_off:
+        return 'unexpected: the sequential run is offset but the parallel one is not'
+    return 'consistent: both runs agree with the reported calibration'
 
 
 # ── Applying an epoch to the session ────────────────────────────────
@@ -1471,9 +1962,10 @@ def apply_measured_epoch(state, epoch):
 
     state.qubit_props_data = qp
     state.gate_props_data = gp
+    mode = ', relative' if getattr(epoch, 'relative', False) else ''
     state.calibration_data_label = (
         f'{state.active_backend_name} — measured {epoch.time_label()} '
-        f'(L{epoch.level}, {epoch.n_measured_qubits}q/'
+        f'(L{epoch.level}{mode}, {epoch.n_measured_qubits}q/'
         f'{epoch.n_measured_edges}e)')
     state.delta_mode = False
     setattr(state, '_measured_epoch', epoch)

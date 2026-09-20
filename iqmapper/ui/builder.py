@@ -388,6 +388,8 @@ class MapperUIBuilder:
             chk_bench_ack=self.chk_bench_ack,
             btn_bench_run=self.btn_bench_run,
             lbl_bench_status=self.lbl_bench_status,
+            chk_bench_absolute=self.chk_bench_absolute,
+            lbl_bench_consistency=self.lbl_bench_consistency,
             lbl_bench_reuse=self.lbl_bench_reuse,
             btn_bench_reuse=self.btn_bench_reuse,
             btn_bench_reanalyze=self.btn_bench_reanalyze,
@@ -1393,6 +1395,16 @@ class MapperUIBuilder:
             disabled=True, layout=_reanalyze_layout,
             tooltip='Re-run the analysis on the last submission\'s jobs. '
                     'Analysis is client-side, so this costs no QPU time.')
+        self.chk_bench_absolute = Checkbox(
+            value=False,
+            description='Apply absolute values',
+            layout=_own(),
+            tooltip='Off (default): when the measured values show a '
+                    'systematic offset against the reported calibration, '
+                    'they are rescaled to the reported median so only the '
+                    'relative differences are applied. On: use the raw '
+                    'measured numbers.')
+        self.lbl_bench_consistency = HTML("")
         self.lbl_bench_status = HTML("")
         self.bench_box = VBox([
             HTML("<div style='font-size:14px;color:#6c757d;"
@@ -1405,7 +1417,9 @@ class MapperUIBuilder:
             self.dd_bench_level,
             self.lbl_bench_summary,
             self.chk_bench_ack,
+            self.chk_bench_absolute,
             self.btn_bench_run,
+            self.lbl_bench_consistency,
             HBox([self.lbl_bench_reuse, self.btn_bench_reuse,
                   self.btn_bench_reanalyze],
                  layout=Layout(align_items='center')),
