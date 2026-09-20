@@ -410,3 +410,88 @@ def test_the_cap_notice_is_rendered_on_the_status_line(monkeypatch):
     status = b.lbl_lucj_status.value
     assert 'hybrid k=1: cap reached' in status, status
     assert '34,812 near-duplicates' in status
+
+
+# ── t9: one cap notice per stratum, not two ────────────────────────────────
+
+_CAP_ENTRY = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+              'ancillas': [4], 'bridge_slots': (0,), 'product_score': 0.9,
+              'additive_score': 0.1, 'lqs_circuit': 0.8,
+              'rank_in_stratum': 1, 'source': 'vf2'}
+
+
+def _capped_result(*, reservoir, notices):
+    """A sweep result whose k=3 stratum hit the cap."""
+    return {
+        'strata': {3: [dict(_CAP_ENTRY)]}, 'k_max_effective': 3,
+        'min_bridges': 3, 'vf2_truncated': True,
+        'n_raw_embeddings': 2000, 'n_candidates_scored': 2000,
+        'excluded_qubits': [],
+        'per_stratum': {3: {'n_direct': 2000, 'n_derived': 0,
+                            'truncated': True, 'shuffled': False}},
+        'mapping_cap': 2000,
+        'reservoir': reservoir, 'reservoir_notices': notices,
+    }
+
+
+def test_reservoir_replaces_the_truncation_warning(monkeypatch):
+    """One notice for one stratum. The ℹ line already says the cap was
+    reached and how much was seen, so the ⚠️ banner would contradict it."""
+    b, _ = _build(monkeypatch)
+    note = ('hybrid k=3: cap reached — kept 2,000 diverse candidates, '
+            'skipped 2,498 near-duplicates (of 4,498 seen)')
+    monkeypatch.setattr(
+        'iqmapper.ancilla_sweep.sweep_ancilla_layouts',
+        lambda norb, backend, props, **k: _capped_result(
+            reservoir={3: {'kept': 2000, 'skipped_similar': 2498,
+                           'offered': 4498}},
+            notices=[note]))
+
+    b.lucj_ancilla_dd.value = -1
+    b.btn_lucj_run.click()
+
+    assert b.lbl_lucj_trunc.value == '', (
+        f'the ⚠️ banner was not suppressed: {b.lbl_lucj_trunc.value}')
+    status = b.lbl_lucj_status.value
+    assert 'hybrid k=3: cap reached' in status, status
+    assert 'of 4,498 seen' in status, status
+    assert 'non-exhaustive' not in status
+
+
+def test_the_warning_survives_when_diverse_cap_is_off(monkeypatch):
+    """With no reservoir there is nothing else saying the cap was hit."""
+    b, _ = _build(monkeypatch)
+    monkeypatch.setattr(
+        'iqmapper.ancilla_sweep.sweep_ancilla_layouts',
+        lambda norb, backend, props, **k: _capped_result(reservoir={},
+                                                         notices=[]))
+
+    b.chk_diverse_cap.value = False
+    b.lucj_ancilla_dd.value = -1
+    b.btn_lucj_run.click()
+
+    banner = b.lbl_lucj_trunc.value
+    assert '⚠️ direct search truncated at' in banner, banner
+    assert '2,000 mappings for k=3' in banner, banner
+    assert 'non-exhaustive' in banner
+
+
+def test_a_stratum_the_reservoir_missed_still_warns(monkeypatch):
+    """Mixed case: k=3 covered by the reservoir, k=2 truncated without it."""
+    b, _ = _build(monkeypatch)
+    result = _capped_result(
+        reservoir={3: {'kept': 2000, 'skipped_similar': 10, 'offered': 2010}},
+        notices=['hybrid k=3: cap reached — kept 2,000 diverse candidates, '
+                 'skipped 10 near-duplicates (of 2,010 seen)'])
+    result['per_stratum'][2] = {'n_direct': 2000, 'n_derived': 0,
+                                'truncated': True, 'shuffled': False}
+    result['strata'][2] = [dict(_CAP_ENTRY)]
+    monkeypatch.setattr('iqmapper.ancilla_sweep.sweep_ancilla_layouts',
+                        lambda norb, backend, props, **k: result)
+
+    b.lucj_ancilla_dd.value = -1
+    b.btn_lucj_run.click()
+
+    banner = b.lbl_lucj_trunc.value
+    assert 'k=2' in banner, banner
+    assert 'k=3' not in banner, 'the reservoir-covered stratum was re-warned'

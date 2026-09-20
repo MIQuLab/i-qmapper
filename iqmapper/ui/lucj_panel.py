@@ -672,11 +672,19 @@ def setup_lucj_callbacks(ctx):
         # Truncation banner: visible only when the VF2 cap was hit.
         # Name the REAL cap (mapping_cap) and WHICH strata truncated — not
         # k_max's n_raw_embeddings, which is an embedding count, not the cap.
-        if res['vf2_truncated']:
-            trunc_ks = sorted((k for k, m in res.get('per_stratum', {}).items()
-                               if m.get('truncated')), reverse=True)
-            ks_txt = (', '.join(f"k={k}" for k in trunc_ks)
-                      if trunc_ks else "one or more strata")
+        # With the diverse reservoir engaged, the ℹ line below already says
+        # this stratum's cap was reached AND how much it saw — so repeating
+        # it as a warning is noise that also contradicts it ("ranking may be
+        # non-exhaustive" reads as a problem; "kept 2,000 diverse candidates
+        # of 4,498 seen" reads as what actually happened). Warn only about
+        # strata the reservoir did NOT cover.
+        _reservoir_ks = {k for k, st in (res.get('reservoir') or {}).items()
+                         if st.get('kept')}
+        _trunc_ks = sorted(
+            (k for k, m in res.get('per_stratum', {}).items()
+             if m.get('truncated') and k not in _reservoir_ks), reverse=True)
+        if res['vf2_truncated'] and _trunc_ks:
+            ks_txt = ', '.join(f"k={k}" for k in _trunc_ks)
             cap = res.get('mapping_cap')
             cap_txt = f"{cap:,}" if isinstance(cap, int) else "the"
             lbl_lucj_trunc.value = (

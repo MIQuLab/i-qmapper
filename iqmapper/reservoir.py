@@ -297,6 +297,12 @@ def summarise(stats, k=None, hybrid=True):
     if not stats or not stats.get('kept'):
         return None
     where = f'hybrid k={k}' if (hybrid and k is not None) else f'k={k}'
+    # "(of N seen)" carries what the old truncation banner used to say — that
+    # the ranking is drawn from a sample, not the whole enumeration — so the
+    # two notices can be merged into this one line instead of contradicting
+    # each other about the same stratum.
+    seen = stats.get('offered')
+    seen_txt = f' (of {seen:,} seen)' if seen else ''
     return (f'{where}: cap reached — kept {stats["kept"]:,} diverse '
             f'candidates, skipped {stats["skipped_similar"]:,} '
-            f'near-duplicates')
+            f'near-duplicates{seen_txt}')

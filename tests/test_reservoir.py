@@ -326,3 +326,17 @@ def test_every_kept_layout_is_complete():
         assert len(layout) == size
         assert all(q is not None for q in layout)
         assert len(set(layout)) == size, 'a layout reused a qubit'
+
+
+def test_summarise_reports_how_many_were_seen():
+    """The '(of N seen)' clause carries what the old truncation warning
+    said — that the ranking comes from a sample — so the two notices can be
+    merged into one."""
+    text = rsv.summarise({'kept': 2000, 'skipped_similar': 2498,
+                          'offered': 4498}, k=3)
+    assert text == ('hybrid k=3: cap reached — kept 2,000 diverse '
+                    'candidates, skipped 2,498 near-duplicates '
+                    '(of 4,498 seen)')
+    # Absent 'offered' (older stats dicts) simply omits the clause.
+    assert rsv.summarise({'kept': 5, 'skipped_similar': 1}, k=1).endswith(
+        'near-duplicates')
