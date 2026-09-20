@@ -4,6 +4,7 @@ Everything runs against a FAKE runner injected through the panel ctx, so no
 test ever imports qiskit_experiments or reaches a network. The last test is
 the important one: it pins the rule that the multi-QPU scan never benchmarks.
 """
+import json
 from types import SimpleNamespace
 
 import numpy as np
@@ -100,8 +101,17 @@ def _ctx(*, state=None, candidates=None, runner=None, spawn=None,
         lbl_bench_status=_RecLabel(),
         chk_bench_absolute=_Dropdown(value=False),
         lbl_bench_consistency=_RecLabel(),
+        lbl_bench_details=_RecLabel(),
+        acc_bench_details=_Stub(selected_index=None),
+        btn_bench_show_on_map=_Stub(description='show on map'),
+        chk_err_threshold=_Dropdown(value=False),
+        txt_g_thr_max=_Dropdown(value=''),
+        dd_gate_prop=_Dropdown(value='cz_error', options=[('CZ', 'cz_error')]),
         lbl_bench_reuse=_RecLabel(),
         btn_bench_reuse=_Stub(disabled=True),
+        btn_bench_reanalyze=_Stub(disabled=True),
+        btn_bench_calcheck=_Stub(disabled=True),
+        lbl_bench_calcheck=_RecLabel(),
         lbl_lucj_notices=_RecLabel(),
         lucj_all_layouts=list(candidates or []),
         rescore_cell=[rescore],
@@ -737,7 +747,8 @@ def test_empty_epoch_is_not_applied_and_not_called_measured(monkeypatch,
 
     status = ctx.lbl_bench_status.value
     assert '✅' not in status, f'a run that measured nothing reported success: {status}'
-    assert 'no usable measurements' in status
+    assert 'Nothing usable was measured' in status
+    assert "IBM's reported calibration is still in use" in status
     # The reported epoch is untouched, and nothing claims to be measured.
     assert state.calibration_data_label == before_label
     assert 'measured' not in state.calibration_data_label
@@ -878,9 +889,11 @@ def test_a_systematic_offset_triggers_relative_mode(monkeypatch, tmp_path):
     api['run']()
 
     consistency = ctx.lbl_bench_consistency.value
-    assert 'systematic offset' in consistency, consistency
-    assert 'RELATIVE mode' in consistency
-    assert 'readout_error' in consistency
+    assert 'Benchmark applied' in consistency, consistency
+    assert 'constant factor' in consistency
+    assert 'Readout error' in consistency
+    for jargon in ('estimator mismatch', 'RELATIVE', 'systematic offset'):
+        assert jargon not in consistency, consistency
     # Applied, and the label says which mode.
     assert 'measured' in state.calibration_data_label
     assert 'relative' in state.calibration_data_label
@@ -918,6 +931,818 @@ def test_an_in_band_run_stays_absolute(monkeypatch, tmp_path):
     api['run']()
 
     consistency = ctx.lbl_bench_consistency.value
-    assert 'systematic offset' not in consistency, consistency
-    assert 'readout_error' in consistency
+    assert "in line with IBM's reported calibration" in consistency, \
+        consistency
+    assert 'constant factor' not in consistency
     assert 'relative' not in state.calibration_data_label
+
+
+def test_analysis_callback_failures_are_reported_as_partial(monkeypatch,
+                                                             tmp_path):
+    """A DONE job whose fits all raised must not read as a clean success.
+
+    On 20 Sept 13:08 both phases reported DONE, `errors()` was None, and the
+    panel showed six bland "no results returned" notices with no hint that
+    every two-qubit callback had thrown.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state()
+
+    def _runner_with_analysis_failure(plan):
+        out = {i: [] for i, _s in enumerate(plan.specs)}
+        for idx, spec in enumerate(plan.specs):
+            if spec.kind == 'readout':
+                out[idx] = [SimpleNamespace(
+                    name='Local Readout Mitigator',
+                    device_components=[f'Q{q}' for q in spec.qubits],
+                    value=_MitigatorStub({q: 0.06 for q in spec.qubits}))]
+        out['_notices'] = [
+            "phase 2: analysis failed: 6x AttributeError: 'float' object "
+            "has no attribute 'device_components'"]
+        return out
+
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP,
+               runner=_runner_with_analysis_failure)
+    api = _setup(ctx)
+    api['run']()
+
+    status = ctx.lbl_bench_status.value
+    assert '✅' not in status, f'analysis failure reported as success: {status}'
+    assert 'partial' in status
+    assert 'analysis failed' in status, status
+    assert 'device_components' in status
+    assert 'analysis failed' in ctx.lbl_lucj_notices.value
+
+
+# ── v3.2: reanalysis must replay the ORIGINAL plan ─────────────────
+
+def _record_for(plan, when=1_700_000_000.0, jobs=None):
+    """The _jobs.json payload a submission of `plan` would have written."""
+    return {
+        'when': when, 'level': plan.level, 'shots': plan.shots,
+        'targets': {'qubits': list(plan.targets.qubits),
+                    'edges': [list(e) for e in plan.targets.edges]},
+        'specs': [{'kind': s.kind, 'qubits': list(s.qubits), 'layer': s.layer,
+                   'params': {k: ([list(p) for p in v] if k == 'pairs'
+                                  else v)
+                              for k, v in s.params.items()}}
+                  for s in plan.specs],
+        'jobs': jobs or {'0': ['job-a'], '1': ['job-b']},
+    }
+
+
+def _readout_results(qubits, error=0.06):
+    return [SimpleNamespace(
+        name='Local Readout Mitigator',
+        device_components=[f'Q{q}' for q in qubits],
+        value=_MitigatorStub({q: error for q in qubits}))]
+
+
+@pytest.mark.parametrize('selector_mode', [
+    bench.TARGET_CURRENT, bench.TARGET_SWEEP, bench.TARGET_WHOLE,
+    bench.TARGET_CUSTOM,
+])
+def test_reanalysis_ignores_the_selector_and_replays_the_run(
+        monkeypatch, tmp_path, selector_mode):
+    """Whatever the selector says, reanalysis must reproduce the run.
+
+    Live bug: with the selector on "Current layout(s)" and nothing placed,
+    the rebuilt plan had ZERO specs, so the panel returned (0, 0) with an
+    empty notice list while the raw dump held every result.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(8)
+    original = bench.build_plan(bench.LEVEL_QUICK_READOUT,
+                                bench.Targets([0, 1, 2, 3], []), 8, coupling)
+    record = _record_for(original)
+    monkeypatch.setattr(bench, 'latest_job_record', lambda name: record)
+
+    seen = {}
+
+    def _fake_reanalyze(plan, job_ids, backend, service=None):
+        seen['plan'] = plan
+        raw = {}
+        for idx, spec in enumerate(plan.specs):
+            raw[idx] = (_readout_results(spec.qubits)
+                        if spec.kind == 'readout' else [])
+        return raw, []
+
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs', _fake_reanalyze)
+
+    state = _state()
+    # A runner_factory marks this as an injected-stack test, so the panel
+    # skips the main-thread preload of the real quantum stack.
+    ctx = _ctx(state=state, candidates=[], target=selector_mode,
+               runner=lambda plan: {})
+    api = _setup(ctx)
+    api['reanalyze']()
+
+    # The plan replayed is the recorded one, not the selector's.
+    assert seen['plan'].specs, 'reanalysis rebuilt an empty plan'
+    assert [s.kind for s in seen['plan'].specs] == \
+        [s.kind for s in original.specs]
+    assert seen['plan'].targets.qubits == [0, 1, 2, 3]
+
+    epoch = getattr(state, '_measured_epoch', None)
+    assert epoch is not None, ctx.lbl_bench_status.value
+    assert epoch.measured_count == (4, 0), epoch.notices
+    assert '✅' in ctx.lbl_bench_status.value
+
+
+def test_reanalysis_without_a_plan_in_the_record_refuses_clearly(monkeypatch,
+                                                                  tmp_path):
+    """Old records predate the spec list; refuse rather than guess."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    monkeypatch.setattr(bench, 'latest_job_record',
+                        lambda name: {'jobs': {'0': ['j']}, 'specs': []})
+    called = []
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs',
+                        lambda *a, **k: called.append(1) or ({}, []))
+
+    ctx = _ctx(candidates=[], runner=lambda plan: {})
+    api = _setup(ctx)
+    api['reanalyze']()
+
+    assert not called, 'must not reanalyse without the original plan'
+    status = ctx.lbl_bench_status.value
+    assert '❌' in status
+    assert 'cannot be rebuilt' in status, status
+
+
+def test_results_found_but_none_attributed_is_never_silent(monkeypatch,
+                                                            tmp_path):
+    """The mandatory invariant, on a deliberate target mismatch."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(8)
+    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT,
+                            bench.Targets([0, 1], []), 8, coupling)
+    qp = {'readout_error': np.full(8, 0.05)}
+    gp = {'cz_error': np.full(7, 0.01)}
+
+    # Results for qubits that are NOT in the plan's targets and not in range.
+    raw = {0: _readout_results([90, 91])}
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.measured_count == (0, 0)
+    invariant = [n for n in epoch.notices if '0 attributed to targets' in n]
+    assert invariant, f'the invariant notice is missing: {epoch.notices}'
+    assert '1 results found' in invariant[0], invariant
+    assert 'edge orientation' in invariant[0] or 'matched' in invariant[0]
+
+
+def test_an_empty_plan_is_refused_by_reanalysis():
+    empty = bench.build_plan(bench.LEVEL_TARGETED, bench.Targets([], []), 8,
+                             _line_edges(8))
+    assert empty.specs == []
+    with pytest.raises(bench.BenchmarkRunError, match='no experiments'):
+        bench.reanalyze_from_jobs(empty, ['j'], object(), None)
+
+
+def test_plan_from_record_round_trips():
+    coupling = _line_edges(8)
+    original = bench.build_plan(bench.LEVEL_TARGETED,
+                                bench.Targets([0, 1, 2, 3], coupling[:3]), 8,
+                                coupling)
+    rebuilt = bench.plan_from_record(_record_for(original))
+
+    assert rebuilt is not None
+    assert rebuilt.level == original.level
+    assert rebuilt.shots == original.shots
+    assert [s.kind for s in rebuilt.specs] == [s.kind for s in original.specs]
+    assert bench.plan_circuit_count(rebuilt) == \
+        bench.plan_circuit_count(original)
+    for a, b in zip(rebuilt.specs, original.specs):
+        assert a.qubits == b.qubits
+        assert a.params.get('pairs') == b.params.get('pairs')
+
+
+# ── v3.3: the reanalysis must stay phase-aware and self-check ──────
+
+def test_reanalysis_passes_job_ids_grouped_by_phase(monkeypatch, tmp_path):
+    """Flattening the phases lost the 1Q subtraction silently.
+
+    `reanalyze_from_jobs` only runs 1Q RB before the 2Q layers when it is
+    given a list of lists. The panel flattened `record['jobs'].values()`, so
+    both phases went into one batch, the 2Q analyses were built before any
+    EPG existed, and the epoch carried un-subtracted values (median 4.05e-3
+    instead of 2.96e-3) with nothing to indicate it.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(8)
+    original = bench.build_plan(bench.LEVEL_TARGETED,
+                                bench.Targets([0, 1, 2, 3], coupling[:3]), 8,
+                                coupling)
+    record = _record_for(original,
+                         jobs={'0': ['phase1-job'], '1': ['phase2-job']})
+    monkeypatch.setattr(bench, 'latest_job_record', lambda name: record)
+
+    seen = {}
+
+    def _fake_reanalyze(plan, job_ids, backend, service=None):
+        seen['job_ids'] = job_ids
+        raw = {i: (_readout_results(s.qubits) if s.kind == 'readout' else [])
+               for i, s in enumerate(plan.specs)}
+        return raw, []
+
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs', _fake_reanalyze)
+
+    ctx = _ctx(candidates=[], runner=lambda plan: {})
+    _setup(ctx)['reanalyze']()
+
+    passed = seen['job_ids']
+    assert isinstance(passed[0], list), (
+        f'phases were flattened into a single list: {passed}')
+    assert passed == [['phase1-job'], ['phase2-job']], passed
+
+
+def test_reanalysis_runs_the_consistency_check_and_relative_mode(monkeypatch,
+                                                                  tmp_path):
+    """The reanalysis path never stashed the reported props, so the check
+    returned early: no consistency line, and no rescaling despite a x3
+    offset."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(8)
+    original = bench.build_plan(bench.LEVEL_QUICK_READOUT,
+                                bench.Targets([0, 1, 2, 3], []), 8, coupling)
+    monkeypatch.setattr(bench, 'latest_job_record',
+                        lambda name: _record_for(original))
+
+    def _fake_reanalyze(plan, job_ids, backend, service=None):
+        raw = {}
+        for idx, spec in enumerate(plan.specs):
+            raw[idx] = (_readout_results(spec.qubits, error=0.15)
+                        if spec.kind == 'readout' else [])
+        return raw, []
+
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs', _fake_reanalyze)
+
+    state = _state()                      # reported readout_error == 0.05
+    ctx = _ctx(state=state, candidates=[], runner=lambda plan: {})
+    _setup(ctx)['reanalyze']()
+
+    consistency = ctx.lbl_bench_consistency.value
+    assert consistency, 'no consistency line was rendered after reanalysis'
+    assert 'Benchmark applied' in consistency, consistency
+    assert 'constant factor' in consistency
+
+    epoch = state._measured_epoch
+    assert epoch.relative is True
+    mask = epoch.measured_qubit_mask
+    assert np.median(epoch.qubit_props['readout_error'][mask]) == \
+        pytest.approx(0.05, rel=1e-6), 'values were not rescaled'
+    assert 'relative' in state.calibration_data_label
+
+
+# ── v3.4: the UI path must equal the direct path ───────────────────
+
+class _SpyAnalysis:
+    """Records what the 2Q analysis was given."""
+
+    def __init__(self, log):
+        self._log = log
+        self.options = {}
+
+    def set_options(self, **kw):
+        self.options.update(kw)
+        if 'epg_1_qubit' in kw:
+            self._log.append(list(kw['epg_1_qubit']))
+
+
+def _spy_api(set_options_log, order_log):
+    """A runtime API whose 2Q analyses record their epg_1_qubit input."""
+    class _Exp:
+        def __init__(self, *a, **k):
+            self.analysis = _SpyAnalysis(set_options_log)
+
+    class _RB1Q(_Exp):
+        pass
+
+    class _Data:
+        job_ids = ['j']
+
+        def __init__(self, kinds):
+            self._kinds = kinds
+
+        def status(self):
+            return SimpleNamespace(name='DONE')
+
+        def errors(self):
+            return None
+
+        def analysis_errors(self):
+            return None
+
+        def block_for_results(self):
+            pass
+
+        def child_data(self, idx=None):
+            kind = self._kinds[idx if idx is not None else 0]
+            results = []
+            if kind == 'rb1q':
+                results = [SimpleNamespace(name='EPG_sx',
+                                           device_components=[f'Q{q}'],
+                                           value=7e-4) for q in (0, 1)]
+            return SimpleNamespace(
+                analysis_results=lambda *a, **k: results,
+                child_data=lambda *a, **k: [])
+
+    class _Batch:
+        def __init__(self, experiments, **kw):
+            self._n = len(experiments)
+
+        def run(self, **kw):
+            return _Data(['rb1q'] * self._n)
+
+    class _Session:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    return SimpleNamespace(
+        Session=_Session, SamplerV2=lambda mode=None: None,
+        BatchExperiment=_Batch, ParallelExperiment=_Exp,
+        LocalReadoutError=_Exp, StandardRB=_RB1Q, T1=_Exp, T2Hahn=_Exp)
+
+
+def test_phase_one_is_analysed_before_phase_two(monkeypatch):
+    """Order is the whole mechanism: the 2Q analyses are CONSTRUCTED with the
+    phase-1 EPGs, so phase 1 must be submitted and folded first."""
+    coupling = _line_edges(8)
+    plan = bench.build_plan(bench.LEVEL_TARGETED,
+                            bench.Targets([0, 1], [(0, 1)]), 8, coupling)
+    order = []
+    set_log = []
+    api = _spy_api(set_log, order)
+
+    class _Batch(api.BatchExperiment):
+        def __init__(self, experiments, **kw):
+            order.append(len(experiments))
+            super().__init__(experiments, **kw)
+
+    api.BatchExperiment = _Batch
+    monkeypatch.setattr(bench, '_runtime_api', lambda: api)
+    bench._reset_runtime_cache()
+    try:
+        runner = bench.make_runtime_runner(object())
+        runner(plan)
+    finally:
+        bench._reset_runtime_cache()
+
+    assert len(order) == 2, f'expected two phases, got {order}'
+    # Phase 1 carries readout + rb1q; phase 2 carries only the 2Q layers.
+    n_2q = len([s for s in plan.specs if s.kind == 'rb2q_layer'])
+    assert order[1] == n_2q, order
+    assert set_log, 'the 2Q analysis was never given epg_1_qubit'
+
+
+def test_ui_reanalysis_matches_direct_reanalysis(monkeypatch, tmp_path):
+    """Same record, same jobs -> identical epoch, and the same EPG objects
+    handed to set_options on the UI path."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(8)
+    original = bench.build_plan(bench.LEVEL_TARGETED,
+                                bench.Targets([0, 1], [(0, 1)]), 8, coupling)
+    record = _record_for(original, jobs={'0': ['p1'], '1': ['p2']})
+
+    ui_calls, direct_calls = [], []
+
+    def _make_reanalyze(sink):
+        def _rean(plan, job_ids, backend, service=None):
+            sink.append({'plan_kinds': [s.kind for s in plan.specs],
+                         'job_ids': job_ids})
+            raw = {}
+            for idx, spec in enumerate(plan.specs):
+                raw[idx] = (_readout_results(spec.qubits)
+                            if spec.kind == 'readout' else [])
+            raw['_notices'] = ['1Q EPG subtraction: applied to 1 pairs']
+            return raw, []
+        return _rean
+
+    # Direct path.
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs',
+                        _make_reanalyze(direct_calls))
+    raw_d, _ = bench.reanalyze_from_jobs(
+        original, [['p1'], ['p2']], object(), None)
+    qp = {'readout_error': np.full(8, 0.05)}
+    gp = {'cz_error': np.full(7, 0.01)}
+    direct_epoch = bench.results_to_epoch(raw_d, original, dict(qp), dict(gp),
+                                          coupling, when=1.0)
+
+    # UI path.
+    monkeypatch.setattr(bench, 'latest_job_record', lambda name: record)
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs',
+                        _make_reanalyze(ui_calls))
+    state = _state()
+    ctx = _ctx(state=state, candidates=[], runner=lambda plan: {})
+    _setup(ctx)['reanalyze']()
+    ui_epoch = state._measured_epoch
+
+    assert ui_calls, 'the UI never reached reanalyze_from_jobs'
+    assert ui_calls[0]['plan_kinds'] == direct_calls[0]['plan_kinds']
+    assert ui_calls[0]['job_ids'] == direct_calls[0]['job_ids'] == \
+        [['p1'], ['p2']]
+    assert ui_epoch.measured_count == direct_epoch.measured_count
+    np.testing.assert_allclose(ui_epoch.qubit_props['readout_error'],
+                               direct_epoch.qubit_props['readout_error'])
+    assert any('1Q EPG subtraction' in n for n in ui_epoch.notices), \
+        ui_epoch.notices
+
+
+# ── v3.6: the calibration check, wired ─────────────────────────────
+
+def _calcheck_state(n_q=16):
+    state = _state(n_q)
+    state.layouts_data = {0: {'alpha': [str(q) for q in range(8)],
+                              'beta': [str(q) for q in range(8, 14)],
+                              'ancilla': [], 'other': []}}
+    return state
+
+
+def _calcheck_runner(par_factor=3.0, seq_factor=3.0):
+    """Both arms measure; each arm's cz_error is `factor` x the reported."""
+    calls = {'n': 0}
+
+    def _run(plan):
+        calls['n'] += 1
+        factor = par_factor if calls['n'] == 1 else seq_factor
+        out = {}
+        for idx, spec in enumerate(plan.specs):
+            if spec.kind == 'readout':
+                out[idx] = _readout_results(spec.qubits)
+            elif spec.kind == 'rb1q':
+                out[idx] = [SimpleNamespace(name='EPG_sx',
+                                            device_components=[f'Q{q}'],
+                                            value=7e-4)
+                            for q in spec.qubits]
+            elif spec.kind == 'rb2q_layer':
+                out[idx] = [
+                    SimpleNamespace(name='EPG_cz',
+                                    device_components=[f'Q{p[0]}', f'Q{p[1]}'],
+                                    value=0.01 * factor)
+                    for p in spec.params['pairs']]
+            else:
+                out[idx] = []
+        return out
+
+    _run.calls = calls
+    return _run
+
+
+def test_calibration_check_button_needs_six_edges(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    # Only 3 edges reachable -> disabled, and it says why.
+    ctx = _ctx(state=_state(8), candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP)
+    _setup(ctx)
+    assert ctx.btn_bench_calcheck.disabled is True
+    assert 'at least 6 target edges' in ctx.lbl_bench_calcheck.value
+
+    # Whole QPU on a 16-qubit line -> 15 edges -> enabled, with a cost line.
+    ctx = _ctx(state=_calcheck_state(), candidates=[],
+               target=bench.TARGET_WHOLE)
+    _setup(ctx)
+    line = ctx.lbl_bench_calcheck.value
+    assert '6 edges × 2 arms' in line, line
+    assert 'circuits' in line and 'job(s)' in line and 'QPU (estimate)' in line
+    # It spends QPU time, so the Open-plan acknowledgement gates it too.
+    assert ctx.btn_bench_calcheck.disabled is True
+    ctx.chk_bench_ack.value = True
+    assert ctx.btn_bench_calcheck.disabled is False
+
+
+def test_calibration_check_renders_the_verdict_table(monkeypatch, tmp_path):
+    """Both arms run, the table renders, and NO epoch is applied."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _calcheck_state()
+    before_label = state.calibration_data_label
+    before_gate = state.gate_props_data['cz_error'].copy()
+
+    runner = _calcheck_runner(par_factor=3.0, seq_factor=3.0)
+    ctx = _ctx(state=state, candidates=[], target=bench.TARGET_WHOLE,
+               runner=runner)
+    api = _setup(ctx)
+    ctx.chk_bench_ack.value = True            # Open plan: acknowledge first
+    api['calibration_check']()
+
+    assert runner.calls['n'] == 2, 'both arms must run'
+    table_html = ctx.lbl_bench_calcheck.value
+    assert 'Calibration check' in table_html
+    assert 'parallel' in table_html and 'sequential' in table_html
+    # Both arms offset the same way -> estimator, not crosstalk.
+    assert 'estimator mismatch' in table_html, table_html
+
+    # THE INVARIANT: a calibration check measures the instrument.
+    assert getattr(state, '_measured_epoch', None) is None, \
+        'the calibration check must not apply an epoch'
+    assert state.calibration_data_label == before_label
+    np.testing.assert_array_equal(state.gate_props_data['cz_error'],
+                                  before_gate)
+    assert 'unchanged' in ctx.lbl_bench_status.value
+
+
+def test_calibration_check_distinguishes_crosstalk(monkeypatch, tmp_path):
+    """Parallel offset, sequential clean -> crosstalk, not estimator bias."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    ctx = _ctx(state=_calcheck_state(), candidates=[],
+               target=bench.TARGET_WHOLE,
+               runner=_calcheck_runner(par_factor=3.0, seq_factor=1.0))
+    api = _setup(ctx)
+    ctx.chk_bench_ack.value = True
+    api['calibration_check']()
+    assert 'crosstalk' in ctx.lbl_bench_calcheck.value, \
+        ctx.lbl_bench_calcheck.value
+
+
+def test_calibration_check_writes_its_record_kind(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    coupling = _line_edges(16)
+    plan = bench.build_plan(bench.LEVEL_TARGETED,
+                            bench.Targets(list(range(8)), coupling[:6]), 16,
+                            coupling)
+    when = 1_700_000_500.0
+    path = bench.save_job_record(
+        'ibm_test', when, plan, jobs={'0': ['a'], '1': ['b']},
+        kind=bench.RECORD_KIND_CALIBRATION_CHECK,
+        arms=['parallel', 'sequential'])
+    assert path
+
+    with open(path, encoding='utf-8') as fh:
+        record = json.load(fh)
+    assert record['kind'] == bench.RECORD_KIND_CALIBRATION_CHECK
+    assert record['arms'] == ['parallel', 'sequential']
+
+    back = bench.latest_job_record('ibm_test')
+    assert back['kind'] == bench.RECORD_KIND_CALIBRATION_CHECK
+    assert back['arms'] == ['parallel', 'sequential']
+
+
+def test_reanalyze_routes_a_calibration_check_record(monkeypatch, tmp_path):
+    """Reanalyze must reproduce the table and still apply no epoch."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+
+    coupling = _line_edges(16)
+    par = bench.build_plan(bench.LEVEL_TARGETED,
+                           bench.Targets(list(range(8)), coupling[:6]), 16,
+                           coupling)
+    record = _record_for(par, jobs={'0': ['p1'], '1': ['p2']})
+    record['kind'] = bench.RECORD_KIND_CALIBRATION_CHECK
+    record['arms'] = ['parallel', 'sequential']
+    monkeypatch.setattr(bench, 'latest_job_record', lambda name: record)
+
+    runner = _calcheck_runner(par_factor=3.0, seq_factor=3.0)
+
+    def _fake_rean(plan, job_ids, backend, service=None):
+        return runner(plan), []
+
+    monkeypatch.setattr(bench, 'reanalyze_from_jobs', _fake_rean)
+
+    state = _calcheck_state()
+    ctx = _ctx(state=state, candidates=[], runner=lambda plan: {})
+    _setup(ctx)['reanalyze']()
+
+    assert 'Calibration check' in ctx.lbl_bench_calcheck.value
+    assert 'reanalysed (no QPU)' in ctx.lbl_bench_status.value
+    assert getattr(state, '_measured_epoch', None) is None, \
+        'reanalysing a calibration check must not apply an epoch'
+
+
+def test_calibration_check_table_is_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    table = {'rows': [{'edge': (0, 1), 'reported': 1e-3, 'parallel': 3e-3,
+                       'sequential': 3e-3}],
+             'ratio_parallel': 3.0, 'ratio_sequential': 3.0,
+             'verdict': 'estimator mismatch: both runs are offset'}
+    path = bench.save_calibration_check('ibm_test', 1_700_000_600.0, table)
+    assert path and path.endswith('_calcheck.json')
+    with open(path, encoding='utf-8') as fh:
+        back = json.load(fh)
+    assert back['ratio_parallel'] == 3.0
+    assert back['rows'][0]['edge'] == [0, 1]
+    assert 'estimator' in back['verdict']
+
+
+def _descend(node, seen=None):
+    """Every widget reachable through .children, root included."""
+    if seen is None:
+        seen = []
+    if any(n is node for n in seen):
+        return seen
+    seen.append(node)
+    for child in getattr(node, 'children', ()) or ():
+        _descend(child, seen)
+    return seen
+
+
+def _build_real_ui(monkeypatch):
+    """A real MapperUIBuilder, for checks that need the actual widgets."""
+    import numpy as _np
+    monkeypatch.setattr(
+        "iqmapper.data.generate_device_data",
+        lambda s, v, c, d, prefetched_props=None: (
+            list(range(8)), [0.0] * 8, [(i, i + 1) for i in range(7)],
+            [str(i) for i in range(8)],
+            _np.array([0.01 * (i + 1) for i in range(8)]),
+            _np.array([0.001 * (i + 1) for i in range(7)])))
+    from iqmapper.state import SessionState
+    from iqmapper.ui.builder import MapperUIBuilder
+    st = SessionState()
+    for key, val in dict(
+            active_backend=object(), active_backend_name='ibm_here',
+            active_chip='c', active_service=None, available_backends=[],
+            props_warning=None, initial_props=object(), active_ansatz='lucj',
+            active_vendor='IBM', active_coords=[], custom_colors=[],
+            cal_history_dates=['_seed_']).items():
+        setattr(st, key, val)
+    builder = MapperUIBuilder(st)
+    builder.build()
+    return builder, st
+
+
+# ── v3.7: the result copy a user can actually read ─────────────────
+
+def _run_with_factors(monkeypatch, tmp_path, factors, n_q=8):
+    """Drive a run whose measured/reported ratio is `factors` per property."""
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    state = _state(n_q)
+
+    def _runner(plan):
+        out = {}
+        for idx, spec in enumerate(plan.specs):
+            if spec.kind == 'readout':
+                out[idx] = _readout_results(
+                    spec.qubits, error=0.05 * factors.get('readout_error', 1))
+            else:
+                out[idx] = []
+        return out
+
+    ctx = _ctx(state=state, candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP, runner=_runner)
+    api = _setup(ctx)
+    api['run']()
+    return ctx, state
+
+
+def test_copy_all_in_band(monkeypatch, tmp_path):
+    ctx, _ = _run_with_factors(monkeypatch, tmp_path,
+                               {'readout_error': 1.2})
+    line = ctx.lbl_bench_consistency.value
+    assert '✅ Benchmark applied' in line
+    assert "measured values are in line with IBM's reported calibration" \
+        in line, line
+    assert 'constant factor' not in line
+
+
+def test_copy_names_in_band_and_rescaled_properties():
+    """The exact parameterised sentence, on the real 20 Sept shape."""
+    from iqmapper.ui.benchmark_panel import setup_benchmark_panel
+    ctx = _ctx()
+    api = setup_benchmark_panel(ctx)
+
+    stats = {
+        'readout_error': {'ratio_of_medians': 1.55, 'n_worse_2x': 53,
+                          'n': 156, 'median_reported': 3.4e-3},
+        't1': {'ratio_of_medians': 0.70, 'n_worse_2x': 0, 'n': 156,
+               'median_reported': 250.0},
+        't2': {'ratio_of_medians': 0.24, 'n_worse_2x': 0, 'n': 156,
+               'median_reported': 297.0},
+        'cz_error': {'ratio_of_medians': 2.11, 'n_worse_2x': 170, 'n': 352,
+                     'median_reported': 1.4e-3},
+    }
+    epoch = SimpleNamespace(planned_count=(156, 352),
+                            measured_count=(156, 352))
+    line = api['result_sentence'](epoch, stats, {'t2', 'cz_error'})
+
+    assert 'Readout error and T1 differ from' in line, line
+    assert 'real drift today' in line
+    assert 'T2 and CZ error differ by a constant factor' in line, line
+    assert '(×0.2, ×2.1)' in line, line
+    assert "shown on IBM's scale with today's ranking preserved" in line
+    for jargon in ('estimator mismatch', 'RELATIVE', 'systematic offset',
+                   '⚠'):
+        assert jargon not in line, f'{jargon!r} leaked into the sentence'
+
+
+def test_copy_reports_unmeasured_elements():
+    from iqmapper.ui.benchmark_panel import setup_benchmark_panel
+    api = setup_benchmark_panel(_ctx())
+    stats = {'readout_error': {'ratio_of_medians': 1.1, 'n_worse_2x': 0,
+                               'n': 120, 'median_reported': 3e-3}}
+    epoch = SimpleNamespace(planned_count=(156, 352),
+                            measured_count=(120, 340))
+    line = api['result_sentence'](epoch, stats, set())
+    assert '36 qubits and 12 edges could not be measured and keep their '\
+           'reported values.' in line, line
+
+
+def test_copy_for_an_empty_result(monkeypatch, tmp_path):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    _have_qe(monkeypatch)
+    ctx = _ctx(state=_state(), candidates=[_entry([0, 1], [2], [3])],
+               target=bench.TARGET_SWEEP,
+               runner=lambda plan: {i: [] for i, _ in enumerate(plan.specs)})
+    _setup(ctx)['run']()
+    status = ctx.lbl_bench_status.value
+    assert '⚠ Nothing usable was measured' in status, status
+    assert "IBM's reported calibration is still in use" in status
+
+
+def test_no_developer_jargon_anywhere_after_a_run(monkeypatch, tmp_path):
+    """The whole rendered panel, not just the one line."""
+    ctx, _ = _run_with_factors(monkeypatch, tmp_path,
+                               {'readout_error': 3.0})
+    rendered = ' '.join([
+        ctx.lbl_bench_consistency.value, ctx.lbl_bench_details.value,
+        ctx.lbl_bench_status.value, ctx.lbl_bench_summary.value])
+    for jargon in ('estimator mismatch', 'RELATIVE', 'systematic offset'):
+        assert jargon not in rendered, f'{jargon!r} still shown to the user'
+
+
+def test_details_table_rows_and_legend():
+    from iqmapper.ui.benchmark_panel import setup_benchmark_panel
+    ctx = _ctx()
+    api = setup_benchmark_panel(ctx)
+    stats = {
+        'readout_error': {'ratio_of_medians': 1.55, 'n_worse_2x': 53,
+                          'n': 156, 'median_reported': 3.4e-3},
+        't2': {'ratio_of_medians': 0.24, 'n_worse_2x': 0, 'n': 156,
+               'median_reported': 297.0},
+        'cz_error': {'ratio_of_medians': 2.11, 'n_worse_2x': 170, 'n': 352,
+                     'median_reported': 1.4e-3},
+    }
+    api['render_details'](stats, {'t2', 'cz_error'}, {})
+    html = ctx.lbl_bench_details.value
+
+    assert 'Readout error' in html and '×1.55' in html
+    assert ('53 of 156 qubits &gt;2× worse' in html
+            or '53 of 156 qubits >2× worse' in html), html
+    # rescaled rows carry the marker; in-band rows do not
+    assert '×0.24 ⚠' in html and '×2.11 ⚠' in html, html
+    assert '×1.55 ⚠' not in html, 'an in-band row was marked'
+    # a rescaled property with no individual outliers shows a dash
+    assert '—' in html
+    assert 'rescaled (different estimator)' in html
+    assert 'as measured' in html
+    assert 'median aligned to IBM' in html, 'legend missing'
+
+
+def test_details_accordion_is_collapsed_by_default(monkeypatch):
+    b, _ = _build_real_ui(monkeypatch)
+    assert b.acc_bench_details.selected_index is None
+    assert b.acc_bench_details.get_title(0) == 'Details'
+    inside = _descend(b.acc_bench_details)
+    assert any(w is b.lbl_bench_details for w in inside)
+    assert any(w is b.btn_bench_show_on_map for w in inside)
+
+
+def test_show_on_map_sets_the_threshold(monkeypatch, tmp_path):
+    """"170 edges" becomes something you can see."""
+    from iqmapper.ui.benchmark_panel import setup_benchmark_panel
+    ctx = _ctx()
+    api = setup_benchmark_panel(ctx)
+    stats = {'cz_error': {'ratio_of_medians': 2.11, 'n_worse_2x': 170,
+                          'n': 352, 'median_reported': 1.4e-3}}
+    api['render_details'](stats, {'cz_error'}, {})
+
+    assert ctx.btn_bench_show_on_map.layout.display == ''
+    assert '170 edges' in ctx.btn_bench_show_on_map.description
+
+    api['show_on_map']()
+    assert ctx.chk_err_threshold.value is True
+    assert ctx.dd_gate_prop.value == 'cz_error'
+    assert float(ctx.txt_g_thr_max.value) == pytest.approx(2 * 1.4e-3)
+
+
+def test_show_on_map_is_hidden_when_nothing_qualifies():
+    from iqmapper.ui.benchmark_panel import setup_benchmark_panel
+    ctx = _ctx()
+    api = setup_benchmark_panel(ctx)
+    api['render_details'](
+        {'cz_error': {'ratio_of_medians': 1.1, 'n_worse_2x': 0, 'n': 352,
+                      'median_reported': 1.4e-3}}, set(), {})
+    assert ctx.btn_bench_show_on_map.layout.display == 'none'
+    api['show_on_map']()                      # a no-op, not a crash
+    assert ctx.chk_err_threshold.value is False

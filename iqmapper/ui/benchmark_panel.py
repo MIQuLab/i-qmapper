@@ -47,10 +47,20 @@ def setup_benchmark_panel(ctx):
     btn_bench_run = ctx.btn_bench_run
     lbl_bench_status = ctx.lbl_bench_status
     chk_bench_absolute = getattr(ctx, 'chk_bench_absolute', None)
+    chk_err_threshold = getattr(ctx, 'chk_err_threshold', None)
+    txt_g_thr_max = getattr(ctx, 'txt_g_thr_max', None)
+    dd_gate_prop = getattr(ctx, 'dd_gate_prop', None)
     lbl_bench_consistency = getattr(ctx, 'lbl_bench_consistency', None)
+    lbl_bench_details = getattr(ctx, 'lbl_bench_details', None)
+    acc_bench_details = getattr(ctx, 'acc_bench_details', None)
+    btn_show_on_map = getattr(ctx, 'btn_bench_show_on_map', None)
+    #: (gate_key, threshold, n_edges) the map link would apply.
+    _map_target = [None]
     lbl_bench_reuse = ctx.lbl_bench_reuse
     btn_bench_reuse = ctx.btn_bench_reuse
     btn_bench_reanalyze = getattr(ctx, 'btn_bench_reanalyze', None)
+    btn_bench_calcheck = getattr(ctx, 'btn_bench_calcheck', None)
+    lbl_bench_calcheck = getattr(ctx, 'lbl_bench_calcheck', None)
 
     lucj_all_layouts = ctx.lucj_all_layouts
     refresh = ctx.refresh
@@ -230,6 +240,7 @@ def setup_benchmark_panel(ctx):
                 f"margin:2px 0;'>{esc(bench.summary_line(targets, cost, plan_name))}"
                 f"{extra}{warn}</div>")
 
+            _sync_calcheck(targets, plan_name, level)
             chk_bench_ack.layout.display = '' if needs_ack else 'none'
             btn_bench_run.disabled = bool(
                 (not plan.specs) or (not ok)
@@ -238,6 +249,243 @@ def setup_benchmark_panel(ctx):
         except Exception:
             _log.exception("Benchmark summary refresh failed")
             btn_bench_run.disabled = True
+
+    def _calcheck_plans():
+        """(parallel, sequential) over the first N target edges, or None."""
+        state, _r = active_target()
+        targets = bench.select_targets(
+            state, _sweep_result(), mode=dd_bench_target.value,
+            custom=txt_bench_custom.value)
+        if len(targets.edges) < bench.CALIBRATION_CHECK_EDGES:
+            return None, None, targets
+        par, seq = bench.build_calibration_check_plans(
+            targets, len(getattr(state, 'qubit_ids', None) or []),
+            list(getattr(state, 'edges_list', None) or []),
+            n_edges=bench.CALIBRATION_CHECK_EDGES)
+        return par, seq, targets
+
+    def _sync_calcheck(targets, plan_name, level):
+        """Cost line and enablement for the check, before the click."""
+        if btn_bench_calcheck is None:
+            return
+        n_edges = len(targets.edges)
+        if n_edges < bench.CALIBRATION_CHECK_EDGES:
+            btn_bench_calcheck.disabled = True
+            if lbl_bench_calcheck is not None:
+                lbl_bench_calcheck.value = (
+                    f"<div style='font-size:12px;color:#6c757d;margin:2px 0;'>"
+                    f"Calibration check needs at least "
+                    f"{bench.CALIBRATION_CHECK_EDGES} target edges "
+                    f"(have {n_edges}).</div>")
+            return
+        par, seq, _t = _calcheck_plans()
+        if par is None:
+            btn_bench_calcheck.disabled = True
+            return
+        circuits = (bench.plan_circuit_count(par)
+                    + bench.plan_circuit_count(seq))
+        shots = bench.plan_shots(par, par.shots) + bench.plan_shots(
+            seq, seq.shots)
+        jobs = (len(bench.split_for_submission(par, par.shots))
+                + len(bench.split_for_submission(seq, seq.shots)))
+        seconds = (bench.estimate_cost(par).qpu_seconds
+                   + bench.estimate_cost(seq).qpu_seconds)
+        # The check spends QPU time like any run, so the same gate applies.
+        needs_ack = bench.requires_acknowledgement(plan_name,
+                                                   bench.LEVEL_TARGETED)
+        btn_bench_calcheck.disabled = bool(
+            needs_ack and not chk_bench_ack.value)
+        if lbl_bench_calcheck is not None:
+            lbl_bench_calcheck.value = (
+                f"<div style='font-size:12px;color:#1a5276;margin:2px 0;'>"
+                f"Calibration check: "
+                f"{bench.CALIBRATION_CHECK_EDGES} edges \u00d7 2 arms \u00b7 "
+                f"~{circuits} circuits \u00b7 "
+                f"{esc(bench._format_shots(shots))} \u00b7 "
+                f"{jobs} job(s) \u00b7 ~{seconds:.0f} s QPU (estimate)"
+                f"</div>")
+
+    def _on_calcheck(_b=None):
+        """Run both arms in one session. Measures the INSTRUMENT.
+
+        No epoch is applied: the check exists to tell whether the numbers a
+        benchmark produces are biased, so treating its output as a
+        calibration would be circular.
+        """
+        state, _refresh_fn = active_target()
+        par, seq, targets = _calcheck_plans()
+        if par is None:
+            lbl_bench_status.value = _err(
+                f'Calibration check needs at least '
+                f'{bench.CALIBRATION_CHECK_EDGES} target edges.')
+            return
+
+        plan_name = _plan_name()
+        if bench.requires_acknowledgement(plan_name, bench.LEVEL_TARGETED) \
+                and not chk_bench_ack.value:
+            lbl_bench_status.value = _err(
+                'Tick "I understand this uses QPU time" to run the '
+                'calibration check.')
+            return
+
+        backend_name = getattr(state, 'active_backend_name', None)
+        reported_g = dict(getattr(state, 'gate_props_data', {}) or {})
+        reported_q = dict(getattr(state, 'qubit_props_data', {}) or {})
+        edges = list(getattr(state, 'edges_list', None) or [])
+        import time as _time
+        started_at = _time.time()
+        jobs_seen = {}
+
+        def _record_jobs(phase_index, job_ids, status):
+            jobs_seen[str(phase_index)] = list(job_ids)
+            if backend_name:
+                bench.save_job_record(
+                    backend_name, started_at, par, shots=par.shots,
+                    jobs=jobs_seen, statuses={str(phase_index): status},
+                    kind=bench.RECORD_KIND_CALIBRATION_CHECK,
+                    arms=['parallel', 'sequential'])
+
+        btn_bench_calcheck.disabled = True
+        lbl_bench_status.value = (
+            "<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
+            "padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
+            "margin:3px 0;font-weight:bold;'>\u23f3 Calibration check: "
+            "parallel then sequential\u2026</div>")
+
+        if runner_factory is None:
+            try:
+                bench.preload_runtime()
+            except Exception as exc:          # noqa: BLE001 - reported
+                btn_bench_calcheck.disabled = False
+                lbl_bench_status.value = _err(exc)
+                return
+
+        def _work():
+            if runner_factory is not None:
+                runner = runner_factory(state)
+                return [bench.run_plan(par, runner),
+                        bench.run_plan(seq, runner)], []
+            runner = bench.make_calibration_check_runner(
+                getattr(state, 'active_backend', None), on_jobs=_record_jobs)
+            return runner([par, seq]), getattr(runner, 'last_expdata', [])
+
+        def _done(payload):
+            btn_bench_calcheck.disabled = False
+            raws, expdata = payload
+            if backend_name and expdata:
+                try:
+                    bench.save_raw_results(backend_name, started_at, expdata)
+                except Exception:
+                    _log.debug('raw dump failed', exc_info=True)
+            try:
+                par_epoch = bench.results_to_epoch(
+                    raws[0], par, dict(reported_q), dict(reported_g), edges,
+                    when=started_at)
+                seq_epoch = bench.results_to_epoch(
+                    raws[1], seq, dict(reported_q), dict(reported_g), edges,
+                    when=started_at)
+                table = bench.calibration_check_table(
+                    edges, reported_g.get('cz_error', []), par_epoch,
+                    seq_epoch)
+            except Exception as exc:          # noqa: BLE001 - reported
+                _log.exception('calibration check folding failed')
+                lbl_bench_status.value = _err(exc)
+                return
+
+            notices = list(par_epoch.notices) + list(seq_epoch.notices)
+            if backend_name:
+                bench.save_attempt_notices(backend_name, started_at, notices)
+                bench.save_calibration_check(backend_name, started_at, table)
+            _render_calcheck(table)
+            lbl_bench_status.value = (
+                "<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
+                "padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+                "margin:3px 0;'>\u2705 Calibration check complete — the "
+                "calibration in use is unchanged.</div>")
+            _render_inline_notices(notices)
+
+        def _failed(exc):
+            btn_bench_calcheck.disabled = False
+            _log.exception('calibration check failed: %s', exc)
+            lbl_bench_status.value = _err(exc)
+
+        if spawn_bg is None:
+            try:
+                _done(_work())
+            except Exception as exc:          # noqa: BLE001 - reported
+                _failed(exc)
+            return
+        spawn_bg(_work, on_done=_done, on_error=_failed)
+
+    def _reanalyze_calcheck(state, name, record, job_ids):
+        """Replay a calibration check from its jobs. Zero QPU, no epoch."""
+        par = bench.plan_from_record(record)
+        if par is None:
+            lbl_bench_status.value = _err(
+                'This calibration-check record has no experiment list, so '
+                'its arms cannot be rebuilt.')
+            return
+        _seq_specs = []
+        for spec in par.specs:
+            if spec.kind != 'rb2q_layer':
+                _seq_specs.append(spec)
+                continue
+            for pair in spec.params['pairs']:
+                params = dict(spec.params)
+                params['pairs'] = [tuple(pair)]
+                _seq_specs.append(spec._replace(qubits=tuple(pair),
+                                                params=params))
+        seq = par._replace(specs=_seq_specs)
+
+        reported_q = dict(getattr(state, 'qubit_props_data', {}) or {})
+        reported_g = dict(getattr(state, 'gate_props_data', {}) or {})
+        edges = list(getattr(state, 'edges_list', None) or [])
+        import time as _time
+        attempt_at = _time.time()
+
+        # One arm's ids per half of the recorded phases.
+        half = max(1, len(job_ids) // 2)
+        arms = [job_ids[:half], job_ids[half:] or job_ids[:half]]
+
+        try:
+            raw_par, exp_par = bench.reanalyze_from_jobs(
+                par, arms[0], getattr(state, 'active_backend', None),
+                getattr(state, 'active_service', None))
+            raw_seq, exp_seq = bench.reanalyze_from_jobs(
+                seq, arms[1], getattr(state, 'active_backend', None),
+                getattr(state, 'active_service', None))
+            par_epoch = bench.results_to_epoch(raw_par, par, dict(reported_q),
+                                               dict(reported_g), edges,
+                                               when=attempt_at)
+            seq_epoch = bench.results_to_epoch(raw_seq, seq, dict(reported_q),
+                                               dict(reported_g), edges,
+                                               when=attempt_at)
+            table = bench.calibration_check_table(
+                edges, reported_g.get('cz_error', []), par_epoch, seq_epoch)
+        except Exception as exc:              # noqa: BLE001 - reported
+            _log.exception('calibration-check reanalysis failed')
+            _persist_attempt(name, attempt_at, exp_par if 'exp_par' in dir()
+                             else [], [f'reanalysis failed: {exc}'])
+            lbl_bench_status.value = _err(exc)
+            return
+
+        notices = list(par_epoch.notices) + list(seq_epoch.notices)
+        _persist_attempt(name, attempt_at, list(exp_par) + list(exp_seq),
+                         notices)
+        if name:
+            bench.save_calibration_check(name, attempt_at, table)
+        _render_calcheck(table)
+        lbl_bench_status.value = (
+            "<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
+            "padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+            "margin:3px 0;'>\u2705 Calibration check reanalysed (no QPU) — "
+            "the calibration in use is unchanged.</div>")
+        _render_inline_notices(notices)
+
+    def _render_calcheck(table):
+        if lbl_bench_calcheck is not None:
+            lbl_bench_calcheck.value = bench.calibration_check_table_html(
+                table, esc)
 
     def _refresh_reuse_offer():
         """Offer a saved epoch — per backend — instead of re-spending QPU."""
@@ -273,12 +521,8 @@ def setup_benchmark_panel(ctx):
         state, refresh_fn = active_target()
         _check_consistency(state, epoch)
         if getattr(epoch, 'is_empty', False):
+            lbl_bench_status.value = _empty_sentence()
             _surface_notices(epoch)
-            lbl_bench_status.value = (
-                f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
-                f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
-                f"margin:3px 0;'>⚠ Benchmark returned no usable "
-                f"measurements — reported epoch kept (see notices).</div>")
             return False
         if not bench.apply_measured_epoch(state, epoch):
             lbl_bench_status.value = _err(
@@ -302,11 +546,13 @@ def setup_benchmark_panel(ctx):
 
         _surface_notices(epoch)
 
+        analysis_failed = [n for n in (getattr(epoch, 'notices', None) or [])
+                           if 'analysis failed' in n]
         rank_txt = f" · {n_ranked} candidate(s) re-ranked" if n_ranked else ''
         qpu_txt = f"QPU {tb_bench_qpu.value} · " if _qpu2_available() else ''
         coverage = (epoch.coverage_text() if hasattr(epoch, 'coverage_text')
                     else f'{epoch.n_measured_qubits}q/{epoch.n_measured_edges}e')
-        if getattr(epoch, 'is_complete', True):
+        if getattr(epoch, 'is_complete', True) and not analysis_failed:
             lbl_bench_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
@@ -317,7 +563,9 @@ def setup_benchmark_panel(ctx):
                 f"<div style='font-size:14px;color:#8a4b00;background:#fff3cd;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #ffe08a;"
                 f"margin:3px 0;'>⚠ {esc(qpu_txt)}{esc(source)}: partial — "
-                f"measured {esc(coverage)} (L{epoch.level}){rank_txt}</div>")
+                f"measured {esc(coverage)} (L{epoch.level}){rank_txt}"
+                + (f"<br>{esc(analysis_failed[0])}" if analysis_failed else '')
+                + "</div>")
         _refresh_reuse_offer()
         return True
 
@@ -342,38 +590,228 @@ def setup_benchmark_panel(ctx):
             stats = bench.consistency_stats(epoch, reported_q, reported_g)
             epoch.consistency = stats
             offenders = bench.consistency_offenders(stats)
-            summary = esc(bench.consistency_summary(stats))
-
-            if offenders and not bool(getattr(chk_bench_absolute, 'value',
-                                              False)):
+            rescale = bool(offenders) and not bool(
+                getattr(chk_bench_absolute, 'value', False))
+            if rescale:
                 bench.apply_relative_mode(epoch, reported_q, reported_g,
                                           stats)
-                names = ', '.join(
-                    f"{k} \u00d7{v['ratio_of_medians']:.1f}"
-                    for k, v in offenders.items())
-                lbl_bench_consistency.value = (
-                    f"<div style='font-size:13px;color:#8a4b00;"
-                    f"background:#fff3cd;padding:4px 8px;border-radius:4px;"
-                    f"border:1px solid #ffe08a;margin:2px 0;'>\u26a0 "
-                    f"systematic offset vs reported ({esc(names)}) — "
-                    f"estimator mismatch suspected; measured values applied "
-                    f"in RELATIVE mode<br>{summary}</div>")
-            else:
-                lbl_bench_consistency.value = (
-                    f"<div style='font-size:13px;color:#1a5276;"
-                    f"background:#f4f8fb;padding:4px 8px;border-radius:4px;"
-                    f"border:1px solid #d6e4f0;margin:2px 0;'>"
-                    f"{summary}</div>")
+            rescaled = set(offenders) if rescale else set()
+
+            lbl_bench_consistency.value = _result_sentence(epoch, stats,
+                                                           rescaled)
+            _render_details(stats, rescaled, reported_g)
         except Exception:
             _log.exception('consistency check failed')
 
+    #: Property keys → the words a user recognises.
+    _PROP_NAMES = {'readout_error': 'Readout error', 't1': 'T1', 't2': 'T2',
+                   'cz_error': 'CZ error', 'rzz_error': 'RZZ error'}
+
+    def _prop_name(key):
+        if key in _PROP_NAMES:
+            return _PROP_NAMES[key]
+        if key.endswith('_error'):
+            return f'{key[:-len("_error")].upper()} error'
+        return key
+
+    def _join_names(keys):
+        # Escape the property names, not the surrounding copy: running the
+        # whole sentence through esc() turned every apostrophe into &#x27;.
+        names = [esc(_prop_name(k)) for k in keys]
+        if len(names) <= 1:
+            return names[0] if names else ''
+        return ' and '.join([', '.join(names[:-1]), names[-1]])
+
+    def _is_edge_prop(key):
+        return key in ('cz_error', 'rzz_error')
+
+    def _result_sentence(epoch, stats, rescaled):
+        """One plain sentence. No jargon, no warning glyph, no method talk.
+
+        The panel used to print the engine's own vocabulary — "estimator
+        mismatch suspected; measured values applied in RELATIVE mode" — which
+        describes the implementation rather than what the user now has. This
+        says what happened to their numbers and why, and leaves the figures
+        to the Details table.
+        """
+        in_band = [k for k in stats if k not in rescaled]   # stats order
+        parts = ['\u2705 Benchmark applied']
+
+        if not rescaled:
+            parts[0] += (" \u2014 measured values are in line with IBM's "
+                         "reported calibration.")
+        else:
+            parts[0] += '.'
+            if in_band:
+                parts.append(
+                    f"{_join_names(in_band)} differ from IBM's values in a "
+                    f"way that looks like real drift today.")
+            # Names and factors MUST share one ordering — `rescaled` is a
+            # set, so iterating it for the factors while sorting it for the
+            # names could pair "T2 and CZ error" with CZ's factor first.
+            # The stats order (readout, t1, t2, 2Q) is the one the Details
+            # table uses, so use it here too.
+            order = [k for k in stats if k in rescaled]
+            factors = ', '.join(
+                f"\u00d7{stats[k]['ratio_of_medians']:.1f}" for k in order)
+            parts.append(
+                f"{_join_names(order)} differ by a constant factor "
+                f"({factors}) \u2014 that looks like a measurement-method "
+                f"difference, so they are shown on IBM's scale with today's "
+                f"ranking preserved.")
+
+        missing_q = max(0, epoch.planned_count[0] - epoch.measured_count[0])
+        missing_e = max(0, epoch.planned_count[1] - epoch.measured_count[1])
+        if missing_q or missing_e:
+            parts.append(f'{missing_q} qubits and {missing_e} edges could '
+                         f'not be measured and keep their reported values.')
+
+        return (f"<div style='font-size:13px;color:#1a5276;"
+                f"background:#f4f8fb;padding:6px 10px;border-radius:4px;"
+                f"border:1px solid #d6e4f0;margin:2px 0;'>"
+                f"{' '.join(parts)}</div>")
+
+    def _empty_sentence():
+        return ("<div style='font-size:13px;color:#8a4b00;"
+                "background:#fff3cd;padding:6px 10px;border-radius:4px;"
+                "border:1px solid #ffe08a;margin:2px 0;'>"
+                "\u26a0 Nothing usable was measured \u2014 IBM's reported "
+                "calibration is still in use.</div>")
+
+    def _details_rows(stats, rescaled):
+        rows = []
+        for key, value in stats.items():
+            is_rescaled = key in rescaled
+            ratio = (f"\u00d7{value['ratio_of_medians']:.2f}"
+                     + (' \u26a0' if is_rescaled else ''))
+            unit = 'edges' if _is_edge_prop(key) else 'qubits'
+            count = value['n_worse_2x']
+            # A rescaled property with nothing individually out of line has
+            # no "changed a lot" story to tell — the whole difference was the
+            # constant factor, which the previous column already reports.
+            changed = ('\u2014' if (is_rescaled and not count)
+                       else f"{count} of {value['n']} {unit} >2\u00d7 worse")
+            applied = ('rescaled to IBM\'s scale' if is_rescaled
+                       else 'as measured')
+            if is_rescaled and key in ('t1', 't2'):
+                applied = 'rescaled (different estimator)'
+            rows.append({'key': key, 'name': _prop_name(key), 'ratio': ratio,
+                         'changed': changed, 'applied': applied,
+                         'count': count})
+        return rows
+
+    def _render_details(stats, rescaled, reported_g):
+        """The numbers, one row per property, collapsed by default."""
+        if acc_bench_details is None or lbl_bench_details is None:
+            return
+        rows = _details_rows(stats, rescaled)
+        if not rows:
+            lbl_bench_details.value = ''
+            return
+
+        body = ''
+        for row in rows:
+            changed_cell = esc(row['changed'])
+            if (_is_edge_prop(row['key']) and row['count']
+                    and btn_show_on_map is not None):
+                # The count becomes actionable: the button below the table
+                # paints exactly these edges on the device map.
+                changed_cell = f"{esc(row['changed'])} \u2192"
+            body += (
+                f"<tr><td style='padding:2px 10px;'>{esc(row['name'])}</td>"
+                f"<td style='padding:2px 10px;text-align:right;'>"
+                f"{esc(row['ratio'])}</td>"
+                f"<td style='padding:2px 10px;'>{changed_cell}</td>"
+                f"<td style='padding:2px 10px;'>{esc(row['applied'])}</td>"
+                f"</tr>")
+
+        lbl_bench_details.value = (
+            "<table style='font-size:12px;border-collapse:collapse;'>"
+            "<tr>"
+            "<th style='padding:2px 10px;text-align:left;'>Property</th>"
+            "<th style='padding:2px 10px;'>vs reported</th>"
+            "<th style='padding:2px 10px;text-align:left;'>changed a lot</th>"
+            "<th style='padding:2px 10px;text-align:left;'>how applied</th>"
+            "</tr>"
+            f"{body}</table>"
+            "<div style='font-size:11px;color:#6c757d;margin-top:4px;'>"
+            "\u201cas measured\u201d = values used directly \u00b7 "
+            "\u201crescaled\u201d = median aligned to IBM\u2019s, "
+            "per-element differences kept</div>")
+
+        _sync_show_on_map(stats, reported_g)
+
+    def _sync_show_on_map(stats, reported_g):
+        """Offer the map link only when there are edges worth looking at."""
+        if btn_show_on_map is None:
+            return
+        edge_key = next((k for k in stats
+                         if _is_edge_prop(k) and stats[k]['n_worse_2x']), None)
+        _map_target[0] = None
+        if edge_key is None or chk_err_threshold is None \
+                or txt_g_thr_max is None:
+            btn_show_on_map.layout.display = 'none'
+            return
+        median = stats[edge_key]['median_reported']
+        _map_target[0] = (edge_key, 2.0 * median,
+                          stats[edge_key]['n_worse_2x'])
+        btn_show_on_map.description = (
+            f"show {stats[edge_key]['n_worse_2x']} edges on map")
+        btn_show_on_map.layout.display = ''
+
+    def _on_show_on_map(_b=None):
+        """Three writes: pick the 2Q property, set the cap, enable the filter.
+
+        The threshold widgets already drive the Error tab's rendering, so
+        this needs no plot change — it just points them at "worse than twice
+        IBM's median", which is exactly what the table counted.
+        """
+        target = _map_target[0]
+        if target is None:
+            return
+        edge_key, cap, _count = target
+        try:
+            if dd_gate_prop is not None:
+                options = [v for _lbl, v in (dd_gate_prop.options or [])
+                           if not isinstance(dd_gate_prop.options, dict)]
+                if not options or edge_key in options:
+                    dd_gate_prop.value = edge_key
+            if txt_g_thr_max is not None:
+                txt_g_thr_max.value = f'{cap:.3e}'
+            if chk_err_threshold is not None:
+                chk_err_threshold.value = True
+        except Exception:
+            _log.exception('show-on-map wiring failed')
+
     def _surface_notices(epoch):
+        _render_inline_notices(getattr(epoch, 'notices', None))
         if notices_label is not None and getattr(epoch, 'notices', None):
             notices_label.value = (
                 "<div style='font-size:13px;color:#8a4b00;background:#fff3cd;"
                 "padding:4px 8px;border-radius:4px;border:1px solid #ffe08a;"
                 "margin:2px 0;'>⚠ " +
                 "<br>".join(esc(n) for n in epoch.notices) + "</div>")
+
+    def _render_inline_notices(notices):
+        """Show the run's notices under the status, not only in the Auto tab.
+
+        The benchmark section lives in the sidebar; its notices were going to
+        the Auto tab's notices bar, which a user running a benchmark is not
+        looking at. The reason a run came back empty belongs next to the
+        message saying it came back empty.
+        """
+        if lbl_bench_consistency is None:
+            return
+        if not notices:
+            return
+        shown = list(notices)[:6]
+        more = ('' if len(notices) <= 6
+                else f"<br>\u2026and {len(notices) - 6} more")
+        lbl_bench_status.value += (
+            "<div style='font-size:12px;color:#6c757d;background:#f8f9fa;"
+            "padding:4px 8px;border-radius:4px;border:1px solid #dee2e6;"
+            "margin:2px 0;'>"
+            + "<br>".join(esc(n) for n in shown) + more + "</div>")
 
     def _err(msg):
         return (f"<div style='font-size:14px;color:#e74c3c;background:#fdedec;"
@@ -557,20 +995,56 @@ def setup_benchmark_panel(ctx):
         if not record:
             lbl_bench_status.value = _err('No previous submission to reanalyze.')
             return
-        job_ids = [jid for ids in record.get('jobs', {}).values()
-                   for jid in ids]
-        if not job_ids:
+        # Per-PHASE grouping, not a flat list. `reanalyze_from_jobs` takes
+        # the two-phase path (1Q RB first, then 2Q RB built with those EPGs)
+        # only when handed a list of lists; flattening collapsed both phases
+        # into one batch, so the 2Q analyses were constructed before any 1Q
+        # EPG existed and came back UN-subtracted — a measured median of
+        # 4.05e-3 where the phased path gives 2.96e-3.
+        jobs_by_phase = record.get('jobs') or {}
+
+        def _phase_key(key):
+            try:
+                return (0, int(key))
+            except (TypeError, ValueError):
+                return (1, str(key))
+
+        job_ids = [list(jobs_by_phase[k])
+                   for k in sorted(jobs_by_phase, key=_phase_key)
+                   if jobs_by_phase[k]]
+        if not any(job_ids):
             lbl_bench_status.value = _err(
                 'The last submission recorded no job ids.')
             return
 
-        try:
-            _targets, plan = _current_plan()
-        except Exception as exc:              # noqa: BLE001 - reported
-            lbl_bench_status.value = _err(exc)
+        # Replay the plan that PRODUCED these jobs, from the submission
+        # record. Never `_current_plan()`: the target selector describes what
+        # the user would run NEXT, and with it on "Current layout(s)" and
+        # nothing placed the rebuilt plan had zero experiments — so nothing
+        # was folded, no notice was raised, and the panel reported (0, 0)
+        # while the raw dump held 348 EPG_cz and 156 T1/T2/readout.
+        # A calibration check replays as TWO arms and yields a table, never
+        # an epoch — it measures the instrument, not the device.
+        if (record.get('kind') == bench.RECORD_KIND_CALIBRATION_CHECK
+                or record.get('arms')):
+            _reanalyze_calcheck(state, name, record, job_ids)
             return
 
-        btn_bench_reanalyze.disabled = True
+        plan, how = bench.plan_for_replay(
+            record, name,
+            len(getattr(state, 'qubit_ids', None) or []),
+            list(getattr(state, 'edges_list', None) or []))
+        if plan is None:
+            lbl_bench_status.value = _err(
+                'The submission record for this run has no experiment list, '
+                'so the original plan cannot be rebuilt. Reanalysis needs '
+                'the plan that produced the jobs; re-run the benchmark '
+                'instead (records written from this version onwards include '
+                'it).')
+            return
+
+        if btn_bench_reanalyze is not None:
+            btn_bench_reanalyze.disabled = True
         if runner_factory is None:
             if not bench.runtime_ready():
                 lbl_bench_status.value = (
@@ -581,29 +1055,73 @@ def setup_benchmark_panel(ctx):
             try:
                 bench.preload_runtime()
             except Exception as exc:          # noqa: BLE001 - reported
-                btn_bench_reanalyze.disabled = False
+                if btn_bench_reanalyze is not None:
+                    btn_bench_reanalyze.disabled = False
                 lbl_bench_status.value = _err(exc)
                 return
 
         reported_q = dict(getattr(state, 'qubit_props_data', {}) or {})
         reported_g = dict(getattr(state, 'gate_props_data', {}) or {})
         edges = list(getattr(state, 'edges_list', None) or [])
+        # `_check_consistency` compares against what was reported BEFORE
+        # the epoch lands. `_on_run` stashes these; the reanalysis path
+        # did not, so the check found nothing to compare with, returned
+        # early, and the epoch was applied unrescaled with no
+        # consistency line at all.
+        setattr(state, '_reported_qubit_props', reported_q)
+        setattr(state, '_reported_gate_props', reported_g)
 
+        import time as _time
+        attempt_at = _time.time()
+        expdata = []
         try:
             raw, expdata = bench.reanalyze_from_jobs(
                 plan, job_ids, getattr(state, 'active_backend', None),
                 getattr(state, 'active_service', None))
             epoch = bench.results_to_epoch(raw, plan, reported_q, reported_g,
-                                           edges)
+                                           edges, when=attempt_at)
         except Exception as exc:              # noqa: BLE001 - reported
-            btn_bench_reanalyze.disabled = False
+            if btn_bench_reanalyze is not None:
+                btn_bench_reanalyze.disabled = False
             _log.exception('reanalysis failed')
+            # Persist whatever exists even on the failure path: a reanalysis
+            # that leaves nothing behind cannot be diagnosed, which is
+            # exactly how the 20 Sept attempt became a dead end.
+            _persist_attempt(name, attempt_at, expdata,
+                             [f'reanalysis failed: {exc}'])
             lbl_bench_status.value = _err(exc)
             return
 
-        btn_bench_reanalyze.disabled = False
-        if _install_epoch(epoch, source='Reanalysis (no QPU)') and name:
+        if btn_bench_reanalyze is not None:
+            btn_bench_reanalyze.disabled = False
+        # Raw dump and notices FIRST, unconditionally — an empty epoch is
+        # precisely the case where the artefacts are needed, and the old code
+        # returned before writing them.
+        _persist_attempt(name, attempt_at, expdata, epoch.notices)
+        if _install_epoch(epoch,
+                          source=f'Reanalysis of L{plan.level} run (no QPU)') \
+                and name:
             bench.save_measured_epoch(name, epoch)
+
+    def _persist_attempt(backend_name, when, expdata, notices):
+        """Write the raw dump and the notices for ANY attempt.
+
+        Including one that produced nothing. The 20 Sept reanalysis wrote no
+        file at all because the empty-epoch branch returned before the dump,
+        so there was no way to tell whether it had failed on the composite
+        metadata or on something else.
+        """
+        if not backend_name:
+            return
+        try:
+            if expdata:
+                bench.save_reanalysis_raw(backend_name, when, expdata)
+        except Exception:
+            _log.debug('raw dump failed', exc_info=True)
+        try:
+            bench.save_attempt_notices(backend_name, when, notices)
+        except Exception:
+            _log.debug('notice dump failed', exc_info=True)
 
     def _on_reuse(_b=None):
         epoch = _last_epoch[0]
@@ -614,6 +1132,10 @@ def setup_benchmark_panel(ctx):
 
     btn_bench_run.on_click(_on_run)
     btn_bench_reuse.on_click(_on_reuse)
+    if btn_show_on_map is not None:
+        btn_show_on_map.on_click(_on_show_on_map)
+    if btn_bench_calcheck is not None:
+        btn_bench_calcheck.on_click(_on_calcheck)
     if btn_bench_reanalyze is not None:
         btn_bench_reanalyze.on_click(_on_reanalyze)
     _refresh_reanalyze_offer()
@@ -633,4 +1155,9 @@ def setup_benchmark_panel(ctx):
         'active_target': active_target,
         'qpu2_available': _qpu2_available,
         'reanalyze': _on_reanalyze,
+        'calibration_check': _on_calcheck,
+        'calcheck_plans': _calcheck_plans,
+        'show_on_map': _on_show_on_map,
+        'result_sentence': _result_sentence,
+        'render_details': _render_details,
     }

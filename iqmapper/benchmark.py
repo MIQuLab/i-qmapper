@@ -120,6 +120,24 @@ RB_1Q_SAMPLES = 10
 RB_2Q_LENGTHS = [10, 50, 100]
 RB_2Q_SAMPLES = 10
 
+#: Plausibility bounds. A failed fit does not return an error — it returns a
+#: NUMBER, and an absurd one poisons whatever consumes it. A 1Q EPG of 0.71
+#: forwarded into `rb_analysis._exclude_1q_error` made it evaluate
+#: `(1 - 2*epg) ** n_gate` on a negative base and raise
+#: "The uncertainties module does not handle complex results", killing every
+#: two-qubit callback of the calibration check. IBM single-qubit gate errors
+#: run about 1e-4 to 1e-3, so anything at or above 5e-2 is a failed fit, not
+#: a bad qubit.
+_EPG_1Q_MAX = 0.05
+
+#: Readout assignment error is a probability; 0.5 is chance, and a symmetric
+#: matrix worse than that means the fit, not the qubit, is broken.
+_READOUT_MAX = 0.5
+
+#: T1/T2 in microseconds. Superconducting coherence times are hundreds of
+#: microseconds at best; 10 ms is a fit that ran away.
+_COHERENCE_MAX_US = 10_000.0
+
 #: A saved epoch older than this is offered as history rather than as "reuse".
 REUSE_TTL_MINUTES = 60
 
@@ -599,15 +617,19 @@ def plan_planned_count(plan):
     make a perfect L1 run look permanently partial. Planned means "a spec in
     this plan writes to that element".
     """
+    # Pairs are counted AS GIVEN, not sorted into undirected pairs: a
+    # device's gate arrays are indexed by its directed edge list, so
+    # (a, b) and (b, a) are two array slots and the measured mask counts
+    # both. Deduplicating here made a complete run read "348/176 edges".
     qubits, edges = set(), set()
     for spec in plan.specs:
         if spec.kind in ('readout', 't1', 't2hahn'):
             qubits.update(int(q) for q in spec.qubits)
         elif spec.kind == 'rb2q_layer':
             for pair in (spec.params.get('pairs') or []):
-                edges.add(tuple(sorted(int(q) for q in pair)))
+                edges.add(tuple(int(q) for q in pair))
         elif spec.kind == 'rb2q':
-            edges.add(tuple(sorted(int(q) for q in spec.qubits)))
+            edges.add(tuple(int(q) for q in spec.qubits))
     return (len(qubits), len(edges))
 
 
@@ -959,17 +981,27 @@ def _build_experiment(spec, api, context=None):
             flatten_results=True)
     if spec.kind == 'rb2q_layer':
         pairs = [tuple(p) for p in spec.params['pairs']]
-        epg_1q = (context or {}).get('epg_1q') or {}
-        reported_1q = (context or {}).get('reported_1q') or {}
+        epg_results = (context or {}).get('epg_results') or {}
         notices = (context or {}).setdefault('notices', []) \
             if context is not None else []
         inner = []
+        applied, skipped = 0, []
         for pair in pairs:
             rb = api.StandardRB(pair, lengths=spec.params['lengths'],
                                 num_samples=spec.params['num_samples'])
-            if epg_1q or reported_1q:
-                apply_epg_1q_options(rb, [pair], epg_1q, reported_1q, notices)
+            if apply_epg_1q_options(rb, pair, epg_results, notices):
+                applied += 1
+            else:
+                skipped.append(tuple(pair))
             inner.append(rb)
+        # MANDATORY: whether the subtraction happened is the difference
+        # between a measured cz_error of 2.9e-3 and 4.0e-3, so it is never
+        # left to be inferred from the absence of a message.
+        if context is not None:
+            tally = context.setdefault('_epg_tally', {'applied': 0,
+                                                      'skipped': []})
+            tally['applied'] += applied
+            tally['skipped'].extend(skipped)
         return api.ParallelExperiment(inner, flatten_results=True)
     if spec.kind == 'rb2q':                   # legacy single-pair spec
         return api.StandardRB(tuple(physical),
@@ -978,64 +1010,192 @@ def _build_experiment(spec, api, context=None):
     raise ValueError(f'unknown experiment kind: {spec.kind}')
 
 
-def apply_epg_1q_options(experiment, pairs, epg_1q, reported_1q=None,
-                         notices=None):
-    """Give a 2Q RB analysis the single-qubit EPGs so it can subtract them.
+EpgHarvest = namedtuple('EpgHarvest', 'results rejected')
 
-    A two-qubit Clifford decomposes into roughly 1.5 two-qubit gates plus 8-10
-    single-qubit gates. `StandardRB`'s analysis reports the error per Clifford;
-    to turn that into an error per CZ it has to be told what the single-qubit
-    gates cost, otherwise their contribution is folded into the two-qubit
-    number. With a 1Q EPG of ~6.9e-4 that is ~6e-3 of single-qubit error per
-    Clifford — already larger than a typical reported CZ error, which is why
-    the 20 Sept run measured every edge ~2-3x worse than reported, uniformly.
-    A uniform factor across 351 edges is an estimator mismatch, not drift.
 
-    qiskit-experiments exposes this as the analysis option `epg_1_qubit`. The
-    accepted shape has moved between versions (analysis-result objects in some,
-    plain values in others) and the option is absent entirely in older ones, so
-    every form is attempted and a failure downgrades to a notice rather than
-    breaking the run — an un-subtracted EPG is still usable for RANKING, which
-    is what `consistency_stats` and relative mode exist to make safe.
+def _plausible_epg(value):
+    return (value is not None and np.isfinite(value)
+            and 0.0 <= value < _EPG_1Q_MAX)
 
-    Returns True when the option was accepted.
+
+def harvest_epg_results(entry):
+    """Per-qubit lists of the ACTUAL 1Q EPG analysis-result objects.
+
+    Not floats. `rb_analysis._exclude_1q_error` iterates whatever is handed to
+    `epg_1_qubit` and reads `.device_components` off each element, so passing
+    plain numbers raised
+
+        AttributeError: 'float' object has no attribute 'device_components'
+
+    in every two-qubit callback of the 20 Sept 13:08 run — phase 1 succeeded,
+    phase 2 produced no EPG_cz at all, and because the JOBS were DONE nothing
+    upstream noticed. The tutorial passes the 1Q RB analysis results
+    themselves, so that is what we keep and forward.
+
+    Results whose value is implausible (see `_EPG_1Q_MAX`) are withheld: a
+    failed fit returns a number, and forwarding one crashed the whole 2Q
+    analysis. Returns `EpgHarvest(results, rejected)`; a rejected qubit is
+    treated as having no 1Q EPG at all, so its pairs are simply not
+    subtracted — and the tally says which.
+    """
+    out, values = {}, {}
+    items = entry if isinstance(entry, (list, tuple)) else [entry]
+    for item in items:
+        name = str(getattr(item, 'name', '') or '')
+        if not name.upper().startswith('EPG'):
+            continue
+        qubits = _components_to_qubits(item)
+        if len(qubits) != 1:
+            continue
+        qubit = int(qubits[0])
+        try:
+            value = _result_value(item)
+        except Exception:
+            value = None
+        out.setdefault(qubit, []).append(item)
+        # Track the worst value seen for the qubit: one broken basis-gate fit
+        # is enough to poison the subtraction for every pair it touches.
+        if value is not None and np.isfinite(value):
+            values[qubit] = max(values.get(qubit, value), float(value))
+        else:
+            values[qubit] = float('nan')
+
+    rejected = {q: v for q, v in values.items() if not _plausible_epg(v)}
+    for qubit in rejected:
+        out.pop(qubit, None)
+    return EpgHarvest(out, rejected)
+
+
+def apply_epg_1q_options(experiment, pair, epg_results, notices=None):
+    """Hand a two-qubit RB analysis the 1Q EPG RESULTS for its two qubits.
+
+    `epg_results` maps qubit -> list of analysis-result objects harvested from
+    the phase-1 1Q RB run (see `harvest_epg_results`).
+
+    When a result is missing for either qubit the subtraction is SKIPPED for
+    that pair, with a notice, rather than substituted with a fabricated
+    stand-in. That is a deliberate choice: the failure mode is deferred to
+    analysis time — a wrong shape does not raise when the option is set, it
+    raises inside the fit callback after the QPU time has already been spent,
+    and `set_options` cannot validate it. A synthetic object that merely looks
+    right would risk repeating exactly the failure this function exists to
+    fix, so an un-subtracted pair plus a visible notice is the safer trade.
+
+    Returns True when the option was set.
     """
     notices = notices if notices is not None else []
-    epg_1q = dict(epg_1q or {})
-    reported_1q = dict(reported_1q or {})
-
-    qubits = sorted({q for pair in pairs for q in pair})
-    values = {}
+    pair = tuple(pair)
+    results = []
     missing = []
-    for q in qubits:
-        if q in epg_1q:
-            values[q] = float(epg_1q[q])
-        elif q in reported_1q:
-            values[q] = float(reported_1q[q])
-            missing.append(q)
+    for q in pair:
+        got = (epg_results or {}).get(int(q))
+        if got:
+            results.extend(got)
         else:
-            missing.append(q)
+            missing.append(int(q))
+
     if missing:
-        notices.append(
-            f'1Q EPG unavailable for {len(missing)} qubit(s); '
-            f'{"fell back to the reported 1Q gate error" if reported_1q else "no subtraction applied"}')
-    if not values:
         return False
 
     analysis = getattr(experiment, 'analysis', None)
     if analysis is None or not hasattr(analysis, 'set_options'):
         return False
+    try:
+        analysis.set_options(epg_1_qubit=results)
+        return True
+    except Exception as exc:                  # noqa: BLE001 - reported
+        notices.append(f'{list(pair)}: the installed qiskit-experiments '
+                       f'rejected epg_1_qubit ({exc}); not 1Q-subtracted')
+        return False
 
-    ordered = [values[q] for q in qubits if q in values]
-    for candidate in (ordered, {q: values[q] for q in qubits if q in values}):
+
+def epg_tally_notice(context):
+    """The one line that says whether 1Q subtraction actually happened.
+
+    Absence of a message is not evidence of success: a reanalysis replayed
+    from a SINGLE-phase record has no 1Q EPGs to hand the 2Q analyses, and
+    produced an un-subtracted cz_error (x2.85 rather than x2.11) with nothing
+    on screen to say so. This notice is emitted on every run that contains
+    two-qubit RB, whatever the outcome.
+    """
+    tally = (context or {}).get('_epg_tally')
+    if not tally:
+        return None
+    applied = int(tally.get('applied') or 0)
+    skipped = list(tally.get('skipped') or [])
+    rejected = dict((context or {}).get('_epg_rejected') or {})
+    if not applied and not skipped:
+        return None
+    text = f'1Q EPG subtraction: applied to {applied} pairs'
+    if skipped:
+        qubits = sorted({q for pair in skipped for q in pair})
+        # Name the implausible fits with their value: "q17: 1Q EPG 0.71
+        # implausible" tells the user which qubit to look at, where a bare
+        # count does not.
+        blamed = [f'q{q}: 1Q EPG {rejected[q]:.2g} implausible'
+                  for q in qubits if q in rejected and
+                  np.isfinite(rejected[q])]
+        blamed += [f'q{q}: 1Q EPG fit failed'
+                   for q in qubits if q in rejected and
+                   not np.isfinite(rejected[q])]
+        if not blamed:
+            shown = ', '.join(str(q) for q in qubits[:12])
+            more = '' if len(qubits) <= 12 else f', +{len(qubits) - 12} more'
+            blamed = [f'qubits {shown}{more}']
+        detail = '; '.join(blamed[:6])
+        if len(blamed) > 6:
+            detail += f'; +{len(blamed) - 6} more'
+        text += (f', skipped {len(skipped)} ({detail}) — '
+                 f'those edges read high versus reported')
+    return text
+
+
+def collect_analysis_errors(expdata, depth=0):
+    """Client-side analysis failures, which `status()` does NOT report.
+
+    A job can be DONE while every fit callback raised: on 20 Sept 13:08 both
+    phases reported DONE=12 and `errors()` was None at the top level, yet
+    phase 2 produced zero results because each callback had thrown. Silence
+    there is what turned a total analysis failure into six bland "no results
+    returned" notices. Walks the tree because composite experiments record
+    failures on the child that raised.
+    """
+    found = []
+    if expdata is None or depth > 6:
+        return found
+    for attr in ('analysis_errors', 'errors'):
+        getter = getattr(expdata, attr, None)
+        if getter is None:
+            continue
         try:
-            analysis.set_options(epg_1_qubit=candidate)
-            return True
+            value = getter() if callable(getter) else getter
         except Exception:
             continue
-    notices.append('the installed qiskit-experiments did not accept '
-                   'epg_1_qubit; 2Q EPG is NOT 1Q-subtracted')
-    return False
+        if value:
+            text = str(value).strip()
+            if text and text.lower() not in ('none', '[]', '{}'):
+                found.append(text)
+    try:
+        for child in list(expdata.child_data()):
+            found.extend(collect_analysis_errors(child, depth + 1))
+    except Exception:
+        pass
+    return found
+
+
+def summarise_analysis_errors(errors, limit=3):
+    """Collapse repeated callback failures into one readable notice."""
+    if not errors:
+        return None
+    counts = {}
+    for text in errors:
+        head = text.splitlines()[-1][:200] if text else text
+        counts[head] = counts.get(head, 0) + 1
+    ordered = sorted(counts.items(), key=lambda kv: -kv[1])
+    parts = [f'{n}x {head}' if n > 1 else head for head, n in ordered[:limit]]
+    extra = ('' if len(ordered) <= limit
+             else f' (+{len(ordered) - limit} other error(s))')
+    return f'analysis failed: {"; ".join(parts)}{extra}'
 
 
 def _job_ids_of(expdata):
@@ -1191,7 +1351,7 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
         _runner.last_expdata = collected
         return merged
 
-    def _run_phased(plan, phase1, phase2):
+    def _run_phased(plan, phase1, phase2, session=None, sampler=None):
         """Phase 1 (readout/T1/T2/1Q RB) then phase 2 (2Q RB), one session.
 
         Phase 1's per-qubit EPGs are handed to phase 2's analyses so the
@@ -1201,8 +1361,9 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
         """
         merged = {}
         collected = []
-        context = {'epg_1q': {}, 'reported_1q': {}, 'notices': []}
+        context = {'epg_results': {}, 'epg_1q': {}, 'notices': []}
         index_of = {id(sp): i for i, sp in enumerate(plan.specs)}
+        phase_no = [0]
 
         def _submit(specs, session, sampler):
             experiments = [(sp, _build_experiment(sp, api, context))
@@ -1214,8 +1375,29 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
                     'ignore', category=RuntimeWarning,
                     module=r'.*qiskit_experiments.*rb_analysis.*')
                 data = batch.run(sampler=sampler, shots=plan.shots)
+                job_ids = _job_ids_of(data)
+                if on_jobs is not None:
+                    try:
+                        on_jobs(phase_no[0], job_ids, 'submitted')
+                    except Exception:
+                        _log.debug('job-id callback failed', exc_info=True)
                 data.block_for_results()
-            _check_chunk_status(data, 0)
+            _check_chunk_status(data, phase_no[0])
+            if on_jobs is not None:
+                try:
+                    on_jobs(phase_no[0], _job_ids_of(data),
+                            _status_name(data))
+                except Exception:
+                    _log.debug('job-id callback failed', exc_info=True)
+
+            # A DONE job can still have had every analysis callback raise.
+            # Surfacing that is the difference between "the fits failed, here
+            # is why" and six bland "no results returned" notices.
+            failures = collect_analysis_errors(data)
+            summary = summarise_analysis_errors(failures)
+            if summary:
+                context['notices'].append(f'phase {phase_no[0] + 1}: {summary}')
+            phase_no[0] += 1
             collected.append(data)
             for local_idx, (sp, _exp) in enumerate(experiments):
                 try:
@@ -1227,34 +1409,115 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
                     merged[index_of[id(sp)]] = None
             return data
 
-        with api.Session(backend=backend) as session:
-            sampler = (sampler_factory(session) if sampler_factory is not None
-                       else api.SamplerV2(mode=session))
+        import contextlib as _ctxlib
+        # An already-open session is reused (the calibration check drives two
+        # arms through ONE session so the whole check costs one reservation);
+        # otherwise this opens its own.
+        own_session = session is None
+        ctx_mgr = (api.Session(backend=backend) if own_session
+                   else _ctxlib.nullcontext(session))
+        with ctx_mgr as session:
+            if sampler is None:
+                sampler = (sampler_factory(session)
+                           if sampler_factory is not None
+                           else api.SamplerV2(mode=session))
             _submit(phase1, session, sampler)
 
-            # Harvest the 1Q EPGs before building the two-qubit experiments.
+            # Harvest the 1Q EPG RESULT OBJECTS before building the
+            # two-qubit experiments: the analysis needs the results, not
+            # their values (see harvest_epg_results).
             for sp in phase1:
                 if sp.kind != 'rb1q':
                     continue
                 entry = merged.get(index_of[id(sp)]) or []
+                harvest = harvest_epg_results(entry)
+                context['epg_results'].update(harvest.results)
+                context.setdefault('_epg_rejected', {}).update(
+                    harvest.rejected)
                 harvested = {}
                 _collect_rb1q(entry, sp, [], harvested)
                 context['epg_1q'].update(harvested.get('epg_1q', {}))
 
-            if not context['epg_1q']:
+            if not context['epg_results']:
                 context['notices'].append(
-                    '1Q RB produced no EPGs; two-qubit errors are NOT '
+                    '1Q RB produced no EPG results; two-qubit errors are NOT '
                     '1Q-subtracted and will read high versus reported')
             if phase2:
                 _submit(phase2, session, sampler)
 
+        tally = epg_tally_notice(context)
+        if tally:
+            context['notices'].append(tally)
         if context['notices']:
             merged['_notices'] = list(context['notices'])
         _runner.last_expdata = collected
         return merged
 
+    def _run_in_session(plan, session, sampler):
+        """Run one plan inside a caller-owned session. Both arms of the
+        calibration check go through here, so each gets its own phase-1 1Q RB
+        and therefore its own subtraction, while sharing one reservation."""
+        phase1 = [sp for sp in plan.specs
+                  if sp.kind not in ('rb2q_layer', 'rb2q')]
+        phase2 = [sp for sp in plan.specs
+                  if sp.kind in ('rb2q_layer', 'rb2q')]
+        return _run_phased(plan, phase1, phase2, session, sampler)
+
+    _runner.run_in_session = _run_in_session
+    _runner.api = api
     _runner.last_expdata = []
     return _runner
+
+
+def make_calibration_check_runner(backend, on_jobs=None,
+                                  sampler_factory=None):
+    """Run both calibration-check arms in ONE session.
+
+    Returns `runner(plans) -> [raw_parallel, raw_sequential]`. Each arm is a
+    full plan with its own phase-1 1Q RB, so the subtraction applies to both
+    and the two numbers are directly comparable — which is the entire point:
+    an estimator bias moves both arms, crosstalk moves only the parallel one.
+    """
+    inner = make_runtime_runner(backend, on_jobs, sampler_factory)
+    api = inner.api
+
+    def _run(plans):
+        out = []
+        collected = []
+        with api.Session(backend=backend) as session:
+            sampler = (sampler_factory(session) if sampler_factory is not None
+                       else api.SamplerV2(mode=session))
+            for plan in plans:
+                out.append(inner.run_in_session(plan, session, sampler))
+                collected.extend(getattr(inner, 'last_expdata', []) or [])
+        _run.last_expdata = collected
+        return out
+
+    _run.last_expdata = []
+    return _run
+
+
+def _safe_analysis_results(expdata):
+    """`analysis_results()` without tripping the deprecation.
+
+    Leaving `dataframe` unset is deprecated as of qiskit-experiments 0.9, and
+    under `-W error` that DeprecationWarning is RAISED. Both the parser and
+    the raw dump guard their calls with `except Exception`, so the warning
+    was being swallowed and reported as "no results returned" for every
+    experiment — a healthy run looking exactly like the failed one. Ask for
+    the DataFrame explicitly; older versions have no such keyword, hence the
+    TypeError fallback.
+    """
+    if expdata is None:
+        return None
+    for attempt in ({'dataframe': True}, {}):
+        try:
+            return expdata.analysis_results(**attempt)
+        except TypeError:
+            continue
+        except Exception:
+            return None
+    return None
 
 
 def _iter_analysis_results(expdata):
@@ -1272,16 +1535,13 @@ def _iter_analysis_results(expdata):
     if expdata is None:
         return
 
-    results = None
-    try:
-        results = expdata.analysis_results()
-    except TypeError:
-        try:
-            results = expdata.analysis_results(dataframe=False)
-        except Exception:
-            results = None
-    except Exception:
-        results = None
+    # Ask for the DataFrame explicitly. Leaving `dataframe` unset is
+    # deprecated as of qiskit-experiments 0.9, and under `-W error` that
+    # DeprecationWarning is raised as an exception inside the per-experiment
+    # guard below — which then reported a perfectly good run as "no results
+    # returned" for every experiment. Older versions have no such keyword,
+    # hence the TypeError fallback.
+    results = _safe_analysis_results(expdata)
 
     for item in _normalise_results(results):
         yield item
@@ -1304,11 +1564,17 @@ def _normalise_results(results):
     if hasattr(results, 'itertuples') and hasattr(results, 'columns'):
         out = []
         for row in results.itertuples(index=False):
+            # The column is `components` in qiskit-experiments 0.10 and
+            # `device_components` in the legacy object form. Reading only the
+            # latter yielded None for every row, so nothing could be matched
+            # to a qubit and every epoch came back empty.
+            components = getattr(row, 'components', None)
+            if components is None:
+                components = getattr(row, 'device_components', None)
             out.append(SimpleNamespace(
                 name=getattr(row, 'name', None),
                 value=getattr(row, 'value', None),
-                device_components=list(
-                    getattr(row, 'device_components', []) or []),
+                device_components=list(components or []),
                 quality=getattr(row, 'quality', None)))
         return out
     if isinstance(results, (list, tuple)):
@@ -1456,13 +1722,52 @@ def results_to_epoch(raw, plan, reported_qubit_props, reported_gate_props,
             notices.append(f'{spec.kind} {list(spec.qubits)}: '
                            f'{exc}; kept reported values')
 
-    for note in (raw.get('_notices') if isinstance(raw, dict) else None) or []:
+    run_notices = (raw.get('_notices') if isinstance(raw, dict) else None) or []
+    for note in run_notices:
         notices.append(str(note))
 
     planned = plan_planned_count(plan)
+    _assert_attribution(raw, plan, q_mask, e_mask, notices)
     return MeasuredEpoch(qubit_props, gate_props, q_mask, e_mask,
                          plan.level, when, notices, planned_count=planned,
                          extra=extra)
+
+
+def _assert_attribution(raw, plan, q_mask, e_mask, notices):
+    """Never return "nothing measured" when results were in fact present.
+
+    The failure this guards against: the analysis produced 348 EPG_cz plus
+    T1/T2/readout for 156 qubits, and the epoch still came back (0, 0) with
+    an EMPTY notice list — so the UI reported "no usable measurements" with
+    nothing to explain it, while the raw dump held everything. Silence there
+    is worse than a wrong number, because it looks like an answer.
+
+    If any analysis result was seen but none was attributed to a target, say
+    how many and name the most likely reason.
+    """
+    found = 0
+    for key, entry in (raw or {}).items():
+        if not isinstance(key, int):
+            continue
+        if isinstance(entry, (list, tuple)):
+            found += len(entry)
+        elif entry is not None:
+            found += 1
+    if not found:
+        return
+    if q_mask.any() or e_mask.any():
+        return
+
+    if not plan.specs:
+        reason = 'the plan being folded has no experiments'
+    elif not plan.targets.qubits and not plan.targets.edges:
+        reason = 'the plan has no targets to attribute results to'
+    else:
+        reason = ('none of the result qubits/edges matched the plan targets — '
+                  'check the edge orientation against state.edges_list and '
+                  'that the plan matches the run that produced these results')
+    notices.append(f'{found} results found, 0 attributed to targets — '
+                   f'{reason}')
 
 
 def _two_qubit_key(gate_props):
@@ -1488,7 +1793,12 @@ def _apply_readout(entry, spec, qubit_props, q_mask, n_q, notices):
         if not (0 <= qubit < n_q):
             continue
         try:
-            arr[qubit] = _readout_error_from_matrix(matrix)
+            value = _readout_error_from_matrix(matrix)
+            if not np.isfinite(value) or not (0.0 <= value <= _READOUT_MAX):
+                raise ValueError(
+                    f'implausible readout error {value:.3g} '
+                    f'(expected 0-{_READOUT_MAX:g})')
+            arr[qubit] = value
             q_mask[qubit] = True
         except Exception as exc:              # noqa: BLE001 - per element
             failures.append((qubit, str(exc)))
@@ -1569,9 +1879,12 @@ def _apply_coherence(entry, spec, qubit_props, q_mask, n_q, notices):
             continue
         try:
             seconds = _result_value(item)
-            if not np.isfinite(seconds) or seconds <= 0:
-                raise ValueError(f'implausible {key}={seconds}')
-            arr[qubit] = seconds * 1e6        # data.py stores µs
+            micros = seconds * 1e6            # data.py stores µs
+            if not np.isfinite(micros) or not (0 < micros < _COHERENCE_MAX_US):
+                raise ValueError(
+                    f'implausible {key} {micros:.3g} us '
+                    f'(expected 0-{_COHERENCE_MAX_US:g})')
+            arr[qubit] = micros
             q_mask[qubit] = True
         except Exception as exc:              # noqa: BLE001 - per element
             failures.append((qubit, str(exc)))
@@ -1632,7 +1945,10 @@ def _apply_rb2q_layer(entry, spec, gate_props, e_mask, edge_index, two_q_key,
 
     for pair in pairs:
         item = by_pair.get(tuple(sorted(pair)))
-        idx = edge_index.get(pair) or edge_index.get((pair[1], pair[0]))
+        # `a or b` is wrong here: edge index 0 is falsy, so the first edge
+        # of every device silently fell through to the reversed lookup and
+        # was reported "not in the device map". Test the sentinel explicitly.
+        idx = edge_index.get(pair)
         if idx is None:
             idx = edge_index.get((pair[1], pair[0]))
         if idx is None or not (0 <= idx < len(arr)):
@@ -1702,6 +2018,20 @@ def _collect_rb1q(entry, spec, notices, extra):
         return
 
     averaged = {q: float(np.mean(v)) for q, v in per_qubit.items()}
+    # Same bound as the forwarding path: an implausible EPG must not be
+    # recorded as if it were a measurement.
+    implausible = {q: v for q, v in averaged.items() if not _plausible_epg(v)}
+    averaged = {q: v for q, v in averaged.items() if _plausible_epg(v)}
+    if implausible:
+        notices.append(
+            f'1Q RB: {len(implausible)} qubit(s) returned an implausible EPG '
+            f'(>= {_EPG_1Q_MAX:g}) and were dropped: '
+            + ', '.join(f'q{q}={v:.2g}' for q, v in
+                        sorted(implausible.items())[:6]))
+    if not averaged:
+        notices.append(f'1Q RB: no plausible results for {len(spec.qubits)} '
+                       f'qubit(s)')
+        return
     extra.setdefault('epg_1q', {}).update(averaged)
     notices.append(
         f'1Q RB: median EPG {np.median(list(averaged.values())):.2e} over '
@@ -1890,6 +2220,47 @@ def build_calibration_check_plans(targets, n_qubits, coupling_edges,
     return parallel, sequential
 
 
+#: Marks a submission record as a calibration check rather than a benchmark.
+RECORD_KIND_BENCHMARK = 'benchmark'
+RECORD_KIND_CALIBRATION_CHECK = 'calibration_check'
+
+#: A calibration check needs enough edges for the parallel arm to mean
+#: something; below this the two arms are nearly the same experiment.
+CALIBRATION_CHECK_EDGES = 6
+
+
+def calibration_check_table_html(table, esc=str):
+    """The verdict table, as the panel renders it under the status."""
+    if not table or not table.get('rows'):
+        return ("<div style='font-size:13px;color:#e74c3c;'>"
+                "Calibration check produced no comparable edges.</div>")
+
+    def _ratio(value):
+        return '—' if value is None else f'×{value:.2f}'
+
+    rows = ''.join(
+        f"<tr><td style='padding:1px 8px;'>{r['edge'][0]}–{r['edge'][1]}</td>"
+        f"<td style='padding:1px 8px;text-align:right;'>{r['reported']:.3e}</td>"
+        f"<td style='padding:1px 8px;text-align:right;'>{r['parallel']:.3e}</td>"
+        f"<td style='padding:1px 8px;text-align:right;'>"
+        f"{r['sequential']:.3e}</td></tr>"
+        for r in table['rows'])
+    return (
+        "<div style='font-size:13px;color:#1a5276;background:#f4f8fb;"
+        "padding:6px 10px;border-radius:4px;border:1px solid #d6e4f0;"
+        "margin:3px 0;'>"
+        "<b>🔬 Calibration check</b><br>"
+        "<table style='font-size:12px;border-collapse:collapse;margin:4px 0;'>"
+        "<tr><th style='padding:1px 8px;text-align:left;'>edge</th>"
+        "<th style='padding:1px 8px;'>reported</th>"
+        "<th style='padding:1px 8px;'>parallel</th>"
+        "<th style='padding:1px 8px;'>sequential</th></tr>"
+        f"{rows}</table>"
+        f"median vs reported — parallel {_ratio(table['ratio_parallel'])}, "
+        f"sequential {_ratio(table['ratio_sequential'])}<br>"
+        f"<b>{esc(table['verdict'])}</b></div>")
+
+
 def calibration_check_table(edges, reported, parallel_epoch,
                             sequential_epoch, gate_key='cz_error'):
     """Rows of (edge, reported, parallel, sequential) plus the two ratios."""
@@ -1898,9 +2269,19 @@ def calibration_check_table(edges, reported, parallel_epoch,
     seq = sequential_epoch.gate_props.get(gate_key)
     rep = np.asarray(reported, dtype=float)
     index = {tuple(sorted(e)): i for i, e in enumerate(edges)}
+    # ONLY the edges this check actually measured. An unmeasured edge still
+    # holds its reported value, so including the rest of the device dragged
+    # both medians back to the reported one and every check read "x1.00,
+    # consistent" however biased the measured edges were.
+    par_mask = np.asarray(parallel_epoch.measured_edge_mask, dtype=bool)
+    seq_mask = np.asarray(sequential_epoch.measured_edge_mask, dtype=bool)
     par_vals, seq_vals, rep_vals = [], [], []
     for edge, i in sorted(index.items(), key=lambda kv: kv[1]):
         if par is None or seq is None or i >= len(rep):
+            continue
+        if i >= len(par_mask) or i >= len(seq_mask):
+            continue
+        if not (par_mask[i] and seq_mask[i]):
             continue
         rows.append({'edge': edge, 'reported': float(rep[i]),
                      'parallel': float(par[i]), 'sequential': float(seq[i])})
@@ -2011,6 +2392,26 @@ def _measured_path(backend_name, when):
                         f'{_MEASURED_PREFIX}{stamp}.json')
 
 
+def _jsonable_consistency(stats):
+    out = {}
+    for key, value in (stats or {}).items():
+        out[key] = {k: (list(v) if isinstance(v, (list, tuple)) else v)
+                    for k, v in (value or {}).items()}
+    return out
+
+
+def _jsonable_extra(extra):
+    out = {}
+    for key, value in (extra or {}).items():
+        if isinstance(value, dict):
+            out[key] = {str(k): (float(v) if isinstance(v, (int, float))
+                                 else v)
+                        for k, v in value.items()}
+        else:
+            out[key] = value
+    return out
+
+
 def save_measured_epoch(backend_name, epoch):
     """Write `epoch` beside the reported calibrations. Path, or None.
 
@@ -2026,6 +2427,14 @@ def save_measured_epoch(backend_name, epoch):
             'when': epoch.when,
             'level': epoch.level,
             'notices': list(epoch.notices),
+            # Persisted so a saved epoch can be read back for what it IS:
+            # without these, a rescaled epoch reloaded as `relative=None`
+            # and looked like raw measured values.
+            'relative': bool(getattr(epoch, 'relative', False)),
+            'planned_count': list(getattr(epoch, 'planned_count', (0, 0))),
+            'consistency': _jsonable_consistency(
+                getattr(epoch, 'consistency', None)),
+            'extra': _jsonable_extra(getattr(epoch, 'extra', None)),
             'qubit_props': {k: np.asarray(v).tolist()
                             for k, v in epoch.qubit_props.items()},
             'gate_props': {k: np.asarray(v).tolist()
@@ -2085,7 +2494,13 @@ def load_measured_epoch(backend_name, when):
             {k: np.array(v, dtype=float)
              for k, v in data['gate_props'].items()},
             data['measured_qubit_mask'], data['measured_edge_mask'],
-            data['level'], float(data['when']), data.get('notices'))
+            data['level'], float(data['when']), data.get('notices'),
+            planned_count=tuple(data.get('planned_count') or (0, 0)),
+            extra={k: {int(q): float(x) for q, x in v.items()}
+                   if k == 'epg_1q' and isinstance(v, dict) else v
+                   for k, v in (data.get('extra') or {}).items()},
+            consistency=data.get('consistency'),
+            relative=bool(data.get('relative', False)))
     except Exception as exc:                  # noqa: BLE001 - corrupt file
         _log.warning("Failed to load measured epoch %s/%s: %s",
                      backend_name, when, exc)
@@ -2127,7 +2542,8 @@ def _write_json(path, payload):
 
 
 def save_job_record(backend_name, when, plan, shots=None, session_id=None,
-                    chunks=None, jobs=None, statuses=None):
+                    chunks=None, jobs=None, statuses=None,
+                    kind=RECORD_KIND_BENCHMARK, arms=None):
     """Persist what was submitted, as soon as it is known.
 
     Written at submission rather than at completion, because the run that
@@ -2139,6 +2555,11 @@ def save_job_record(backend_name, when, plan, shots=None, session_id=None,
     shots = shots or plan.shots
     payload = {
         'when': when,
+        # 'benchmark' or 'calibration_check'. The latter measures the
+        # INSTRUMENT, not the device, so it never yields an epoch — and
+        # Reanalyze needs to know which it is replaying.
+        'kind': kind,
+        'arms': arms or [],
         'level': plan.level,
         'shots': shots,
         'circuits': plan_circuit_count(plan),
@@ -2170,24 +2591,148 @@ def _jsonable(params):
 
 
 def latest_job_record(backend_name):
-    """The most recent submission record for a backend, or None."""
+    """The most recent replayable run for a backend, or None.
+
+    Deliberately NOT "the newest _jobs.json". Records were only written from
+    v3.1 onward, and only the non-phased runner wrote them before that — so
+    the newest record on disk could be an OLD run while a newer one had left
+    only a raw dump. That is what happened on 20 Sept: the panel kept
+    replaying the 12:38 single-batch run (one job, no 1Q phase, hence no
+    subtraction and a cz_error of x2.85) while the 13:08 two-phase run sat
+    beside it, reachable only through its raw dump.
+
+    So: consider every run that has EITHER a job record or a raw dump, take
+    the newest by timestamp, and recover the per-phase job ids from the dump
+    when the record is absent or single-phase.
+    """
     try:
         dirn = _measured_dir(backend_name)
-        names = [n for n in os.listdir(dirn)
-                 if n.startswith(_MEASURED_PREFIX) and n.endswith('_jobs.json')]
-        if not names:
-            return None
-        newest = sorted(names)[-1]
-        with open(os.path.join(dirn, newest), 'r', encoding='utf-8') as fh:
-            record = _json.load(fh)
-        record['_path'] = os.path.join(dirn, newest)
-        return record
+        names = os.listdir(dirn)
     except Exception:
-        _log.debug('no job record for %s', backend_name, exc_info=True)
+        _log.debug('no cache dir for %s', backend_name, exc_info=True)
         return None
+
+    runs = {}
+    for name in names:
+        if not name.startswith(_MEASURED_PREFIX):
+            continue
+        if name.endswith('_jobs.json'):
+            stamp = name[len(_MEASURED_PREFIX):-len('_jobs.json')]
+            runs.setdefault(stamp, {})['jobs_file'] = name
+        elif name.endswith('_rean.json'):
+            continue                          # a replay, not a submission
+        elif name.endswith('_raw.json'):
+            stamp = name[len(_MEASURED_PREFIX):-len('_raw.json')]
+            runs.setdefault(stamp, {})['raw_file'] = name
+    if not runs:
+        return None
+
+    loaded = []
+    for stamp in sorted(runs, reverse=True):
+        record = _load_run(dirn, stamp, runs[stamp])
+        if record:
+            loaded.append((stamp, record))
+
+    # Drop replays. A reanalysis dumped before this version was written as a
+    # plain `_raw.json`, so it looks like the newest run — but it executed
+    # nothing and its job ids belong to an OLDER submission. Any run whose
+    # ids are all claimed by something earlier is therefore a replay of it,
+    # and replaying the replay would keep resurrecting the wrong run.
+    def _ids_of(rec):
+        return {j for ids in (rec.get('jobs') or {}).values() for j in ids}
+
+    for index, (stamp, record) in enumerate(loaded):
+        ids = _ids_of(record)
+        if not ids:
+            continue
+        older = set()
+        for _s, other in loaded[index + 1:]:
+            older |= _ids_of(other)
+        if ids <= older and older:
+            record['_is_replay'] = True
+            continue
+        return record
+
+    return loaded[0][1] if loaded else None
+
+
+def _load_run(dirn, stamp, files):
+    """One run's record, with phase-grouped job ids where recoverable."""
+    record = None
+    jobs_file = files.get('jobs_file')
+    if jobs_file:
+        try:
+            with open(os.path.join(dirn, jobs_file), 'r',
+                      encoding='utf-8') as fh:
+                record = _json.load(fh)
+            record['_path'] = os.path.join(dirn, jobs_file)
+        except Exception:
+            record = None
+
+    raw_file = files.get('raw_file')
+    raw_path_full = os.path.join(dirn, raw_file) if raw_file else None
+    phases = []
+    if raw_path_full:
+        try:
+            phases = [p for p in job_ids_from_raw(raw_path_full) if p]
+        except Exception:
+            phases = []
+
+    if record is None:
+        # Raw-only run: no spec list, so the caller cannot rebuild the plan.
+        # Still worth returning, so the UI can say WHICH run it cannot
+        # replay rather than silently reaching for an older one.
+        if not phases:
+            return None
+        return {'_path': raw_path_full, '_stamp': stamp, 'specs': [],
+                'jobs': {str(i): ids for i, ids in enumerate(phases)},
+                '_raw_path': raw_path_full}
+
+    record['_stamp'] = stamp
+    record['_raw_path'] = raw_path_full
+    # A record written before the phased runner recorded only one group; the
+    # raw dump knows better, so prefer its phase split when it has more.
+    recorded = [v for v in (record.get('jobs') or {}).values() if v]
+    if len(phases) > len(recorded):
+        record['jobs'] = {str(i): ids for i, ids in enumerate(phases)}
+        record['_phases_from_raw'] = True
+    return record
 
 
 _MAX_DUMP_ITEMS = 1000
+
+
+def notices_path(backend_name, when):
+    return os.path.join(_measured_dir(backend_name),
+                        f'{_MEASURED_PREFIX}{_stamp_for(when)}_notices.json')
+
+
+def calibration_check_path(backend_name, when):
+    return os.path.join(_measured_dir(backend_name),
+                        f'{_MEASURED_PREFIX}{_stamp_for(when)}_calcheck.json')
+
+
+def save_calibration_check(backend_name, when, table):
+    """Persist the verdict table beside the run's other artifacts."""
+    return _write_json(calibration_check_path(backend_name, when),
+                       {'when': when,
+                        'rows': [{**r, 'edge': list(r['edge'])}
+                                 for r in (table or {}).get('rows', [])],
+                        'ratio_parallel': (table or {}).get('ratio_parallel'),
+                        'ratio_sequential': (table or {}).get(
+                            'ratio_sequential'),
+                        'verdict': (table or {}).get('verdict')})
+
+
+def save_attempt_notices(backend_name, when, notices):
+    """Persist an attempt's notices, whatever the outcome.
+
+    Separate from the epoch file because the attempts that most need
+    explaining are the ones that produce no epoch to attach notices to.
+    """
+    return _write_json(notices_path(backend_name, when),
+                       {'when': when, 'notices': [str(n) for n in
+                                                  (notices or [])]})
 
 
 def dump_raw_results(expdata_list):
@@ -2218,10 +2763,7 @@ def _dump_one(expdata, depth=0):
         node['errors'] = str(errors) if errors else None
     except Exception:
         pass
-    try:
-        raw = expdata.analysis_results()
-    except Exception:
-        raw = None
+    raw = _safe_analysis_results(expdata)
     for item in _normalise_results(raw):
         node['results'].append({
             'name': str(getattr(item, 'name', '') or ''),
@@ -2257,6 +2799,22 @@ def _dump_value(value):
         return str(value)[:500]
     except Exception:
         return '<unrepresentable>'
+
+
+def reanalysis_raw_path(backend_name, when):
+    return os.path.join(_measured_dir(backend_name),
+                        f'{_MEASURED_PREFIX}{_stamp_for(when)}_rean.json')
+
+
+def save_reanalysis_raw(backend_name, when, expdata_list):
+    """Dump a REANALYSIS separately from a submission.
+
+    A reanalysis executes nothing; its dump describes jobs that some earlier
+    run submitted. Writing it as `_raw.json` made it look like the newest
+    run, so the replay target became an artefact of the previous replay.
+    """
+    return _write_json(reanalysis_raw_path(backend_name, when),
+                       dump_raw_results(expdata_list))
 
 
 def save_raw_results(backend_name, when, expdata_list):
@@ -2319,46 +2877,276 @@ def diagnose_raw(path_or_dump):
 
 # ── Reanalysis from job ids (zero QPU) ──────────────────────────────
 
+def job_ids_from_raw(path_or_dump):
+    """Job ids per phase, recovered from a raw dump.
+
+    Needed because `_run_phased` did not call the job-id callback until this
+    version, so the 20 Sept 13:08 run left no `_jobs.json` — but the raw dump
+    records `job_ids` on every node, so the run is still recoverable.
+    Returns a list of lists, one per top-level experiment (phase).
+    """
+    dump = path_or_dump
+    if isinstance(path_or_dump, str):
+        with open(path_or_dump, 'r', encoding='utf-8') as fh:
+            dump = _json.load(fh)
+
+    def _ids(node):
+        out = list(node.get('job_ids') or [])
+        for child in node.get('children') or []:
+            out.extend(_ids(child))
+        return out
+
+    phases = []
+    for experiment in (dump or {}).get('experiments') or []:
+        seen, ordered = set(), []
+        for jid in _ids(experiment):
+            if jid not in seen:
+                seen.add(jid)
+                ordered.append(jid)
+        phases.append(ordered)
+    return phases
+
+
+def _initialize_container(experiment, backend, notices=None):
+    """Build the ExperimentData the way `BaseExperiment.run()` does.
+
+    A composite experiment's results do not live in one flat container: the
+    analysis calls `CompositeAnalysis._component_experiment_data`, which walks
+    per-component CHILD containers and the composite metadata that names them.
+    `run()` creates all of that up front via
+    `BaseExperiment._initialize_experiment_data()`, before a single circuit is
+    submitted.
+
+    Reanalysis used to skip that and construct a bare
+    `ExperimentData(experiment=batch)`, which allocates no children and no
+    component metadata — so the analysis raised
+
+        AnalysisError: Unable to extract component child experiment data
+
+    `_initialize_experiment_data` is private but has been the stable entry
+    point for this across versions; the public constructor is kept as a
+    fallback, and a notice records when the composite metadata still looks
+    absent so the next failure is legible rather than cryptic.
+    """
+    notices = notices if notices is not None else []
+    try:
+        experiment.backend = backend
+    except Exception:
+        pass
+
+    expdata = None
+    initializer = getattr(experiment, '_initialize_experiment_data', None)
+    if callable(initializer):
+        try:
+            expdata = initializer()
+        except Exception as exc:              # noqa: BLE001 - fall back
+            notices.append(f'_initialize_experiment_data failed ({exc}); '
+                           f'falling back to a bare container')
+    if expdata is None:
+        from qiskit_experiments.framework import ExperimentData
+        expdata = ExperimentData(experiment=experiment, backend=backend)
+
+    missing = _missing_composite_metadata(expdata, experiment)
+    if missing:
+        notices.append(
+            f'the reanalysis container is missing composite metadata '
+            f'({", ".join(missing)}); component results may not be '
+            f'extractable in this qiskit-experiments version')
+    return expdata
+
+
+#: Keys `CompositeAnalysis` uses to locate a component's child container. The
+#: name has moved between versions, so presence of ANY of them is enough.
+_COMPOSITE_METADATA_KEYS = ('component_child_index', 'component_types',
+                            'component_metadata')
+
+
+def _missing_composite_metadata(expdata, experiment):
+    """Diagnostic: what a composite container should carry but does not.
+
+    Not a hard check — the exact keys differ by version, and this module is
+    written against several. It exists so that if the container is wrong
+    again the notice says which piece was absent instead of surfacing a bare
+    AnalysisError from deep inside the library.
+    """
+    if not getattr(experiment, '_experiments', None):
+        return []                             # not composite; nothing to carry
+    try:
+        metadata = dict(expdata.metadata or {})
+    except Exception:
+        return ['metadata unreadable']
+    # Only the METADATA is required at initialisation. qiskit-experiments
+    # 0.10 allocates the child containers later, during add_jobs/analysis, so
+    # demanding them here produced a false alarm on runs that then worked.
+    if any(key in metadata for key in _COMPOSITE_METADATA_KEYS):
+        return []
+    return ['/'.join(_COMPOSITE_METADATA_KEYS)]
+
+
+def plan_for_replay(record, backend_name=None, n_qubits=None,
+                    coupling_edges=None):
+    """The plan to replay, and how it was obtained.
+
+    Returns `(plan, how)` where `how` is 'record' (exact, from the saved spec
+    list) or 'reconstructed' (a whole-chip Level 3 plan rebuilt from the
+    device, which is fully determined and so safe to recreate). Runs from
+    before the spec list was recorded are otherwise unreplayable, and a
+    Level 1 or 2 run cannot be reconstructed at all because its targets are
+    not recoverable from the dump.
+    """
+    plan = plan_from_record(record)
+    if plan is not None:
+        return plan, 'record'
+
+    level = None
+    if record:
+        level = record.get('level')
+    if level is None and backend_name and record and record.get('_stamp'):
+        epoch_file = os.path.join(_measured_dir(backend_name),
+                                  f"{_MEASURED_PREFIX}{record['_stamp']}.json")
+        try:
+            with open(epoch_file, 'r', encoding='utf-8') as fh:
+                level = _json.load(fh).get('level')
+        except Exception:
+            level = None
+
+    if int(level or 0) == LEVEL_FULL and n_qubits and coupling_edges:
+        return (build_plan(LEVEL_FULL, Targets([], []), n_qubits,
+                           coupling_edges), 'reconstructed')
+    return None, None
+
+
+def plan_from_record(record):
+    """Rebuild the exact `BenchmarkPlan` a saved submission used.
+
+    Reanalysis must replay the plan that PRODUCED the jobs, not whatever the
+    UI's target selector happens to point at now. Using the live selector
+    meant that reanalysing with the selector on "Current layout(s)" and
+    nothing placed built a plan with ZERO specs: no experiment to rebuild, no
+    result to attribute, no notice to emit — a silent (0, 0) that looked like
+    "the jobs contained nothing" when the jobs in fact contained everything.
+    """
+    if not record:
+        return None
+    specs = []
+    for raw_spec in record.get('specs') or []:
+        params = dict(raw_spec.get('params') or {})
+        if 'pairs' in params:
+            params['pairs'] = [tuple(p) for p in params['pairs']]
+        specs.append(ExperimentSpec(raw_spec['kind'],
+                                    tuple(raw_spec.get('qubits') or []),
+                                    params, int(raw_spec.get('layer') or 0)))
+    if not specs:
+        return None
+    targets_raw = record.get('targets') or {}
+    targets = Targets(list(targets_raw.get('qubits') or []),
+                      [tuple(e) for e in (targets_raw.get('edges') or [])])
+    return BenchmarkPlan(int(record.get('level') or LEVEL_FULL), specs,
+                         targets, int(record.get('shots') or DEFAULT_SHOTS))
+
+
 def reanalyze_from_jobs(plan, job_ids, backend, service=None):
     """Rebuild the analysis from already-executed jobs. Costs no QPU time.
 
-    qiskit-experiments runs its fits CLIENT-SIDE: the jobs hold the raw counts,
-    and analysis is pure post-processing. So a run whose results were parsed
-    badly — or lost to a crash between execution and folding — can be recovered
-    from its job ids alone, without re-executing anything on the device.
-    """
-    api = preload_runtime()
-    experiments = [_build_experiment(spec, api) for spec in plan.specs]
-    batch = api.BatchExperiment(experiments, flatten_results=False)
+    qiskit-experiments runs its fits CLIENT-SIDE: the jobs hold the raw
+    counts, and analysis is pure post-processing. So a run whose fits crashed
+    — as the 20 Sept two-qubit callbacks did — can be recovered from its job
+    ids alone, with the corrected options, without re-executing anything.
 
-    jobs = []
-    if service is not None:
-        for job_id in job_ids:
+    `job_ids` may be a flat list (single-phase) or a list of per-phase lists
+    (as `job_ids_from_raw` returns). The phased form matters: the plan is
+    submitted as non-2Q first then 2Q, so the 1Q EPG results must be
+    harvested from phase 1 and handed to phase 2's analyses exactly as the
+    live runner does — reanalysing both phases as one batch would reproduce
+    the un-subtracted numbers.
+    """
+    if not plan.specs:
+        raise BenchmarkRunError(
+            'the plan to reanalyse has no experiments — the original '
+            'submission record is missing or the wrong plan was rebuilt; '
+            'reanalysis needs the plan that produced the jobs')
+    api = preload_runtime()
+    phases_ids = (list(job_ids) if job_ids and isinstance(job_ids[0], (list, tuple))
+                  else [list(job_ids or [])])
+
+    has_2q = any(sp.kind in ('rb2q_layer', 'rb2q') for sp in plan.specs)
+    if has_2q and len(phases_ids) > 1:
+        groups = [[sp for sp in plan.specs
+                   if sp.kind not in ('rb2q_layer', 'rb2q')],
+                  [sp for sp in plan.specs
+                   if sp.kind in ('rb2q_layer', 'rb2q')]]
+    else:
+        groups = [list(plan.specs)]
+        phases_ids = [[j for ids in phases_ids for j in ids]]
+
+    index_of = {id(sp): i for i, sp in enumerate(plan.specs)}
+    context = {'epg_results': {}, 'epg_1q': {}, 'notices': []}
+    merged = {}
+    collected = []
+
+    for phase, (specs, ids) in enumerate(zip(groups, phases_ids)):
+        if not specs:
+            continue
+        experiments = [(sp, _build_experiment(sp, api, context))
+                       for sp in specs]
+        batch = api.BatchExperiment([e for _s, e in experiments],
+                                    flatten_results=False)
+        jobs = []
+        for job_id in ids:
+            if service is None:
+                jobs.append(job_id)
+                continue
             try:
                 jobs.append(service.job(job_id))
             except Exception as exc:          # noqa: BLE001 - reported
                 raise BenchmarkRunError(
-                    f'could not retrieve job {job_id}: {exc}', job_ids) from exc
-    else:
-        jobs = list(job_ids)
+                    f'could not retrieve job {job_id}: {exc}', ids) from exc
 
-    expdata = batch._initialize_experiment_data() \
-        if hasattr(batch, '_initialize_experiment_data') else None
-    if expdata is None:
-        from qiskit_experiments.framework import ExperimentData
-        expdata = ExperimentData(experiment=batch, backend=backend)
-    expdata.add_jobs(jobs)
-    batch.analysis.run(expdata, replace_results=True)
-    expdata.block_for_results()
-    _check_chunk_status(expdata, 0)
+        expdata = _initialize_container(batch, backend, context['notices'])
+        expdata.add_jobs(jobs)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore', category=RuntimeWarning,
+                module=r'.*qiskit_experiments.*rb_analysis.*')
+            batch.analysis.run(expdata, replace_results=True)
+            expdata.block_for_results()
 
-    merged = {}
-    for idx, _spec in enumerate(plan.specs):
-        try:
-            merged[idx] = list(_iter_analysis_results(expdata.child_data(idx)))
-        except Exception:
-            merged[idx] = None
-    return merged, expdata
+        failures = summarise_analysis_errors(collect_analysis_errors(expdata))
+        if failures:
+            context['notices'].append(f'phase {phase + 1}: {failures}')
+        collected.append(expdata)
+
+        for local_idx, (sp, _exp) in enumerate(experiments):
+            try:
+                merged[index_of[id(sp)]] = list(
+                    _iter_analysis_results(expdata.child_data(local_idx)))
+            except Exception:
+                merged[index_of[id(sp)]] = None
+
+        if phase == 0 and len(groups) > 1:
+            for sp in specs:
+                if sp.kind != 'rb1q':
+                    continue
+                entry = merged.get(index_of[id(sp)]) or []
+                harvest = harvest_epg_results(entry)
+                context['epg_results'].update(harvest.results)
+                context.setdefault('_epg_rejected', {}).update(
+                    harvest.rejected)
+                harvested = {}
+                _collect_rb1q(entry, sp, [], harvested)
+                context['epg_1q'].update(harvested.get('epg_1q', {}))
+
+    tally = epg_tally_notice(context)
+    if tally:
+        context['notices'].append(tally)
+    elif any(sp.kind in ('rb2q_layer', 'rb2q') for sp in plan.specs):
+        context['notices'].append(
+            '1Q EPG subtraction: applied to 0 pairs — this record has a '
+            'single job phase, so no 1Q RB results were available to '
+            'subtract; two-qubit errors will read high versus reported')
+    if context['notices']:
+        merged['_notices'] = list(context['notices'])
+    return merged, collected
 
 
 def latest_reusable_epoch(backend_name, ttl_minutes=REUSE_TTL_MINUTES,

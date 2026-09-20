@@ -314,8 +314,22 @@ def resolve_reference_props(state, data_mod) -> Optional[Tuple[dict, dict]]:
 # ─────────────────────────────────────────────────────────────────────
 
 def describe_current_view(state) -> str:
-    """What is the panel showing right now?"""
+    """What is the panel showing right now?
+
+    A measured epoch (from `iqmapper.benchmark`) is installed through the same
+    channel as the live calibration — it replaces `qubit_props_data` /
+    `gate_props_data` without changing `time_mode`. So the header read "Live
+    calibration" while the map was in fact showing benchmark measurements,
+    which is exactly the confusion the calibration label exists to prevent.
+    A measured epoch therefore takes precedence in this description, and says
+    whether the values are absolute or rescaled.
+    """
     backend = state.active_backend_name or '?'
+    epoch = getattr(state, '_measured_epoch', None)
+    if epoch is not None and state.time_mode == 'live':
+        mode = 'relative' if getattr(epoch, 'relative', False) else 'absolute'
+        return (f"Measured {epoch.time_label()} (L{epoch.level}, {mode}) "
+                f"— {backend}")
     if state.time_mode == 'live':
         return f"Live calibration — {backend}"
     if state.time_mode == 'point':

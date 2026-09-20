@@ -7,6 +7,7 @@ it is what makes a feature that spends QPU time safe to develop.
 """
 import json
 import os
+import types
 from types import SimpleNamespace
 
 import numpy as np
@@ -443,10 +444,13 @@ def test_run_plan_skips_the_runner_for_an_empty_plan():
     assert bench.run_plan(plan, _boom) == {}
 
 
+@pytest.mark.skipif(bench.have_qiskit_experiments(),
+                    reason='the extra IS installed here; nothing to miss')
 def test_make_runtime_runner_raises_the_documented_install_hint():
     """With no qiskit-experiments installed the hint names the extra.
 
-    Call-shape contracts live in tests/test_benchmark_runtime_contract.py.
+    Environment-dependent by nature, so it is skipped where the extra is
+    present. Call-shape contracts live in test_benchmark_runtime_contract.py.
     """
     with pytest.raises(ImportError, match=r'i-qmapper\[benchmark\]'):
         bench.make_runtime_runner(object())
@@ -1007,46 +1011,130 @@ def test_level2_now_includes_one_qubit_rb():
     assert bench.plan_circuit_count(plan) == 2 + 30 + 2 * 30
 
 
-def test_epg_options_are_set_from_the_one_qubit_results():
-    captured = {}
+class _EpgResult:
+    """A 1Q EPG analysis result: what the 2Q analysis actually consumes."""
 
-    class _Analysis:
-        def set_options(self, **kw):
-            captured.update(kw)
+    def __init__(self, qubit, gate='sx', value=7e-4):
+        self.name = f'EPG_{gate}'
+        self.value = value
+        self.device_components = [f'Q{qubit}']
 
-    experiment = SimpleNamespace(analysis=_Analysis())
+
+class _Analysis:
+    def __init__(self, reject=False):
+        self.options = {}
+        self.reject = reject
+
+    def set_options(self, **kw):
+        if self.reject:
+            raise TypeError('unexpected keyword epg_1_qubit')
+        self.options.update(kw)
+
+
+def test_epg_1_qubit_receives_result_objects_not_floats():
+    """Live failure: 'float' object has no attribute 'device_components'.
+
+    `rb_analysis._exclude_1q_error` reads `.device_components` off every
+    element of `epg_1_qubit`, so the 1Q RB ANALYSIS RESULTS must be forwarded,
+    not their values. Passing floats made every 2Q callback raise, and phase 2
+    of the 20 Sept 13:08 run produced no EPG_cz at all.
+    """
+    analysis = _Analysis()
+    experiment = SimpleNamespace(analysis=analysis)
+    epg_results = {0: [_EpgResult(0, 'sx'), _EpgResult(0, 'x')],
+                   1: [_EpgResult(1, 'sx')]}
+
     notices = []
-    ok = bench.apply_epg_1q_options(experiment, [(0, 1)],
-                                    {0: 7e-4, 1: 8e-4}, {}, notices)
-    assert ok is True
-    assert 'epg_1_qubit' in captured
+    assert bench.apply_epg_1q_options(experiment, (0, 1), epg_results,
+                                      notices) is True
+    passed = analysis.options['epg_1_qubit']
+    assert len(passed) == 3
+    for item in passed:
+        assert not isinstance(item, float), 'floats are what broke the run'
+        assert hasattr(item, 'device_components')
+        assert hasattr(item, 'value')
     assert not notices
 
 
-def test_epg_options_fall_back_to_the_reported_error():
-    captured = {}
+def test_harvest_keeps_the_result_objects_per_qubit():
+    entry = [_EpgResult(0, 'sx'), _EpgResult(0, 'rz'), _EpgResult(3, 'x'),
+             SimpleNamespace(name='alpha', device_components=['Q0'],
+                             value=0.9)]
+    harvested = bench.harvest_epg_results(entry).results
+    assert set(harvested) == {0, 3}
+    assert len(harvested[0]) == 2
+    assert all(hasattr(r, 'device_components') for r in harvested[0])
+    assert all(not str(r.name).startswith('alpha')
+               for rs in harvested.values() for r in rs)
 
-    class _Analysis:
-        def set_options(self, **kw):
-            captured.update(kw)
 
+def test_a_pair_without_1q_results_skips_subtraction_with_a_notice():
+    """Fabricating a stand-in would risk repeating the live crash.
+
+    A wrong shape does not fail when the option is set — it fails inside the
+    fit callback, after the QPU time is spent. So a missing 1Q result means
+    no subtraction for that pair, said out loud.
+    """
+    analysis = _Analysis()
     notices = []
-    ok = bench.apply_epg_1q_options(SimpleNamespace(analysis=_Analysis()),
-                                    [(0, 1)], {0: 7e-4}, {1: 9e-4}, notices)
-    assert ok is True
-    assert any('1Q EPG unavailable' in n for n in notices), notices
-
-
-def test_an_unsupported_epg_option_is_a_notice_not_a_crash():
-    class _Analysis:
-        def set_options(self, **kw):
-            raise TypeError('unexpected keyword epg_1_qubit')
-
-    notices = []
-    ok = bench.apply_epg_1q_options(SimpleNamespace(analysis=_Analysis()),
-                                    [(0, 1)], {0: 7e-4, 1: 8e-4}, {}, notices)
+    ok = bench.apply_epg_1q_options(SimpleNamespace(analysis=analysis),
+                                    (0, 1), {0: [_EpgResult(0)]}, notices)
     assert ok is False
-    assert any('did not accept epg_1_qubit' in n for n in notices), notices
+    assert 'epg_1_qubit' not in analysis.options
+    # The per-pair chatter is gone; the run-level tally reports it instead,
+    # so a 352-edge run does not emit 352 near-identical notices.
+    context = {'_epg_tally': {'applied': 0, 'skipped': [(0, 1)]}}
+    text = bench.epg_tally_notice(context)
+    assert 'applied to 0 pairs' in text, text
+    assert 'skipped 1' in text and 'qubits 0, 1' in text
+
+
+def test_a_rejected_option_is_a_notice_not_a_crash():
+    notices = []
+    ok = bench.apply_epg_1q_options(
+        SimpleNamespace(analysis=_Analysis(reject=True)), (0, 1),
+        {0: [_EpgResult(0)], 1: [_EpgResult(1)]}, notices)
+    assert ok is False
+    assert any('rejected epg_1_qubit' in n for n in notices), notices
+
+
+# ── v3.1: analysis-callback failures must surface ──────────────────
+
+def test_analysis_errors_are_collected_from_a_done_experiment():
+    """A DONE job whose every callback raised must not look successful."""
+    boom = ("AttributeError: 'float' object has no attribute "
+            "'device_components'")
+
+    class _Child:
+        def status(self):
+            return SimpleNamespace(name='DONE')
+
+        def analysis_errors(self):
+            return boom
+
+        def errors(self):
+            return None
+
+        def child_data(self):
+            return []
+
+    class _Root(_Child):
+        def analysis_errors(self):
+            return None           # composites record it on the child that raised
+
+        def child_data(self):
+            return [_Child(), _Child(), _Child()]
+
+    errors = bench.collect_analysis_errors(_Root())
+    assert len(errors) == 3, errors
+    summary = bench.summarise_analysis_errors(errors)
+    assert summary.startswith('analysis failed:')
+    assert '3x' in summary
+    assert 'device_components' in summary
+
+
+def test_summarise_analysis_errors_is_empty_when_clean():
+    assert bench.summarise_analysis_errors([]) is None
 
 
 # ── v3.1 Part C: consistency and relative mode ─────────────────────
@@ -1121,3 +1209,451 @@ def test_relative_label_says_so():
     epoch.relative = True
     assert bench.apply_measured_epoch(state, epoch) is True
     assert 'relative' in state.calibration_data_label
+
+
+def test_job_ids_are_recovered_per_phase_from_a_raw_dump():
+    """The 20 Sept 13:08 run left no _jobs.json, but the raw dump has the ids.
+
+    `_run_phased` did not call the job-id callback until v3.1, so the record
+    was never written — the dump is what makes that run recoverable.
+    """
+    dump = {'experiments': [
+        {'job_ids': ['phase1-job'], 'children': [{'job_ids': ['phase1-job']}]},
+        {'job_ids': [], 'children': [{'job_ids': ['phase2-job']}]},
+    ]}
+    assert bench.job_ids_from_raw(dump) == [['phase1-job'], ['phase2-job']]
+
+
+def test_phased_runner_records_job_ids():
+    """Without this the run cannot be reanalysed, which is how today's was
+    nearly lost."""
+    recorded = []
+
+    class _Data:
+        job_ids = ['j-abc']
+
+        def status(self):
+            return SimpleNamespace(name='DONE')
+
+        def errors(self):
+            return None
+
+        def analysis_errors(self):
+            return None
+
+        def block_for_results(self):
+            pass
+
+        def child_data(self, idx=None):
+            return SimpleNamespace(analysis_results=lambda *a, **k: [])
+
+    class _Batch:
+        def __init__(self, experiments, **kw):
+            pass
+
+        def run(self, **kw):
+            return _Data()
+
+    class _Exp:
+        def __init__(self, *a, **k):
+            self.analysis = SimpleNamespace(set_options=lambda **k: None)
+
+    class _Session:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    api = SimpleNamespace(Session=_Session, SamplerV2=lambda mode=None: None,
+                          BatchExperiment=_Batch, ParallelExperiment=_Exp,
+                          LocalReadoutError=_Exp, StandardRB=_Exp, T1=_Exp,
+                          T2Hahn=_Exp)
+    bench._reset_runtime_cache()
+    try:
+        import iqmapper.benchmark as mod
+        original = mod._runtime_api
+        mod._runtime_api = lambda: api
+        try:
+            coupling = _line_edges(8)
+            plan = bench.build_plan(2, bench.Targets([0, 1, 2, 3],
+                                                     coupling[:3]), 8, coupling)
+            runner = bench.make_runtime_runner(
+                object(),
+                on_jobs=lambda i, ids, st: recorded.append((i, list(ids), st)))
+            runner(plan)
+        finally:
+            mod._runtime_api = original
+    finally:
+        bench._reset_runtime_cache()
+
+    assert recorded, 'the phased runner recorded no job ids'
+    assert {r[0] for r in recorded} == {0, 1}, 'both phases must be recorded'
+    assert all('j-abc' in r[1] for r in recorded)
+
+
+# ── v3.1: the reanalysis container must look like run()'s ──────────
+
+def test_container_is_built_through_initialize_experiment_data():
+    """Live failure: 'Unable to extract component child experiment data'.
+
+    `BaseExperiment.run()` creates the composite container (children +
+    component metadata) BEFORE submitting. Reanalysis built a bare
+    ExperimentData instead, so `CompositeAnalysis._component_experiment_data`
+    had nothing to walk.
+    """
+    calls = []
+
+    class _Container:
+        metadata = {'component_child_index': [0, 1]}
+
+        def child_data(self):
+            return [object(), object()]
+
+    class _Composite:
+        _experiments = [object(), object()]
+
+        def _initialize_experiment_data(self):
+            calls.append('init')
+            return _Container()
+
+    notices = []
+    experiment = _Composite()
+    out = bench._initialize_container(experiment, backend='bk',
+                                      notices=notices)
+    assert calls == ['init'], 'run()-style initialiser was not used'
+    assert isinstance(out, _Container)
+    assert experiment.backend == 'bk'
+    assert not notices
+
+
+def test_a_container_without_composite_metadata_is_flagged():
+    """If the container is wrong again, say which piece is missing."""
+    class _Bare:
+        metadata = {}
+
+        def child_data(self):
+            return []
+
+    class _Composite:
+        _experiments = [object(), object()]
+
+        def _initialize_experiment_data(self):
+            return _Bare()
+
+    notices = []
+    bench._initialize_container(_Composite(), 'bk', notices)
+    assert any('missing composite metadata' in n for n in notices), notices
+    assert any('component_child_index' in n for n in notices)
+
+
+def test_children_allocated_later_is_not_an_error():
+    """qiskit-experiments 0.10 creates child containers during add_jobs /
+    analysis, not at initialisation, so an empty child list at init is
+    normal — flagging it produced a false alarm on runs that then worked."""
+    class _Partial:
+        metadata = {'component_child_index': [0]}
+
+        def child_data(self):
+            return []
+
+    class _Composite:
+        _experiments = [object()]
+
+        def _initialize_experiment_data(self):
+            return _Partial()
+
+    notices = []
+    bench._initialize_container(_Composite(), 'bk', notices)
+    assert notices == [], notices
+
+
+def test_a_non_composite_experiment_needs_no_composite_metadata():
+    class _Plain:
+        metadata = {}
+
+        def child_data(self):
+            return []
+
+    class _Single:
+        _experiments = None
+
+        def _initialize_experiment_data(self):
+            return _Plain()
+
+    notices = []
+    bench._initialize_container(_Single(), 'bk', notices)
+    assert notices == []
+
+
+def test_the_public_constructor_is_the_fallback(monkeypatch):
+    """An initialiser that raises must not abort the reanalysis."""
+    class _Composite:
+        _experiments = [object()]
+
+        def _initialize_experiment_data(self):
+            raise RuntimeError('private API moved')
+
+    made = {}
+
+    class _FakeED:
+        def __init__(self, experiment=None, backend=None):
+            made['experiment'] = experiment
+            made['backend'] = backend
+            self.metadata = {'component_child_index': [0]}
+
+        def child_data(self):
+            return [object()]
+
+    import sys
+    module = types.ModuleType('qiskit_experiments.framework')
+    module.ExperimentData = _FakeED
+    pkg = types.ModuleType('qiskit_experiments')
+    monkeypatch.setitem(sys.modules, 'qiskit_experiments', pkg)
+    monkeypatch.setitem(sys.modules, 'qiskit_experiments.framework', module)
+
+    notices = []
+    out = bench._initialize_container(_Composite(), 'bk', notices)
+    assert isinstance(out, _FakeED)
+    assert made['backend'] == 'bk'
+    assert any('private API moved' in n for n in notices), notices
+
+
+# ── v3.3: the Calibration header must name a measured epoch ────────
+
+def test_describe_current_view_names_the_measured_epoch():
+    """A measured epoch replaces the arrays without changing time_mode, so
+    the header read "Live calibration" while the map showed benchmark data."""
+    from iqmapper.ui.time_panel import describe_current_view
+
+    state = _state(8)
+    state.time_mode = 'live'
+    assert describe_current_view(state) == 'Live calibration — ibm_test'
+
+    epoch = bench.MeasuredEpoch(
+        {'readout_error': np.full(8, 0.01)},
+        {'cz_error': np.full(7, 0.01)},
+        np.ones(8, dtype=bool), np.ones(7, dtype=bool),
+        3, 1_700_000_000.0)
+    bench.apply_measured_epoch(state, epoch)
+
+    text = describe_current_view(state)
+    assert text.startswith('Measured '), text
+    assert '(L3, absolute)' in text, text
+    assert 'ibm_test' in text
+    assert 'Live calibration' not in text
+
+    epoch.relative = True
+    assert '(L3, relative)' in describe_current_view(state)
+
+
+def test_describe_current_view_leaves_other_modes_alone():
+    """Only the live view is displaced; history/snapshot still describe
+    themselves."""
+    from iqmapper.ui.time_panel import describe_current_view
+
+    state = _state(8)
+    epoch = bench.MeasuredEpoch(
+        {'readout_error': np.full(8, 0.01)},
+        {'cz_error': np.full(7, 0.01)},
+        np.ones(8, dtype=bool), np.ones(7, dtype=bool), 1, 1.0)
+    bench.apply_measured_epoch(state, epoch)
+
+    state.time_mode = 'point'
+    state.point_timestamp = '2026-09-20T12:00:00Z'
+    assert describe_current_view(state).startswith('Snapshot:')
+
+
+def test_epg_tally_notice_reports_a_clean_run():
+    assert bench.epg_tally_notice(
+        {'_epg_tally': {'applied': 176, 'skipped': []}}) == \
+        '1Q EPG subtraction: applied to 176 pairs'
+    assert bench.epg_tally_notice({}) is None
+
+
+def test_epoch_round_trips_relative_consistency_and_extra(tmp_path,
+                                                           monkeypatch):
+    """A saved epoch must read back as what it IS.
+
+    Without this, a rescaled epoch reloaded with `relative=None` and no
+    `extra.epg_1q`, so nothing on disk recorded that the values had been
+    adjusted or that the 1Q EPGs had ever been measured.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    when = 1_700_000_100.0
+    epoch = bench.MeasuredEpoch(
+        {'readout_error': np.full(4, 0.02)}, {'cz_error': np.full(3, 0.004)},
+        np.ones(4, dtype=bool), np.ones(3, dtype=bool), 3, when,
+        ['a notice'], planned_count=(4, 3),
+        extra={'epg_1q': {0: 7e-4, 1: 8e-4}},
+        consistency={'cz_error': {'n': 3, 'ratio_of_medians': 2.8,
+                                  'top_degradations': [{'index': 1}]}},
+        relative=True)
+
+    assert bench.save_measured_epoch('ibm_test', epoch)
+    back = bench.load_measured_epoch('ibm_test', when)
+
+    assert back is not None
+    assert back.relative is True
+    assert back.planned_count == (4, 3)
+    assert back.extra.get('epg_1q') == {0: pytest.approx(7e-4),
+                                        1: pytest.approx(8e-4)}
+    assert back.consistency['cz_error']['ratio_of_medians'] == \
+        pytest.approx(2.8)
+    assert back.notices == ['a notice']
+
+
+def test_latest_run_skips_a_replay_dump(tmp_path, monkeypatch):
+    """A reanalysis dumped as a plain _raw.json must not become the target.
+
+    Its job ids belong to an older submission; replaying it would keep
+    resurrecting that older run — which is how the panel stayed pinned to
+    the 12:38 single-phase run.
+    """
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    dirn = bench._measured_dir('ibm_test')
+
+    def _dump(stamp, ids):
+        with open(os.path.join(dirn, f'measured_{stamp}_raw.json'), 'w',
+                  encoding='utf-8') as fh:
+            json.dump({'experiments': [{'job_ids': ids, 'children': []}]}, fh)
+
+    _dump('20260920T130000', ['real-a', 'real-b'])   # the genuine run
+    _dump('20260920T140000', ['real-a'])             # a replay of it
+
+    record = bench.latest_job_record('ibm_test')
+    assert record['_stamp'] == '20260920T130000', record['_stamp']
+    assert sorted(j for ids in record['jobs'].values() for j in ids) == \
+        ['real-a', 'real-b']
+
+
+def test_reanalysis_dumps_do_not_shadow_submissions(tmp_path, monkeypatch):
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    dirn = bench._measured_dir('ibm_test')
+    with open(os.path.join(dirn, 'measured_20260920T130000_raw.json'), 'w',
+              encoding='utf-8') as fh:
+        json.dump({'experiments': [{'job_ids': ['sub'], 'children': []}]}, fh)
+    with open(os.path.join(dirn, 'measured_20260920T150000_rean.json'), 'w',
+              encoding='utf-8') as fh:
+        json.dump({'experiments': [{'job_ids': ['sub'], 'children': []}]}, fh)
+
+    record = bench.latest_job_record('ibm_test')
+    assert record['_stamp'] == '20260920T130000'
+
+
+# ── v3.5: implausible fits must never reach the 2Q analysis ────────
+
+def test_an_implausible_1q_epg_is_not_forwarded_and_is_named():
+    """Live crash: a failed 1Q fit returned EPG 0.71, which made
+    `rb_analysis._exclude_1q_error` evaluate (1 - 2*epg)**n on a negative
+    base and raise "The uncertainties module does not handle complex
+    results", killing every 2Q callback of the calibration check.
+    """
+    entry = [_EpgResult(0, 'sx', 7e-4), _EpgResult(0, 'x', 6e-4),
+             _EpgResult(17, 'sx', 0.71), _EpgResult(17, 'x', 5e-4)]
+    harvest = bench.harvest_epg_results(entry)
+
+    assert set(harvest.results) == {0}, 'the bad qubit was still forwarded'
+    assert 17 in harvest.rejected
+    assert harvest.rejected[17] == pytest.approx(0.71)
+
+    # A pair touching q17 is skipped, and the tally names it with its value.
+    analysis = _Analysis()
+    notices = []
+    assert bench.apply_epg_1q_options(SimpleNamespace(analysis=analysis),
+                                      (0, 17), harvest.results,
+                                      notices) is False
+    assert 'epg_1_qubit' not in analysis.options
+
+    context = {'_epg_tally': {'applied': 174, 'skipped': [(0, 17), (17, 18)]},
+               '_epg_rejected': harvest.rejected}
+    text = bench.epg_tally_notice(context)
+    assert 'applied to 174 pairs' in text, text
+    assert 'skipped 2' in text, text
+    assert 'q17: 1Q EPG 0.71 implausible' in text, text
+
+
+def test_a_nan_1q_epg_is_rejected_as_a_failed_fit():
+    harvest = bench.harvest_epg_results(
+        [_EpgResult(3, 'sx', float('nan'))])
+    assert harvest.results == {}
+    assert 3 in harvest.rejected
+    text = bench.epg_tally_notice(
+        {'_epg_tally': {'applied': 0, 'skipped': [(3, 4)]},
+         '_epg_rejected': harvest.rejected})
+    assert 'q3: 1Q EPG fit failed' in text, text
+
+
+def test_plausible_epgs_pass_through_untouched():
+    harvest = bench.harvest_epg_results(
+        [_EpgResult(1, 'sx', 6.9e-4), _EpgResult(1, 'x', 7.1e-4)])
+    assert set(harvest.results) == {1}
+    assert len(harvest.results[1]) == 2
+    assert harvest.rejected == {}
+
+
+def test_extra_epg_1q_only_records_plausible_values():
+    """An implausible EPG must not be persisted as if it were measured."""
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(3, bench.Targets([], []), 8, coupling)
+    raw = {}
+    for idx, spec in enumerate(plan.specs):
+        if spec.kind == 'rb1q':
+            raw[idx] = [_EpgResult(0, 'sx', 7e-4), _EpgResult(5, 'sx', 0.9)]
+        else:
+            raw[idx] = []
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert set(epoch.extra.get('epg_1q') or {}) == {0}
+    assert any('implausible EPG' in n and 'q5' in n for n in epoch.notices), \
+        epoch.notices
+
+
+# ── v3.5: bounds on the other measured kinds ───────────────────────
+
+def test_an_implausible_readout_error_falls_back_with_a_notice():
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(1, bench.Targets([0, 1], []), 8, coupling)
+    # q1's matrix implies an error of 0.9 — worse than chance.
+    raw = {0: [_readout_result([0, 1], {0: [[0.99, 0.01], [0.01, 0.99]],
+                                        1: [[0.1, 0.9], [0.9, 0.1]]})]}
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    assert epoch.qubit_props['readout_error'][0] == pytest.approx(0.01)
+    assert epoch.qubit_props['readout_error'][1] == pytest.approx(0.05), \
+        'the implausible value was written instead of the reported one'
+    assert epoch.measured_qubit_mask[0] and not epoch.measured_qubit_mask[1]
+    assert any('implausible readout' in n for n in epoch.notices), \
+        epoch.notices
+
+
+@pytest.mark.parametrize('seconds,ok', [
+    (1.5e-4, True),        # 150 us — normal
+    (-1.0, False),         # negative
+    (0.02, False),         # 20 ms — a runaway fit
+    (float('nan'), False),
+])
+def test_coherence_bounds(seconds, ok):
+    qp, gp = _reported()
+    coupling = _line_edges(8)
+    plan = bench.build_plan(3, bench.Targets([], []), 8, coupling)
+    raw = {}
+    for idx, spec in enumerate(plan.specs):
+        raw[idx] = ([SimpleNamespace(name='T1', device_components=['Q2'],
+                                     value=seconds)]
+                    if spec.kind == 't1' else [])
+    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+
+    if ok:
+        assert epoch.qubit_props['t1'][2] == pytest.approx(seconds * 1e6)
+        assert epoch.measured_qubit_mask[2]
+    else:
+        assert epoch.qubit_props['t1'][2] == pytest.approx(100.0), 'reported'
+        assert not epoch.measured_qubit_mask[2]
+        assert any('implausible t1' in n.lower() or 'T1' in n
+                   for n in epoch.notices), epoch.notices

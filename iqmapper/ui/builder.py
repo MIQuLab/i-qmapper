@@ -389,10 +389,21 @@ class MapperUIBuilder:
             btn_bench_run=self.btn_bench_run,
             lbl_bench_status=self.lbl_bench_status,
             chk_bench_absolute=self.chk_bench_absolute,
+            # Read-only from the panel except for the three writes the
+            # "show on map" link performs (enable the filter, set the gate
+            # max, select the 2Q property).
+            chk_err_threshold=self.chk_err_threshold,
+            txt_g_thr_max=self.txt_g_thr_max,
+            dd_gate_prop=self.dd_gate_prop,
             lbl_bench_consistency=self.lbl_bench_consistency,
+            lbl_bench_details=self.lbl_bench_details,
+            acc_bench_details=self.acc_bench_details,
+            btn_bench_show_on_map=self.btn_bench_show_on_map,
             lbl_bench_reuse=self.lbl_bench_reuse,
             btn_bench_reuse=self.btn_bench_reuse,
             btn_bench_reanalyze=self.btn_bench_reanalyze,
+            btn_bench_calcheck=self.btn_bench_calcheck,
+            lbl_bench_calcheck=self.lbl_bench_calcheck,
             lbl_lucj_notices=self.lbl_lucj_notices,
             lucj_all_layouts=self._lucj_all_layouts,
             rescore_cell=self._bench_rescore,
@@ -1384,6 +1395,14 @@ class MapperUIBuilder:
         self.btn_bench_run = Button(
             description='📡 Run benchmark',
             button_style='warning', layout=W, disabled=True)
+        self.btn_bench_calcheck = Button(
+            description='🔬 Calibration check',
+            button_style='info', layout=W, disabled=True,
+            tooltip='Measure a few edges twice — all pairs together, then one '
+                    'at a time — to tell an estimator bias (both arms offset) '
+                    'from crosstalk (only the parallel arm offset). Does not '
+                    'change the calibration in use.')
+        self.lbl_bench_calcheck = HTML("")
         self.lbl_bench_reuse = HTML("")
         self.btn_bench_reuse = Button(
             description='Reuse', button_style='info', disabled=True,
@@ -1405,6 +1424,21 @@ class MapperUIBuilder:
                     'relative differences are applied. On: use the raw '
                     'measured numbers.')
         self.lbl_bench_consistency = HTML("")
+        self.lbl_bench_details = HTML("")
+        _map_btn_layout = Layout(width='220px', margin='4px 0px')
+        _map_btn_layout.display = 'none'      # shown only when edges qualify
+        self.btn_bench_show_on_map = Button(
+            description='show on map', button_style='',
+            layout=_map_btn_layout,
+            tooltip="Filter the Error tab to the edges more than twice "
+                    "IBM's reported median, so the count above becomes "
+                    "visible on the device map.")
+        self.acc_bench_details = Accordion(
+            children=[VBox([self.lbl_bench_details,
+                            self.btn_bench_show_on_map])],
+            layout=W)
+        self.acc_bench_details.set_title(0, 'Details')
+        self.acc_bench_details.selected_index = None   # collapsed by default
         self.lbl_bench_status = HTML("")
         self.bench_box = VBox([
             HTML("<div style='font-size:14px;color:#6c757d;"
@@ -1419,7 +1453,10 @@ class MapperUIBuilder:
             self.chk_bench_ack,
             self.chk_bench_absolute,
             self.btn_bench_run,
+            self.btn_bench_calcheck,
             self.lbl_bench_consistency,
+            self.acc_bench_details,
+            self.lbl_bench_calcheck,
             HBox([self.lbl_bench_reuse, self.btn_bench_reuse,
                   self.btn_bench_reanalyze],
                  layout=Layout(align_items='center')),

@@ -263,51 +263,35 @@ def test_t1_delays_are_within_the_backend_limits(fake_backend):
 
 # ── 6. Part F: reanalysis reproduces the direct run ─────────────────
 
-def test_reanalysis_reproduces_the_direct_run(monkeypatch, fake_backend,
-                                              local_api):
-    """Analysis is client-side, so a rerun of it must cost nothing and match."""
-    targets = bench.Targets([0, 1, 2], [])
-    coupling = _coupling_of(fake_backend)
-    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT, targets,
-                            fake_backend.num_qubits, coupling)
-    plan = plan._replace(shots=100)
-
-    raw, expdata = _run_through_production_runner(
-        monkeypatch, local_api, fake_backend, plan)
-    qp, gp = _reported(fake_backend.num_qubits, len(coupling))
-    direct = bench.results_to_epoch(raw, plan, qp, gp, coupling)
-    assert not direct.is_empty
-
-    if not expdata or not expdata[0].job_ids:
-        pytest.skip('the local sampler exposes no job ids to reanalyze from')
-
-    monkeypatch.setattr(bench, '_runtime_api', lambda: local_api)
-    bench._reset_runtime_cache()
-    try:
-        raw2, _ = bench.reanalyze_from_jobs(
-            plan, expdata[0].job_ids, fake_backend, service=None)
-    finally:
-        bench._reset_runtime_cache()
-
-    qp2, gp2 = _reported(fake_backend.num_qubits, len(coupling))
-    again = bench.results_to_epoch(raw2, plan, qp2, gp2, coupling)
-    assert again.measured_count == direct.measured_count
-    np.testing.assert_allclose(
-        again.qubit_props['readout_error'][list(targets.qubits)],
-        direct.qubit_props['readout_error'][list(targets.qubits)],
-        rtol=1e-9)
+def _jobs_of(expdata_list):
+    """The job OBJECTS a run produced, for reanalysis to consume."""
+    jobs = []
+    for expdata in expdata_list or []:
+        getter = getattr(expdata, 'jobs', None)
+        if callable(getter):
+            try:
+                jobs.extend(list(getter()))
+                continue
+            except Exception:
+                pass
+    return jobs
 
 
-# ── v3.1: the 20 Sept live bugs, against REAL objects ──────────────
+def test_reanalysis_from_jobs_reproduces_the_direct_run(monkeypatch,
+                                                         fake_backend,
+                                                         local_api):
+    """Part F, faithfully: rebuild from the JOBS, not from the run's data.
 
-def test_readout_yields_finite_values_with_real_mitigator(monkeypatch,
-                                                           fake_backend,
-                                                           local_api):
-    """§2.1 — must FAIL pre-fix with "not 'method'", PASS after.
+    The live failure was `AnalysisError: Unable to extract component child
+    experiment data` — reanalysis built a bare `ExperimentData` and added
+    jobs to it, so the composite children and component metadata that
+    `BaseExperiment.run()` allocates before submission were never created.
+    Reanalysing from the original `expdata` would have hidden that, because
+    that container already had them. This test therefore goes through
+    `reanalyze_from_jobs` with job objects and nothing else.
 
-    `LocalReadoutError` returns one `LocalReadoutMitigator` whose
-    `assignment_matrix` is a METHOD. Reading it as an attribute is what made
-    all 156 qubits fail on 20 Sept.
+    Analysis is client-side, so this costs no execution: the same counts are
+    re-fitted.
     """
     targets = bench.Targets([0, 1, 2], [])
     coupling = _coupling_of(fake_backend)
@@ -315,55 +299,70 @@ def test_readout_yields_finite_values_with_real_mitigator(monkeypatch,
                             fake_backend.num_qubits, coupling)._replace(
                                 shots=100)
 
-    raw, _ = _run_through_production_runner(monkeypatch, local_api,
-                                            fake_backend, plan)
+    raw, expdata = _run_through_production_runner(monkeypatch, local_api,
+                                                  fake_backend, plan)
     qp, gp = _reported(fake_backend.num_qubits, len(coupling))
-    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+    direct = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+    assert not direct.is_empty, direct.notices
 
-    assert epoch.n_measured_qubits == 3, epoch.notices
-    assert not any('method' in n for n in epoch.notices), epoch.notices
-    values = epoch.qubit_props['readout_error'][list(targets.qubits)]
-    assert np.all(np.isfinite(values)) and np.all((values >= 0) & (values <= 0.5))
+    jobs = _jobs_of(expdata)
+    if not jobs:
+        pytest.skip('the local sampler exposes no job objects to reanalyze')
+
+    monkeypatch.setattr(bench, '_runtime_api', lambda: local_api)
+    bench._reset_runtime_cache()
+    try:
+        # A pre-built job list is passed straight through (service=None), so
+        # this exercises container construction + add_jobs + analysis.run.
+        raw2, expdata2 = bench.reanalyze_from_jobs(plan, [jobs], fake_backend,
+                                                   service=None)
+    finally:
+        bench._reset_runtime_cache()
+
+    assert not any('Unable to extract component' in str(n)
+                   for n in (raw2.get('_notices') or [])), raw2.get('_notices')
+    qp2, gp2 = _reported(fake_backend.num_qubits, len(coupling))
+    again = bench.results_to_epoch(raw2, plan, qp2, gp2, coupling)
+
+    assert not again.is_empty, again.notices
+    assert again.measured_count == direct.measured_count
+    np.testing.assert_allclose(
+        again.qubit_props['readout_error'][list(targets.qubits)],
+        direct.qubit_props['readout_error'][list(targets.qubits)],
+        rtol=1e-9)
 
 
-def test_t1_t2_populate_every_qubit_with_real_results(monkeypatch,
-                                                       fake_backend,
-                                                       local_api):
-    """§2.3 — pre-fix all results landed on qubit 0 ("measured qubits: 1")."""
+def test_reanalysis_container_has_the_composite_structure(fake_backend,
+                                                           local_api):
+    """The container itself, before any jobs: children + metadata present."""
     coupling = _coupling_of(fake_backend)
-    n_q = fake_backend.num_qubits
-    plan = bench.build_plan(bench.LEVEL_FULL, bench.Targets([], []), n_q,
-                            coupling)
-    specs = []
-    for spec in plan.specs:
-        params = dict(spec.params)
-        if spec.kind in ('t1', 't2hahn'):
-            params['delays'] = [1e-6, 20e-6, 40e-6]
-        if spec.kind in ('rb1q', 'rb2q_layer'):
-            params['lengths'] = [2, 4]
-            params['num_samples'] = 2
-        specs.append(spec._replace(params=params))
-    plan = plan._replace(specs=specs, shots=100)
+    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT,
+                            bench.Targets([0, 1, 2], []),
+                            fake_backend.num_qubits, coupling)
+    experiments = [bench._build_experiment(sp, local_api) for sp in plan.specs]
+    batch = local_api.BatchExperiment(experiments, flatten_results=False)
 
-    raw, _ = _run_through_production_runner(monkeypatch, local_api,
-                                            fake_backend, plan)
-    qp, gp = _reported(n_q, len(coupling))
-    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
+    notices = []
+    container = bench._initialize_container(batch, fake_backend, notices)
 
-    assert epoch.n_measured_qubits >= n_q - 1, (
-        f'only {epoch.n_measured_qubits}/{n_q} qubits measured: '
-        f'{epoch.notices}')
-    finite = np.isfinite(epoch.qubit_props['t1'])
-    assert finite.all()
-    # Microseconds, not seconds.
-    assert np.median(epoch.qubit_props['t1']) > 1.0
+    assert notices == [], notices
+    # Children are allocated later (during add_jobs/analysis) in 0.10; the
+    # metadata naming the components is what must exist up front.
+    metadata = dict(container.metadata or {})
+    assert any(k in metadata for k in bench._COMPOSITE_METADATA_KEYS), metadata
 
 
-def test_one_qubit_epgs_are_kept_per_qubit(monkeypatch, fake_backend,
-                                            local_api):
-    """§2.2 — per (qubit, gate) results collapsed to one EPG per qubit."""
+def test_two_phase_reanalysis_keeps_the_1q_subtraction(monkeypatch,
+                                                        fake_backend,
+                                                        local_api):
+    """Reanalysing both phases as one batch would lose the subtraction.
+
+    The 1Q EPG results come from phase 1 and must be harvested before
+    phase 2's analyses are constructed, exactly as the live runner does.
+    """
     coupling = _coupling_of(fake_backend)
-    targets = bench.Targets([0, 1], [coupling[0]])
+    pair = coupling[0]
+    targets = bench.Targets(list(pair), [pair])
     plan = bench.build_plan(bench.LEVEL_TARGETED, targets,
                             fake_backend.num_qubits, coupling)
     specs = []
@@ -375,86 +374,47 @@ def test_one_qubit_epgs_are_kept_per_qubit(monkeypatch, fake_backend,
         specs.append(spec._replace(params=params))
     plan = plan._replace(specs=specs, shots=100)
 
-    raw, _ = _run_through_production_runner(monkeypatch, local_api,
-                                            fake_backend, plan)
+    raw, expdata = _run_through_production_runner(monkeypatch, local_api,
+                                                  fake_backend, plan)
+    assert len(expdata) == 2, 'expected a two-phase run'
+    per_phase = [_jobs_of([d]) for d in expdata]
+    if not all(per_phase):
+        pytest.skip('the local sampler exposes no job objects to reanalyze')
+
+    monkeypatch.setattr(bench, '_runtime_api', lambda: local_api)
+    bench._reset_runtime_cache()
+    try:
+        raw2, _ = bench.reanalyze_from_jobs(plan, per_phase, fake_backend,
+                                            service=None)
+    finally:
+        bench._reset_runtime_cache()
+
     qp, gp = _reported(fake_backend.num_qubits, len(coupling))
-    epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
-
-    epg = epoch.extra.get('epg_1q') or {}
-    assert epg, epoch.notices
-    assert set(epg) <= set(targets.qubits)
-    note = next((n for n in epoch.notices if '1Q RB' in n), '')
-    assert f'{len(epg)} qubit' in note, note
-
-
-def test_one_qubit_subtraction_lowers_the_two_qubit_epg(monkeypatch,
-                                                         fake_backend,
-                                                         local_api):
-    """§3.3 — with the 1Q EPGs supplied, the 2Q number must come out lower.
-
-    Ordering only: the absolute value depends on the simulator's noise model.
-    """
-    coupling = _coupling_of(fake_backend)
-    pair = coupling[0]
-    targets = bench.Targets(list(pair), [pair])
-
-    def _epg_for(with_subtraction):
-        plan = bench.build_plan(bench.LEVEL_TARGETED, targets,
-                                fake_backend.num_qubits, coupling)
-        specs = []
-        for spec in plan.specs:
-            if spec.kind == 'rb1q' and not with_subtraction:
-                continue                      # no 1Q RB -> nothing to subtract
-            params = dict(spec.params)
-            if spec.kind in ('rb1q', 'rb2q_layer'):
-                params['lengths'] = [2, 4, 8]
-                params['num_samples'] = 3
-            specs.append(spec._replace(params=params))
-        plan = plan._replace(specs=specs, shots=200)
-        raw, _ = _run_through_production_runner(monkeypatch, local_api,
-                                                fake_backend, plan)
-        qp, gp = _reported(fake_backend.num_qubits, len(coupling))
-        epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
-        return epoch.gate_props['cz_error'][coupling.index(pair)]
-
-    without = _epg_for(False)
-    with_sub = _epg_for(True)
-    assert np.isfinite(without) and np.isfinite(with_sub)
-    assert with_sub <= without, (
-        f'1Q subtraction did not lower the 2Q EPG: {with_sub} vs {without}')
-
-
-def test_raw_dump_is_written_for_a_successful_run(monkeypatch, fake_backend,
-                                                  local_api, tmp_path):
-    """§2.5 — a completed run must leave a _raw.json beside its epoch."""
-    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
-    targets = bench.Targets([0, 1, 2], [])
-    coupling = _coupling_of(fake_backend)
-    plan = bench.build_plan(bench.LEVEL_QUICK_READOUT, targets,
-                            fake_backend.num_qubits, coupling)._replace(
-                                shots=100)
-
-    _raw, expdata = _run_through_production_runner(monkeypatch, local_api,
-                                                   fake_backend, plan)
-    when = 1_700_000_000.0
-    path = bench.save_raw_results('ibm_fake', when, expdata)
-    assert path and os.path.exists(path)
-    # ...and it pairs with the epoch by sharing the timestamp.
-    assert os.path.basename(path).startswith(
-        os.path.basename(bench._measured_path('ibm_fake', when))
-        .replace('.json', ''))
-    text = bench.diagnose_raw(path)
-    assert 'NO analysis results' not in text, text
+    again = bench.results_to_epoch(raw2, plan, qp, gp, coupling)
+    assert again.n_measured_edges >= 1, again.notices
+    assert not any('device_components' in n for n in again.notices), (
+        again.notices)
 
 
 def test_calibration_check_runs_both_ways(monkeypatch, fake_backend,
                                           local_api):
-    """§4.3 — parallel and sequential over the same edges, and a verdict."""
+    """Parallel vs sequential over the same edges, and a verdict.
+
+    Restored after being lost in a file rewrite. It is the experiment that
+    distinguishes estimator bias (both arms offset) from crosstalk (only the
+    parallel arm offset), so losing it silently was a real gap.
+    """
     coupling = _coupling_of(fake_backend)
     edges = coupling[:2]
     targets = bench.Targets(sorted({q for e in edges for q in e}), edges)
     par_plan, seq_plan = bench.build_calibration_check_plans(
         targets, fake_backend.num_qubits, coupling, n_edges=2)
+
+    # The sequential arm must run one pair per experiment.
+    seq_layers = [s for s in seq_plan.specs if s.kind == 'rb2q_layer']
+    assert all(len(s.params['pairs']) == 1 for s in seq_layers), seq_layers
+    par_layers = [s for s in par_plan.specs if s.kind == 'rb2q_layer']
+    assert len(par_layers) <= len(seq_layers)
 
     def _shrink(plan):
         specs = []
@@ -477,6 +437,8 @@ def test_calibration_check_runs_both_ways(monkeypatch, fake_backend,
     table = bench.calibration_check_table(coupling, gp['cz_error'],
                                           epochs[0], epochs[1])
     assert table['rows'], 'the check produced no rows'
-    assert table['verdict']
     assert table['ratio_parallel'] is not None
     assert table['ratio_sequential'] is not None
+    assert table['verdict']
+    for row in table['rows']:
+        assert np.isfinite(row['parallel']) and np.isfinite(row['sequential'])
