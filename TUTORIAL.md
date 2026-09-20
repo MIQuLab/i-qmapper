@@ -197,6 +197,9 @@ up exactly where you left off, or share a session file with a colleague.
 Style presets (palettes, color settings) can be saved and reused
 independently of sessions.
 
+> Any message in the interface that ends with `· README: <name>` has a
+> fuller explanation under **Understanding the messages** in the README.
+
 ## 10. Where your data lives
 
 | What | Where |

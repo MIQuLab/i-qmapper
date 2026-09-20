@@ -88,8 +88,8 @@ def _classify_switch_error(exc: BaseException, backend_name: str) -> str:
         return (f"Backend '{backend_name}' is no longer available "
                 f"(may have been retired or hidden by IBM).")
     if 'auth' in msg or '401' in msg or '403' in msg or 'token' in msg:
-        return ("Authentication failed (token may have expired). "
-                "Re-save your QiskitRuntimeService account and restart the kernel.")
+        return ("Authentication failed — re-save your IBM Quantum "
+                "account and restart the kernel.")
     if 'timeout' in msg or 'timed out' in msg or 'connection' in msg:
         return f"Network error reaching IBM Quantum: {exc}"
     return f"Switch failed: {exc}"

@@ -644,8 +644,7 @@ def setup_benchmark_panel(ctx):
             parts[0] += '.'
             if in_band:
                 parts.append(
-                    f"{_join_names(in_band)} differ from IBM's values in a "
-                    f"way that looks like real drift today.")
+                    f"{_join_names(in_band)} look like real drift today;")
             # Names and factors MUST share one ordering — `rescaled` is a
             # set, so iterating it for the factors while sorting it for the
             # names could pair "T2 and CZ error" with CZ's factor first.
@@ -656,9 +655,8 @@ def setup_benchmark_panel(ctx):
                 f"\u00d7{stats[k]['ratio_of_medians']:.1f}" for k in order)
             parts.append(
                 f"{_join_names(order)} differ by a constant factor "
-                f"({factors}) \u2014 that looks like a measurement-method "
-                f"difference, so they are shown on IBM's scale with today's "
-                f"ranking preserved.")
+                f"({factors}) and are shown on IBM's scale "
+                f"\u00b7 README: Relative mode")
 
         missing_q = max(0, epoch.planned_count[0] - epoch.measured_count[0])
         missing_e = max(0, epoch.planned_count[1] - epoch.measured_count[1])
@@ -735,9 +733,8 @@ def setup_benchmark_panel(ctx):
             "</tr>"
             f"{body}</table>"
             "<div style='font-size:11px;color:#6c757d;margin-top:4px;'>"
-            "\u201cas measured\u201d = values used directly \u00b7 "
-            "\u201crescaled\u201d = median aligned to IBM\u2019s, "
-            "per-element differences kept</div>")
+            "as measured = used directly \u00b7 rescaled = median "
+            "aligned to IBM\u2019s, ranking kept</div>")
 
         _sync_show_on_map(stats, reported_g)
 
@@ -1036,11 +1033,9 @@ def setup_benchmark_panel(ctx):
             list(getattr(state, 'edges_list', None) or []))
         if plan is None:
             lbl_bench_status.value = _err(
-                'The submission record for this run has no experiment list, '
-                'so the original plan cannot be rebuilt. Reanalysis needs '
-                'the plan that produced the jobs; re-run the benchmark '
-                'instead (records written from this version onwards include '
-                'it).')
+                "Can't rebuild this run's plan (no experiment list "
+                "saved). Only runs made with the current version can be "
+                "reanalysed.")
             return
 
         if btn_bench_reanalyze is not None:

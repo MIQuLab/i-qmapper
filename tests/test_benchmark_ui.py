@@ -1071,7 +1071,8 @@ def test_reanalysis_without_a_plan_in_the_record_refuses_clearly(monkeypatch,
     assert not called, 'must not reanalyse without the original plan'
     status = ctx.lbl_bench_status.value
     assert '❌' in status
-    assert 'cannot be rebuilt' in status, status
+    assert 'no experiment list saved' in status, status
+    assert 'rebuild' in status
 
 
 def test_results_found_but_none_attributed_is_never_silent(monkeypatch,
@@ -1091,17 +1092,17 @@ def test_results_found_but_none_attributed_is_never_silent(monkeypatch,
     epoch = bench.results_to_epoch(raw, plan, qp, gp, coupling)
 
     assert epoch.measured_count == (0, 0)
-    invariant = [n for n in epoch.notices if '0 attributed to targets' in n]
+    invariant = [n for n in epoch.notices if 'none matched the targets' in n]
     assert invariant, f'the invariant notice is missing: {epoch.notices}'
-    assert '1 results found' in invariant[0], invariant
-    assert 'edge orientation' in invariant[0] or 'matched' in invariant[0]
+    assert 'plan/run mismatch' in invariant[0], invariant
+    assert len(invariant[0]) <= 100, invariant
 
 
 def test_an_empty_plan_is_refused_by_reanalysis():
     empty = bench.build_plan(bench.LEVEL_TARGETED, bench.Targets([], []), 8,
                              _line_edges(8))
     assert empty.specs == []
-    with pytest.raises(bench.BenchmarkRunError, match='no experiments'):
+    with pytest.raises(bench.BenchmarkRunError, match='Nothing to reanalyse'):
         bench.reanalyze_from_jobs(empty, ['j'], object(), None)
 
 
@@ -1450,7 +1451,7 @@ def test_calibration_check_renders_the_verdict_table(monkeypatch, tmp_path):
     assert 'Calibration check' in table_html
     assert 'parallel' in table_html and 'sequential' in table_html
     # Both arms offset the same way -> estimator, not crosstalk.
-    assert 'estimator mismatch' in table_html, table_html
+    assert 'Estimator bias' in table_html, table_html
 
     # THE INVARIANT: a calibration check measures the instrument.
     assert getattr(state, '_measured_epoch', None) is None, \
@@ -1636,11 +1637,11 @@ def test_copy_names_in_band_and_rescaled_properties():
                             measured_count=(156, 352))
     line = api['result_sentence'](epoch, stats, {'t2', 'cz_error'})
 
-    assert 'Readout error and T1 differ from' in line, line
-    assert 'real drift today' in line
+    assert 'Readout error and T1 look like real drift today' in line, line
     assert 'T2 and CZ error differ by a constant factor' in line, line
     assert '(×0.2, ×2.1)' in line, line
-    assert "shown on IBM's scale with today's ranking preserved" in line
+    assert "shown on IBM's scale" in line
+    assert 'README: Relative mode' in line
     for jargon in ('estimator mismatch', 'RELATIVE', 'systematic offset',
                    '⚠'):
         assert jargon not in line, f'{jargon!r} leaked into the sentence'

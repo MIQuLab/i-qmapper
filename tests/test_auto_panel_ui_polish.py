@@ -360,7 +360,9 @@ def test_diverse_enumeration_checkbox_defaults_on(monkeypatch):
                for w in _descendants(b.lucj_advanced_acc)), \
         'the checkbox is not in the Advanced accordion'
     tip = b.chk_diverse_cap.tooltip
-    assert 'DISTINCT' in tip and 'hybrid' in tip, tip
+    assert 'distinct candidates' in tip, tip
+    assert 'README: Diverse enumeration' in tip, tip
+    assert len(tip) <= 90, f'tooltip is {len(tip)} chars'
 
 
 def test_diverse_enumeration_reaches_the_sweep(monkeypatch):

@@ -217,7 +217,7 @@ def test_multi_sweep_failed_at(monkeypatch):
 
     b.btn_lucj_multi_sweep.click()
     v = b.lbl_lucj_multi.value
-    assert 'circuit 2 does not fit' in v
+    assert "Circuit doesn't fit after C1..C1" in v
     assert state.layouts_data[0]['ancilla'] == ['4']  # C1 still applied
     assert len(_dropdowns(b.lucj_multi_detail_box)) == 1   # only the placed one
 

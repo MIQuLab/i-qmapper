@@ -375,11 +375,9 @@ def setup_lucj_callbacks(ctx):
     # the Estimated Layout-Quality box reports. '(template)' flags the
     # internal heuristic used only when circuit scoring is unavailable.
     with contextlib.suppress(Exception):
-        dd_lucj_layout.tooltip = ('LQS = circuit-level fidelity, the same '
-                                  'number as the Estimated Layout-Quality '
-                                  'box. "(template)" = internal heuristic '
-                                  'fallback when circuit scoring is '
-                                  'unavailable.')
+        dd_lucj_layout.tooltip = (
+            'LQS = circuit-level fidelity; "(template)" = fallback '
+            'heuristic \u00b7 README: LQS')
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
 
     # ── Dropdown re-seed helper (observer-safe) ──────────────────
@@ -1497,9 +1495,10 @@ def setup_lucj_callbacks(ctx):
                 return
             if len(ancilla_list) != len(norb_list):
                 lbl_lucj_multi.value = (
-                    f"<span style='font-size:14px;color:#e74c3c;'>❌ Ancilla list has "
-                    f"{len(ancilla_list)} value(s) but {len(norb_list)} circuit(s). Match them "
-                    f"(norb '8, 8' → ancilla '2, 2'), or leave ancilla blank.</span>")
+                    f"<span style='font-size:14px;color:#e74c3c;'>❌ "
+                    f"{len(ancilla_list)} ancilla values but "
+                    f"{len(norb_list)} circuits — match them or leave "
+                    f"ancilla blank.</span>")
                 return
 
         btn_lucj_multi.disabled = True
@@ -1737,9 +1736,9 @@ def setup_lucj_callbacks(ctx):
         return (
             f"<div style='font-size:13px;color:#8a4b00;background:#fff3cd;"
             f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
-            f"margin:4px 0;'>⚠️ circuit {i + 1} does not fit after "
-            f"C1..C{i} + buffer — reduce norb or ancillas. The circuits that "
-            f"fit are placed above.</div>")
+            f"margin:4px 0;'>⚠️ Circuit doesn't fit after C1..C{i} — "
+            f"reduce norb or ancillas; the ones that fit are placed"
+            f"</div>")
 
     def _multi_override_disabled(disabled):
         for dd in _multi_sweep['dropdowns'].values():

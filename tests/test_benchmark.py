@@ -1346,8 +1346,10 @@ def test_a_container_without_composite_metadata_is_flagged():
 
     notices = []
     bench._initialize_container(_Composite(), 'bk', notices)
-    assert any('missing composite metadata' in n for n in notices), notices
-    assert any('component_child_index' in n for n in notices)
+    # The UI notice is short; the metadata key names go to the log.
+    assert any('container incomplete' in n for n in notices), notices
+    assert all(len(n) <= 100 for n in notices), notices
+    assert not any('component_child_index' in n for n in notices)
 
 
 def test_children_allocated_later_is_not_an_error():

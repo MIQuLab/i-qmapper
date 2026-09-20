@@ -703,10 +703,13 @@ def plan_is_submittable(plan, shots=DEFAULT_SHOTS):
     """
     for chunk in split_for_submission(plan, shots):
         if chunk.shots > _MAX_CIRCUIT_SHOTS_PER_JOB:
+            _log.warning(
+                'one experiment needs %s circuit-shots, over IBM\'s %s '
+                'per-job limit, and cannot be split further',
+                f'{chunk.shots:,}', f'{_MAX_CIRCUIT_SHOTS_PER_JOB:,}')
             return False, (
-                f'One experiment needs {chunk.shots:,} circuit-shots, over '
-                f"IBM's {_MAX_CIRCUIT_SHOTS_PER_JOB:,} per-job limit, and "
-                f'cannot be split further. Reduce the target set or the level.')
+                "One experiment exceeds IBM's per-job limit \u2014 reduce "
+                "the targets or the level")
     return True, None
 
 
@@ -801,9 +804,8 @@ def plan_gate(plan_name, level):
                     'tick the acknowledgement to continue.')
     if level == LEVEL_FULL:
         return Gate(False,
-                    'Level 3 measures the whole chip (~4 min of QPU time). '
-                    'On an Open-plan account this can consume a large part of '
-                    'your monthly allowance in one run.')
+                    'Level 3 uses ~4 min of QPU \u2014 a large share of an '
+                    'Open-plan monthly allowance')
     return Gate(True, None)
 
 
@@ -1440,8 +1442,8 @@ def make_runtime_runner(backend, on_jobs=None, sampler_factory=None):
 
             if not context['epg_results']:
                 context['notices'].append(
-                    '1Q RB produced no EPG results; two-qubit errors are NOT '
-                    '1Q-subtracted and will read high versus reported')
+                    'No 1Q results \u2014 two-qubit errors are not '
+                    '1Q-subtracted and read high')
             if phase2:
                 _submit(phase2, session, sampler)
 
@@ -1763,10 +1765,12 @@ def _assert_attribution(raw, plan, q_mask, e_mask, notices):
     elif not plan.targets.qubits and not plan.targets.edges:
         reason = 'the plan has no targets to attribute results to'
     else:
-        reason = ('none of the result qubits/edges matched the plan targets — '
-                  'check the edge orientation against state.edges_list and '
-                  'that the plan matches the run that produced these results')
-    notices.append(f'{found} results found, 0 attributed to targets — '
+        _log.warning(
+            'attribution failed: no result qubit/edge matched the plan '
+            'targets. Check the edge orientation against state.edges_list '
+            'and that the plan matches the run that produced these results.')
+        reason = 'plan/run mismatch'
+    notices.append(f'Results found but none matched the targets — '
                    f'{reason}')
 
 
@@ -2310,9 +2314,8 @@ def _check_verdict(ratio_parallel, ratio_sequential):
     par_off = not (low <= ratio_parallel <= high)
     seq_off = not (low <= ratio_sequential <= high)
     if par_off and seq_off:
-        return ('estimator mismatch: both runs are offset, so it is not '
-                'crosstalk — the 2Q analysis is attributing single-qubit '
-                'error to the two-qubit gate')
+        return ('Estimator bias: both arms offset \u2014 single-qubit '
+                'error is being counted as two-qubit error')
     if par_off and not seq_off:
         return ('crosstalk: only the parallel run is offset, so driving '
                 'neighbouring pairs together is inflating the error')
@@ -2948,10 +2951,12 @@ def _initialize_container(experiment, backend, notices=None):
 
     missing = _missing_composite_metadata(expdata, experiment)
     if missing:
-        notices.append(
-            f'the reanalysis container is missing composite metadata '
-            f'({", ".join(missing)}); component results may not be '
-            f'extractable in this qiskit-experiments version')
+        _log.warning(
+            'reanalysis container is missing composite metadata (%s); '
+            'component results may not be extractable in this '
+            'qiskit-experiments version', ', '.join(missing))
+        notices.append('Reanalysis container incomplete \u2014 results may '
+                       'be partial')
     return expdata
 
 
@@ -3062,9 +3067,7 @@ def reanalyze_from_jobs(plan, job_ids, backend, service=None):
     """
     if not plan.specs:
         raise BenchmarkRunError(
-            'the plan to reanalyse has no experiments — the original '
-            'submission record is missing or the wrong plan was rebuilt; '
-            'reanalysis needs the plan that produced the jobs')
+            "Nothing to reanalyse: this run's plan was not recorded")
     api = preload_runtime()
     phases_ids = (list(job_ids) if job_ids and isinstance(job_ids[0], (list, tuple))
                   else [list(job_ids or [])])
@@ -3141,9 +3144,8 @@ def reanalyze_from_jobs(plan, job_ids, backend, service=None):
         context['notices'].append(tally)
     elif any(sp.kind in ('rb2q_layer', 'rb2q') for sp in plan.specs):
         context['notices'].append(
-            '1Q EPG subtraction: applied to 0 pairs — this record has a '
-            'single job phase, so no 1Q RB results were available to '
-            'subtract; two-qubit errors will read high versus reported')
+            '1Q EPG subtraction: applied to 0 pairs (single-phase run) '
+            '\u2014 two-qubit errors read high')
     if context['notices']:
         merged['_notices'] = list(context['notices'])
     return merged, collected

@@ -280,6 +280,117 @@ everything else keeps its reported value, and the calibration label tells you
 which epoch you are looking at. Any experiment or fit that fails falls back to
 the reported value for that element with a notice, never a crash.
 
+## Understanding the messages
+
+The interface says what happened and what to do; the explanations live here.
+Tooltips that end with `· README: <name>` point at the matching entry below.
+
+### Search cap
+
+The exhaustive engine enumerates candidate layouts and stops at this many. On
+a large chip there can be tens of thousands, so the cap is normally reached at
+low ancilla counts. When it is, the notices bar says so — raise the cap for a
+more thorough (slower) search, or leave it and rely on diverse enumeration.
+
+### Diverse enumeration
+
+With this on, the cap counts *distinct* candidates. During the search a layout
+that overlaps one already kept by more than 80% of its qubits, and does not
+score better, is discarded without using a slot; one that scores better takes
+its place. Without it the cap fills with near-copies of whatever the search
+found first, which on a 193-qubit chip meant never looking at 44% of the
+device. It only makes a difference where the cap is actually reached.
+
+### Search engine
+
+**Exhaustive** enumerates layouts that fit the template and only then asks how
+good they are — thorough, but blind to calibration until the end. **Guided**
+grows each layout using the calibration as it goes and polishes the finalists.
+Guided is a heuristic: it can miss the best layout that exhaustive would find,
+so it stays opt-in until the comparison harness says otherwise.
+
+### Prefer diverse regions
+
+The top half of each candidate list is always the best-scoring layouts. The
+second half is allowed to prefer layouts on other parts of the chip, so you
+get alternatives rather than five variations on one position. It never demotes
+a better layout.
+
+### Quality floor
+
+Qubits whose readout error is far above the device average are dropped from
+the search before it starts, measured in standard deviations above the mean.
+Set it to 0 to disable. This is about excluding obviously broken qubits, not
+fine-tuning.
+
+### Levels
+
+How much of the device a benchmark measures.
+
+- **1 — readout only.** Two circuits regardless of how many qubits you target,
+  so it costs the same for three qubits as for the whole chip. Seconds.
+- **2 — adds two-qubit gates** on the target edges, plus the single-qubit
+  measurements needed to interpret them. Tens of seconds.
+- **3 — whole chip**: coherence times, readout, single- and two-qubit gates.
+  About four minutes of quantum time.
+
+### Targets
+
+What a benchmark measures: the layouts currently placed on the map, the last
+sweep's best candidates, the whole device, or a list of qubits you type. Level
+1 on the whole device is the cheap way to refresh the readout colours, because
+its cost does not grow with the number of qubits.
+
+### Relative mode
+
+Benchmarking and the provider's calibration are different ways of measuring
+the same thing, and they do not always agree on the absolute scale. After each
+run the measured values are compared with IBM's. If a property's median is
+more than twice IBM's, or less than half, that is treated as a difference of
+method rather than a change in the device — a whole chip does not degrade
+uniformly overnight — and the values are rescaled so their median matches
+IBM's while the differences *between* qubits are kept exactly.
+
+That is what matters in practice: a coupler that has failed still shows up ten
+times worse than its neighbours. Tick **Apply absolute values** to use the raw
+measurements instead, for example when you are investigating the scale itself.
+
+### Calibration check
+
+Measures six edges twice in one session — first with all pairs driven together,
+then one pair at a time — and compares both against IBM's values.
+
+- **Both arms offset the same way** → estimator bias: the analysis is
+  attributing single-qubit error to the two-qubit gate.
+- **Only the parallel arm offset** → crosstalk: driving neighbouring pairs
+  simultaneously is inflating the error.
+- **Both close to IBM's values** → the measurements agree; nothing to correct.
+
+It does not change the calibration in use; it measures the instrument.
+
+### Delta references
+
+In delta view each calibration is compared against a reference. **First** uses
+the first calibration in the sequence, so you see cumulative drift from a
+starting point. **Previous** uses the one before it, so you see step-by-step
+change as you move the slider; at the first position there is nothing to
+compare against.
+
+### Offline mode
+
+A session restored without a backend connection. Layout editing, scoring
+against the saved calibration, and export all work. Anything that needs live
+data — delta view, calibration history, refreshing the error map — waits until
+you connect a backend from the Hardware section.
+
+### LQS
+
+Layout Quality Score: an estimate of how well a circuit would run on a given
+set of qubits, combining the readout and gate errors of every qubit and
+coupling it uses. It is the same number the Estimated Layout-Quality box
+shows. A `(template)` suffix means the full calculation was unavailable and a
+simpler heuristic was used instead.
+
 ## Extending to other vendors
 
 <details>

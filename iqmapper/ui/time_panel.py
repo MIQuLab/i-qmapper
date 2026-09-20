@@ -1266,13 +1266,11 @@ def build_time_panel(
 def _auto_ref_hint(state) -> str:
     mode = state.delta_ref_mode
     if mode == 'first':
-        return ("Reference = <b>first</b> calibration of the current sequence. "
-                "Works when View is <i>Intraday</i> or <i>Multi-day</i>. "
-                "Use this to see cumulative drift from a starting point.")
+        return ("Reference = <b>first</b> calibration of the sequence "
+                "(cumulative drift) \u00b7 README: Delta references")
     if mode == 'previous':
-        return ("Reference = <b>previous</b> calibration in the sequence. "
-                "The delta updates as you move the slider, showing step-by-step "
-                "change. At the first position there is no delta.")
+        return ("Reference = <b>previous</b> calibration in the sequence "
+                "(step-by-step change) \u00b7 README: Delta references")
     return ""
 
 

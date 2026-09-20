@@ -1317,9 +1317,8 @@ class MapperUIBuilder:
             description='Search cap:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
-            tooltip='Max VF2 embeddings enumerated per search (default 2000). '
-                    'When the cap truncates, the notices bar says so; raise it '
-                    'for a more exhaustive (slower) search.')
+            tooltip='Max embeddings enumerated per search; the notices say '
+                    'when it truncates · README: Search cap')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
@@ -1341,10 +1340,8 @@ class MapperUIBuilder:
             value=True,
             description='Prefer diverse regions',
             layout=W,
-            tooltip="Second half of each stratum's list favors layouts on "
-                    "different chip regions (Jaccard ≤ 0.8). The top half "
-                    "is always the absolute best — diversity never "
-                    "demotes it.")
+            tooltip='Second half of each list favors other chip regions; '
+                    'top half is always the best')
         # ── 📡 Benchmark widgets (mounted as sidebar section 5) ───
         # Never automatic: see iqmapper/benchmark.py. The target dropdown,
         # level dropdown, cost line and acknowledgement all exist so the QPU
@@ -1367,8 +1364,8 @@ class MapperUIBuilder:
             description='Targets:',
             layout=Layout(width='280px'),
             style={'description_width': '110px'},
-            tooltip='What to measure: the placed layout(s), the last sweep\'s '
-                    'top candidates, the whole QPU, or an explicit qubit list.')
+            tooltip='What to measure: placed layouts, sweep candidates, '
+                    'the whole QPU, or a qubit list')
         _custom_layout = _own()
         _custom_layout.display = 'none'     # revealed only for Targets=Custom
         self.txt_bench_custom = Text(
@@ -1385,9 +1382,8 @@ class MapperUIBuilder:
             description='Level:',
             layout=Layout(width='280px'),
             style={'description_width': '110px'},
-            tooltip='1 = readout (2 circuits, cost does not grow with qubit '
-                    'count); 2 = adds 2Q RB on the target edges; '
-                    '3 = the full-chip tutorial suite (~4 min).')
+            tooltip='1 readout only · 2 + two-qubit gates on targets · '
+                    '3 whole chip (~4 min) · README: Levels')
         self.lbl_bench_summary = HTML("")
         self.chk_bench_ack = Checkbox(
             value=False,
@@ -1399,10 +1395,8 @@ class MapperUIBuilder:
         self.btn_bench_calcheck = Button(
             description='🔬 Calibration check',
             button_style='info', layout=W, disabled=True,
-            tooltip='Measure a few edges twice — all pairs together, then one '
-                    'at a time — to tell an estimator bias (both arms offset) '
-                    'from crosstalk (only the parallel arm offset). Does not '
-                    'change the calibration in use.')
+            tooltip='Measures 6 edges twice: crosstalk or estimator bias'
+                    ' · README: Calibration check')
         self.lbl_bench_calcheck = HTML("")
         self.lbl_bench_reuse = HTML("")
         self.btn_bench_reuse = Button(
@@ -1413,17 +1407,13 @@ class MapperUIBuilder:
         self.btn_bench_reanalyze = Button(
             description='Reanalyze last run', button_style='info',
             disabled=True, layout=_reanalyze_layout,
-            tooltip='Re-run the analysis on the last submission\'s jobs. '
-                    'Analysis is client-side, so this costs no QPU time.')
+            tooltip='Re-analyses the last run\'s results; costs no QPU time')
         self.chk_bench_absolute = Checkbox(
             value=False,
             description='Apply absolute values',
             layout=_own(),
-            tooltip='Off (default): when the measured values show a '
-                    'systematic offset against the reported calibration, '
-                    'they are rescaled to the reported median so only the '
-                    'relative differences are applied. On: use the raw '
-                    'measured numbers.')
+            tooltip="Use measured values as-is even when they are far "
+                    "from IBM's scale · README: Relative mode")
         self.lbl_bench_consistency = HTML("")
         self.lbl_bench_details = HTML("")
         _map_btn_layout = Layout(width='220px', margin='4px 0px')
@@ -1431,9 +1421,8 @@ class MapperUIBuilder:
         self.btn_bench_show_on_map = Button(
             description='show on map', button_style='',
             layout=_map_btn_layout,
-            tooltip="Filter the Error tab to the edges more than twice "
-                    "IBM's reported median, so the count above becomes "
-                    "visible on the device map.")
+            tooltip="Filters the Error tab to edges more than 2x worse "
+                    "than IBM's median")
         self.acc_bench_details = Accordion(
             children=[VBox([self.lbl_bench_details,
                             self.btn_bench_show_on_map])],
@@ -1443,9 +1432,8 @@ class MapperUIBuilder:
         self.lbl_bench_status = HTML("")
         self.bench_box = VBox([
             HTML("<div style='font-size:14px;color:#6c757d;"
-                 "margin-bottom:4px;'>Re-measure the live device and re-rank "
-                 "against what the hardware is doing now. Opt-in: nothing "
-                 "runs until you click.</div>"),
+                 "margin-bottom:4px;'>Re-measure the device now and re-rank "
+                 "on live numbers. Nothing runs until you click.</div>"),
             self.tb_bench_qpu,
             self.dd_bench_target,
             self.txt_bench_custom,
@@ -1470,13 +1458,8 @@ class MapperUIBuilder:
             value=True,
             description='Diverse enumeration',
             layout=_diverse_layout,
-            tooltip='Make the search cap count DISTINCT candidates: during '
-                    'enumeration a layout that overlaps a kept one by 80% '
-                    'and does not score better is discarded without using a '
-                    'slot. Engages only where the cap is actually reached — '
-                    'the low-bridge (hybrid) passes; at the maximum bridge '
-                    'count the search finds fewer layouts than the cap and '
-                    'nothing is filtered. Off = the historical behaviour.')
+            tooltip='Counts only distinct candidates toward the search '
+                    'cap · README: Diverse enumeration')
 
         # ── Search engine (Advanced) ─────────────────────────────
         # Default stays Exhaustive (VF2) until iqmapper.evaluation says the
@@ -1487,10 +1470,8 @@ class MapperUIBuilder:
             description='Search engine:',
             layout=Layout(width='280px'),
             style={'description_width': '110px'},
-            tooltip='Exhaustive enumerates zigzag embeddings with VF2 and is '
-                    'calibration-blind (capped at the search cap). Guided '
-                    'grows chains using the calibration and polishes the '
-                    'finalists; it is a heuristic, so it stays opt-in.')
+            tooltip='Exhaustive = VF2 (calibration-blind); Guided = '
+                    'calibration-led beam search · README: Search engine')
         _guided_layout = Layout(width=W.width, margin=W.margin,
                                 min_width=W.min_width)
         _guided_layout.display = 'none'      # shown only for Guided
@@ -1553,9 +1534,8 @@ class MapperUIBuilder:
             value=3.0, min=0.0, max=20.0, step=0.5,
             description='Quality floor:', layout=Layout(width='230px'),
             style={'description_width': '110px'},
-            tooltip='Always on: exclude qubits whose CURRENT readout error is '
-                    'more than this many σ above the device mean (0 = off). '
-                    'Applies to single, multi and scan searches.')
+            tooltip='Excludes qubits whose readout error is more than N '
+                    'sigma above the device mean (0 = off)')
         # Window + threshold row, revealed only when the volatility filter is on.
         self.stability_ctrl_box = VBox(
             [self.rb_stability_window_auto, self.ft_stability_threshold])
