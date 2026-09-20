@@ -349,3 +349,64 @@ def test_status_line_names_the_engine_and_refinement_tally(monkeypatch):
     status = b.lbl_lucj_status.value
     assert 'engine: guided' in status, status
     assert 'refined 2/5' in status, status
+
+
+# ── t8: diverse enumeration ────────────────────────────────────────────────
+
+def test_diverse_enumeration_checkbox_defaults_on(monkeypatch):
+    b, _ = _build(monkeypatch)
+    assert b.chk_diverse_cap.value is True
+    assert any(w is b.chk_diverse_cap
+               for w in _descendants(b.lucj_advanced_acc)), \
+        'the checkbox is not in the Advanced accordion'
+    tip = b.chk_diverse_cap.tooltip
+    assert 'DISTINCT' in tip and 'hybrid' in tip, tip
+
+
+def test_diverse_enumeration_reaches_the_sweep(monkeypatch):
+    b, _ = _build(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(
+        'iqmapper.ancilla_sweep.sweep_ancilla_layouts',
+        lambda norb, backend, props, **k: seen.update(k) or {
+            'strata': {}, 'k_max_effective': 1, 'min_bridges': 1,
+            'vf2_truncated': False, 'n_raw_embeddings': 0,
+            'n_candidates_scored': 0, 'excluded_qubits': [],
+            'per_stratum': {}, 'mapping_cap': 2000,
+            'reservoir': {}, 'reservoir_notices': []})
+
+    b.lucj_ancilla_dd.value = -1
+    b.btn_lucj_run.click()
+    assert seen.get('diverse_cap') is True
+
+    seen.clear()
+    b.chk_diverse_cap.value = False
+    b.btn_lucj_run.click()
+    assert seen.get('diverse_cap') is False
+
+
+def test_the_cap_notice_is_rendered_on_the_status_line(monkeypatch):
+    b, _ = _build(monkeypatch)
+    entry = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
+             'ancillas': [4], 'bridge_slots': (0,), 'product_score': 0.9,
+             'additive_score': 0.1, 'lqs_circuit': 0.8, 'rank_in_stratum': 1,
+             'source': 'vf2'}
+    note = ('hybrid k=1: cap reached — kept 2,000 diverse candidates, '
+            'skipped 34,812 near-duplicates')
+    monkeypatch.setattr(
+        'iqmapper.ancilla_sweep.sweep_ancilla_layouts',
+        lambda norb, backend, props, **k: {
+            'strata': {1: [entry]}, 'k_max_effective': 1, 'min_bridges': 1,
+            'vf2_truncated': True, 'n_raw_embeddings': 2000,
+            'n_candidates_scored': 2000, 'excluded_qubits': [],
+            'per_stratum': {1: {'n_direct': 2000, 'n_derived': 0,
+                                'truncated': True, 'shuffled': False}},
+            'mapping_cap': 2000,
+            'reservoir': {1: {'kept': 2000, 'skipped_similar': 34812}},
+            'reservoir_notices': [note]})
+
+    b.lucj_ancilla_dd.value = -1
+    b.btn_lucj_run.click()
+    status = b.lbl_lucj_status.value
+    assert 'hybrid k=1: cap reached' in status, status
+    assert '34,812 near-duplicates' in status

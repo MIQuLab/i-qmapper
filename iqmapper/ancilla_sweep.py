@@ -205,7 +205,8 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                           mapping_cap=None, exclude_qubits=None,
                           circuit_score_fn=None, hybrid=True,
                           shuffle_seed=_AUTO_SHUFFLE,
-                          diversity_threshold=None) -> dict:
+                          diversity_threshold=None,
+                          diverse_cap=True) -> dict:
     """One-shot ancilla sweep: VF2 at the geometric max bridge count,
     then derive every lower-k variant by bridge subtraction, score, and
     return the top_n candidates per ancilla count.
@@ -366,33 +367,6 @@ def sweep_ancilla_layouts(norb, backend, props, *,
             f"1 <= min_bridges <= k_max_effective ({k_max_effective})."
         )
 
-    # ---- 3. Collect VF2 embeddings, detect truncation ---------------------
-    cap = mapping_cap if mapping_cap is not None else _MAX_RAW_VF2_MAPPINGS
-    kmax_graph, kmax_key_to_phys, kmax_shuffled = _search_for(k_max_effective)
-    mappings = _collect_vf2_mappings(kmax_graph, template, cap=cap)
-    # The helper only *logs* truncation; detect it by the cap being reached.
-    vf2_truncated = len(mappings) >= cap
-    if vf2_truncated:
-        _log.debug("Ancilla sweep: VF2 truncated at cap=%d", cap)
-
-    # ---- 4. Materialize complete layouts (mirror get_all_zigzag_layouts) --
-    expected_size = 2 * norb + k_max_effective
-    layouts = []
-    for mapping in mappings:
-        layout = [None] * expected_size
-        for key, value in mapping.items():
-            layout[value] = kmax_key_to_phys(key)
-        if any(v is None for v in layout):
-            _log.debug("Ancilla sweep: skipping incomplete VF2 mapping")
-            continue
-        layouts.append(layout)
-    n_raw_embeddings = len(layouts)
-    if not layouts:
-        raise RuntimeError(
-            f"No complete zigzag embedding found for norb={norb} on this "
-            f"backend."
-        )
-
     # ---- 5. Precompute props once (hoist all API-shaped lookups) ----------
     gate_name = _get_two_q_gate_name(backend)
     if gate_name is None:
@@ -415,6 +389,77 @@ def sweep_ancilla_layouts(norb, backend, props, *,
     def _edge_e(a, b):
         return edge_err.get(frozenset((a, b)),
                             _safe_gate_error(props, gate_name, a, b))
+
+    # ---- 3. Collect VF2 embeddings, detect truncation ---------------------
+    cap = mapping_cap if mapping_cap is not None else _MAX_RAW_VF2_MAPPINGS
+
+    reservoir_stats = {}
+
+    def _make_reservoir(k, key_to_phys):
+        """A DiverseReservoir scoring with the sweep's own product formula.
+
+        The score closes over the `readout` / `_edge_e` hoisted just above,
+        so enumeration and `_add_variant` cannot drift apart. Returns None
+        when diverse_cap is off, which restores the historical path exactly.
+        """
+        if not diverse_cap:
+            return None
+        from .reservoir import DiverseReservoir
+        size = 2 * norb + k
+
+        def _to_layout(mapping):
+            layout = [None] * size
+            for key, value in mapping.items():
+                if value < size:
+                    layout[value] = key_to_phys(key)
+            return layout
+
+        def _score(layout):
+            alpha = layout[:norb]
+            beta = layout[norb:2 * norb]
+            product = 1.0
+            for q in layout[:2 * norb]:
+                product *= max(0.0, 1.0 - float(readout[q]))
+            for j in range(norb - 1):
+                product *= max(0.0, 1.0 - _edge_e(alpha[j], alpha[j + 1]))
+                product *= max(0.0, 1.0 - _edge_e(beta[j], beta[j + 1]))
+            for i in range(k):
+                bphys = layout[2 * norb + i]
+                product *= (max(0.0, 1.0 - float(readout[bphys]))
+                            * max(0.0, 1.0 - _edge_e(alpha[4 * i], bphys))
+                            * max(0.0, 1.0 - _edge_e(bphys, beta[4 * i])))
+            return product
+
+        return DiverseReservoir(cap, _score, _to_layout)
+
+    kmax_graph, kmax_key_to_phys, kmax_shuffled = _search_for(k_max_effective)
+    _kmax_res = _make_reservoir(k_max_effective, kmax_key_to_phys)
+    mappings = _collect_vf2_mappings(kmax_graph, template, cap=cap,
+                                     reservoir=_kmax_res)
+    if _kmax_res is not None:
+        reservoir_stats[k_max_effective] = _kmax_res.stats
+    # The helper only *logs* truncation; detect it by the cap being reached.
+    vf2_truncated = len(mappings) >= cap
+    if vf2_truncated:
+        _log.debug("Ancilla sweep: VF2 truncated at cap=%d", cap)
+
+    # ---- 4. Materialize complete layouts (mirror get_all_zigzag_layouts) --
+    expected_size = 2 * norb + k_max_effective
+    layouts = []
+    for mapping in mappings:
+        layout = [None] * expected_size
+        for key, value in mapping.items():
+            layout[value] = kmax_key_to_phys(key)
+        if any(v is None for v in layout):
+            _log.debug("Ancilla sweep: skipping incomplete VF2 mapping")
+            continue
+        layouts.append(layout)
+    n_raw_embeddings = len(layouts)
+    if not layouts:
+        raise RuntimeError(
+            f"No complete zigzag embedding found for norb={norb} on this "
+            f"backend."
+        )
 
     # ---- 6. Enumerate + score every variant, grouped by stratum ----------
     # strata_pool[k] : dict keyed by (frozenset(chain), frozenset(ancilla))
@@ -524,7 +569,11 @@ def sweep_ancilla_layouts(norb, backend, props, *,
                 continue
             k_graph, k_key_to_phys, k_shuffled = _search_for(k)
             per_stratum[k]['shuffled'] = k_shuffled
-            maps_k = _collect_vf2_mappings(k_graph, tmpl_k, cap=cap)
+            _res_k = _make_reservoir(nb_k, k_key_to_phys)
+            maps_k = _collect_vf2_mappings(k_graph, tmpl_k, cap=cap,
+                                           reservoir=_res_k)
+            if _res_k is not None:
+                reservoir_stats[k] = _res_k.stats
             if len(maps_k) >= cap:
                 per_stratum[k]['truncated'] = True
             exp_k = 2 * norb + nb_k
@@ -629,8 +678,24 @@ def sweep_ancilla_layouts(norb, backend, props, *,
         _log.debug("Ancilla sweep stratum k=%d: scored %d, kept top %d",
                    k, len(window), len(entries))
 
+    # One notice per stratum whose cap was actually reached. The reservoir
+    # only engages on the hybrid path (at k_max the enumeration is far below
+    # the cap), so the notice names the hybrid pass explicitly.
+    reservoir_notices = []
+    if reservoir_stats:
+        from .reservoir import summarise as _summarise_reservoir
+        for k in sorted(reservoir_stats, reverse=True):
+            stats_k = reservoir_stats[k]
+            if stats_k.get('kept', 0) >= cap:
+                note = _summarise_reservoir(
+                    stats_k, k, hybrid=(k != k_max_effective))
+                if note:
+                    reservoir_notices.append(note)
+
     return {
         'strata': strata,
+        'reservoir': reservoir_stats,
+        'reservoir_notices': reservoir_notices,
         'k_max_effective': k_max_effective,
         'min_bridges': min_bridges,
         'vf2_truncated': vf2_truncated,

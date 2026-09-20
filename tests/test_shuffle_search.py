@@ -1,5 +1,10 @@
 """Shuffled VF2 search order kills the geographic-prefix truncation bias.
 
+These tests pin ``diverse_cap=False`` so they exercise the SHUFFLE alone.
+The diverse reservoir attacks the same bias by a different route and, when
+enabled, frees the natural order from block A on its own — see
+iqmapper/reservoir.py and tests/test_reservoir.py.
+
 Deterministic, offline, real VF2. Two identical blocks on one chip:
   * block A (ids 0..23)  — NOISY  (readout/gate error 0.06)
   * block B (ids 24..47) — CLEAN  (error 0.0005)
@@ -58,7 +63,17 @@ class _Props:
 
 def _sweep(seed):
     return sweep_ancilla_layouts(NORB, _backend(), _Props(), min_bridges=1,
-                                 top_n=10, mapping_cap=CAP, shuffle_seed=seed)
+                                 top_n=10, mapping_cap=CAP, shuffle_seed=seed,
+                                 # Isolate the mechanism under test. The
+                                 # diverse reservoir (engine #17) also breaks
+                                 # the geographic-prefix bias — it keeps
+                                 # offering past the cap and swaps block-A
+                                 # near-duplicates for block-B candidates —
+                                 # so with it ON the "natural order is
+                                 # trapped" premise no longer holds. That is
+                                 # the reservoir working, not the shuffle
+                                 # failing.
+                                 diverse_cap=False)
 
 
 def _best(res, k):

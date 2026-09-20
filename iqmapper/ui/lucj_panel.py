@@ -190,6 +190,7 @@ def setup_lucj_callbacks(ctx):
     lucj_chk_score = ctx.lucj_chk_score
     chk_deep_search = ctx.chk_deep_search
     chk_lucj_diverse = ctx.chk_lucj_diverse
+    chk_diverse_cap = getattr(ctx, 'chk_diverse_cap', None)
     dd_search_engine = getattr(ctx, 'dd_search_engine', None)
     int_beam_width = getattr(ctx, 'int_beam_width', None)
     int_refine_top = getattr(ctx, 'int_refine_top', None)
@@ -473,6 +474,9 @@ def setup_lucj_callbacks(ctx):
             'mapping_cap': cap_val if (cap_val and cap_val >= 1) else None,
             # 0.8 default when ON; None → exact top-N (byte-compatible).
             'diversity_threshold': 0.8 if chk_lucj_diverse.value else None,
+            # The cap counts distinct candidates (engine #17). VF2-only —
+            # the dispatcher drops it for the guided engine.
+            'diverse_cap': bool(getattr(chk_diverse_cap, 'value', True)),
         }
 
     # ── ONE dispatch point for the search engine ─────────────────
@@ -501,9 +505,17 @@ def setup_lucj_callbacks(ctx):
 
         from ..guided_search import guided_sweep
         guided_kwargs = {k: v for k, v in kwargs.items()
-                         if k not in ('hybrid', 'mapping_cap', 'shuffle_seed')}
+                         if k not in ('hybrid', 'mapping_cap',
+                                      'shuffle_seed', 'diverse_cap')}
         guided_kwargs.update(_guided_params())
         return guided_sweep(norb, backend, props, **guided_kwargs)
+
+    def _reservoir_suffix(res):
+        """The per-stratum cap notice, when a cap was actually reached."""
+        notes = (res or {}).get('reservoir_notices') or []
+        if not notes:
+            return ""
+        return "<br>" + "<br>".join(f"\u2139 {esc(n)}" for n in notes)
 
     def _engine_suffix(res):
         """Status-line tail naming the engine, and the refinement tally."""
@@ -690,7 +702,8 @@ def setup_lucj_callbacks(ctx):
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
-                f"{cap_txt}{vin_txt}{_engine_suffix(res)}</div>")
+                f"{cap_txt}{vin_txt}{_engine_suffix(res)}"
+                f"{_reservoir_suffix(res)}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"

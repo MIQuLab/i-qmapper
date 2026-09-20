@@ -389,8 +389,12 @@ def test_result_dict_is_a_superset_of_the_sweep_contract():
     guided = guided_sweep(6, backend, props, min_bridges=1, top_n=3,
                           circuit_score_fn=scorer)
 
-    assert set(vf2) <= set(guided), (
-        f'guided is missing sweep keys: {set(vf2) - set(guided)}')
+    # Keys that describe the VF2 ENUMERATION have no guided counterpart:
+    # the beam is bounded by construction and has no mapping cap to make
+    # diverse. Everything a downstream consumer reads is still shared.
+    vf2_only = {'reservoir', 'reservoir_notices'}
+    assert (set(vf2) - vf2_only) <= set(guided), (
+        f'guided is missing sweep keys: {set(vf2) - vf2_only - set(guided)}')
     assert guided['engine'] == 'guided'
     assert set(guided['strata']) == set(vf2['strata'])
     assert set(guided['per_stratum']) == set(vf2['per_stratum'])

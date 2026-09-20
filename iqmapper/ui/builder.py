@@ -324,6 +324,7 @@ class MapperUIBuilder:
             lucj_search_cap=self.lucj_search_cap,
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
             chk_lucj_diverse=self.chk_lucj_diverse,
+            chk_diverse_cap=self.chk_diverse_cap,
             dd_search_engine=self.dd_search_engine,
             int_beam_width=self.int_beam_width,
             int_refine_top=self.int_refine_top,
@@ -1463,6 +1464,20 @@ class MapperUIBuilder:
             self.lbl_bench_status,
         ], layout=W)
 
+        _diverse_layout = Layout(width=W.width, margin=W.margin,
+                                 min_width=W.min_width)
+        self.chk_diverse_cap = Checkbox(
+            value=True,
+            description='Diverse enumeration',
+            layout=_diverse_layout,
+            tooltip='Make the search cap count DISTINCT candidates: during '
+                    'enumeration a layout that overlaps a kept one by 80% '
+                    'and does not score better is discarded without using a '
+                    'slot. Engages only where the cap is actually reached — '
+                    'the low-bridge (hybrid) passes; at the maximum bridge '
+                    'count the search finds fewer layouts than the cap and '
+                    'nothing is filtered. Off = the historical behaviour.')
+
         # ── Search engine (Advanced) ─────────────────────────────
         # Default stays Exhaustive (VF2) until iqmapper.evaluation says the
         # guided beam wins on real cached calibration — see the harness.
@@ -1500,6 +1515,7 @@ class MapperUIBuilder:
         # bar already reports when the cap truncated a search.
         self.lucj_advanced_acc = Accordion(
             children=[VBox([self.lucj_search_cap, self.chk_deep_search,
+                            self.chk_diverse_cap,
                             self.dd_search_engine, self.bench_guided_box])],
             layout=W)
         self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
