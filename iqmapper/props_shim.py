@@ -99,11 +99,9 @@ class CachedPropsShim:
         self.n_qubits = n_qubits
         self._readout = qubit_props['readout_error']
         gate_arr = gate_props[gate_key]
-        # Keep the RAW (edges, gate array) so score_layout can reproduce the
-        # C1 wrapper's EXACT edge surface — every coupling in the backend's
-        # own map (both directions, as edges_list carries them), paired
-        # positionally. Deduping here would halve the gate factors and inflate
-        # the product.
+        # Keep the RAW (edges, gate array), paired positionally, so
+        # score_layout reduces them exactly as the C1 wrapper does (one entry
+        # per coupler via export.scoring.unique_couplers).
         self._edges = [(int(u), int(v)) for (u, v) in edges]
         self._gate_arr = gate_arr
         # Deduped map for the direction-insensitive gate_error() the sweep's
@@ -132,11 +130,11 @@ class CachedPropsShim:
     def score_layout(self, layout_qubit_ids):
         """Circuit-level fidelity for a layout on THIS backend, via the shared
         ``export.scoring.estimate_fidelity_core`` — the SAME edge surface as
-        the C1 wrapper (``estimate_circuit_fidelity``): every coupling among
-        the layout set, taken from the backend's OWN edge list (both
-        directions), so a scan candidate lands on exactly the C1 scale.
+        the C1 wrapper (``estimate_circuit_fidelity``): every coupler among
+        the layout set, taken from the backend's OWN edge list and counted
+        once, so a scan candidate lands on exactly the C1 scale.
         Returns the core dict (``None`` only if the layout is empty)."""
-        from .export.scoring import estimate_fidelity_core
+        from .export.scoring import estimate_fidelity_core, unique_couplers
         ids = list(layout_qubit_ids)
         if not ids:
             return None
@@ -146,11 +144,10 @@ class CachedPropsShim:
                 readout_by_id[q] = self._readout[q]
             except (IndexError, KeyError, TypeError):
                 pass
-        # Full directed surface, positionally paired — mirrors the C1 wrapper's
-        # `for edge in edges_list` loop (which counts both directions). NOT the
-        # deduped self._gate, which would halve the factors and inflate.
-        gate_edges = [(u, v, self._gate_arr[i])
-                      for i, (u, v) in enumerate(self._edges)]
+        # The backend's own edges, positionally paired, reduced to one entry
+        # per coupler by the same helper the C1 wrapper uses.
+        gate_edges = unique_couplers([(u, v, self._gate_arr[i])
+                                      for i, (u, v) in enumerate(self._edges)])
         return estimate_fidelity_core(ids, readout_by_id, gate_edges,
                                       all_readout=self._readout)
 

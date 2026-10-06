@@ -233,10 +233,10 @@ def test_shim_score_matches_core_handbuilt():
     assert shim_score == pytest.approx(0.0)      # dead coupler seen, not hidden
 
 
-# ── SYM-1 t1: score_layout scores the FULL directed surface (== C1 core) ─────
+# ── SYM-1 t1: score_layout scores every coupler in the set, once (== C1) ─────
 
-def test_score_layout_full_directed_surface():
-    from iqmapper.export.scoring import estimate_fidelity_core
+def test_score_layout_counts_each_coupler_once():
+    from iqmapper.export.scoring import estimate_fidelity_core, unique_couplers
     # Bidirectional coupling map + an INCIDENTAL edge (0,2) among the set
     # (not on the chain path) carrying a large error.
     edges = [(0, 1), (1, 0), (1, 2), (2, 1), (0, 2), (2, 0)]
@@ -250,15 +250,16 @@ def test_score_layout_full_directed_surface():
 
     core = estimate_fidelity_core(
         cand, {q: qp['readout_error'][q] for q in cand},
-        [(u, v, cz[i]) for i, (u, v) in enumerate(edges)],
+        unique_couplers([(u, v, cz[i]) for i, (u, v) in enumerate(edges)]),
         all_readout=qp['readout_error'])
 
     assert sh['fidelity'] == pytest.approx(core['fidelity'])
-    assert sh['n_gates'] == 6                      # all directed edges counted
-    # The incidental (0,2) 0.30 factor IS included (both dirs) — not skipped.
+    assert sh['n_gates'] == 3                      # three couplers, once each
+    assert sh['fidelity'] == pytest.approx(0.99 ** 3 * 0.99 ** 2 * 0.70)
+    # The incidental (0,2) 0.30 coupler IS included (once) — not skipped.
     healthy_only = estimate_fidelity_core(
         cand, {q: 0.01 for q in cand},
-        [(0, 1, 0.01), (1, 0, 0.01), (1, 2, 0.01), (2, 1, 0.01)],
+        [(0, 1, 0.01), (1, 2, 0.01)],
         all_readout=qp['readout_error'])
     assert sh['fidelity'] < healthy_only['fidelity']
 

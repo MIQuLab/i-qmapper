@@ -2,9 +2,16 @@
 export.scoring — Delta computation between calibration snapshots and
 heuristic circuit-fidelity estimation. Pure numerical; no I/O.
 """
+import logging
+
 import numpy as np
 
 from . import OUTLIER_MIN_SAMPLES, OUTLIER_SIGMA
+
+_log = logging.getLogger(__name__)
+
+#: Couplers already reported for direction-dependent error values.
+_DIRECTION_MISMATCH_LOGGED = set()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -42,6 +49,46 @@ def compute_error_delta(qp_a, gp_a, qp_b, gp_b):
 # ESTIMATED FIDELITY
 # ═══════════════════════════════════════════════════════════════════════
 
+def _missing(err):
+    return err is None or (isinstance(err, float) and np.isnan(err)) or (
+        isinstance(err, np.floating) and np.isnan(err))
+
+
+def unique_couplers(gate_edges):
+    """One ``(id_u, id_v, error)`` per physical coupler, in first-seen order.
+
+    Backends with a symmetric native 2Q gate (CZ) list every coupler in both
+    directions in their coupling map, and ``state.edges_list`` and the
+    positional gate arrays carry both entries. A coupler is one gate, so it is
+    scored once; counting both directions would square the gate factor on
+    those backends and make their scores incomparable with one-direction (ECR)
+    backends. When the two directions carry different finite errors, the
+    larger one is kept and the mismatch is logged once per coupler. A missing
+    (None / NaN) value never replaces a present one.
+    """
+    out, index = [], {}
+    for u_id, v_id, err in gate_edges:
+        key = frozenset((u_id, v_id))
+        i = index.get(key)
+        if i is None:
+            index[key] = len(out)
+            out.append((u_id, v_id, err))
+            continue
+        u0, v0, prev = out[i]
+        if _missing(prev):
+            out[i] = (u0, v0, err)
+        elif _missing(err) or err == prev:
+            continue
+        else:
+            if key not in _DIRECTION_MISMATCH_LOGGED:
+                _DIRECTION_MISMATCH_LOGGED.add(key)
+                _log.info("Coupler %s-%s has different errors per direction "
+                          "(%s, %s); scoring the larger.", u0, v0, prev, err)
+            if err > prev:
+                out[i] = (u0, v0, err)
+    return out
+
+
 def estimate_fidelity_core(layout_qubit_ids, readout_by_id, gate_edges,
                            all_readout=None):
     """Pure product-form fidelity — the math of :func:`estimate_circuit_fidelity`
@@ -55,6 +102,8 @@ def estimate_fidelity_core(layout_qubit_ids, readout_by_id, gate_edges,
             ids. NaN allowed (skipped). Missing ids are skipped.
         gate_edges: iterable of ``(id_u, id_v, cz_error)`` — the device
             couplings; those with BOTH endpoints in the layout set contribute.
+            Pass each coupler once (see :func:`unique_couplers`); a coupler
+            listed in both directions would be counted twice.
         all_readout: optional full readout array for device-mean outlier
             detection; ``None`` → no outliers.
 
@@ -136,7 +185,8 @@ def estimate_circuit_fidelity(state, circuit_idx, mode='lucj'):
 
       1. Assumes independent errors. Does not model crosstalk between
          simultaneous two-qubit gates or correlated readout errors.
-      2. Counts each edge once. Overestimates fidelity for deep circuits
+      2. Counts each coupler once, whichever directions the backend lists
+         (see ``unique_couplers``). Overestimates fidelity for deep circuits
          that fire the same CZ pair multiple times (e.g. LUCJ ansatzen
          with large bond-dimension parameters). A tighter upper bound
          would multiply ε_gate by the per-edge CZ count.
@@ -204,5 +254,6 @@ def estimate_circuit_fidelity(state, circuit_idx, mode='lucj'):
         if i < len(cz_arr):
             gate_edges.append((u_id, v_id, cz_arr[i]))
 
-    return estimate_fidelity_core(qubit_ids, readout_by_id, gate_edges,
+    return estimate_fidelity_core(qubit_ids, readout_by_id,
+                                  unique_couplers(gate_edges),
                                   all_readout=re_arr)
