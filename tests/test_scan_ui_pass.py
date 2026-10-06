@@ -205,7 +205,8 @@ def test_selector_open_drives_handoff_no_table(monkeypatch):
     b = _build(monkeypatch)
     _patch_one(monkeypatch, _sweep(0.73, 0.60), _FixedProps(0.653))
     staged = []
-    b._inter_qpu_handoff[0] = lambda name, cand: staged.append((name, cand))
+    b._inter_qpu_handoff[0] = (lambda name, cand, report=None:
+                               staged.append((name, cand)))
     b.btn_scan_qpus.click()
 
     assert not _has_table(b)

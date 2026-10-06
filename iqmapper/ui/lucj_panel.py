@@ -1282,16 +1282,35 @@ def setup_lucj_callbacks(ctx):
             f"<div title='{tip}' style='font-size:13px;margin:3px 0;'>"
             f"{line}</div>")]
 
-    def _stage_handoff(backend_name, candidate):
+    _HANDOFF_STYLE = {'ok': ('✅', '#1e8449'), 'info': ('📡', '#555'),
+                      'warn': ('⚠', '#e67e22'), 'error': ('❌', '#e74c3c')}
+
+    def _handoff_reporter(label):
+        """`report(level, text)` writing one short line into `label` — the
+        status next to the button that was clicked."""
+        def _report(level, text):
+            icon, colour = _HANDOFF_STYLE.get(level, _HANDOFF_STYLE['info'])
+            label.value = (f"<span style='font-size:13px;color:{colour};'>"
+                           f"{icon} {esc(str(text))}</span>")
+        return _report
+
+    def _stage_handoff(backend_name, candidate, report):
+        """Open a scan pick (one candidate, or a batch list) on QPU 2.
+
+        Every outcome goes to `report`, so it shows next to the button that
+        was clicked; a failure is logged as well, never swallowed. A handoff
+        failure must not break the scan UI, so nothing is re-raised."""
         hook = inter_qpu_handoff[0] if inter_qpu_handoff else None
         if hook is None:
-            lbl_scan_progress.value = (
-                "<div style='color:#e67e22;font-size:13px;'>Inter-QPU panel "
-                "unavailable — cannot open a remote candidate.</div>")
+            report('error', "QPU 2 panel unavailable here — open from "
+                            "QPU 1's scan")
             return
-        # A handoff must never break the scan UI.
-        with contextlib.suppress(Exception):
-            hook(backend_name, candidate)
+        try:
+            hook(backend_name, candidate, report=report)
+        except Exception as exc:                  # noqa: BLE001 - reported
+            _log.warning("Opening %s on QPU 2 failed: %s", backend_name, exc,
+                         exc_info=True)
+            report('error', f"could not open {backend_name} on QPU 2: {exc}")
 
     def _vintage_cell(vintage):
         """Calibration provenance. Scan scoring is always LIVE now, so
@@ -1351,6 +1370,8 @@ def setup_lucj_callbacks(ctx):
         det = HTML("")
         btn = Button(description='🔗 open on QPU 2', button_style='',
                      layout=Layout(width='180px'))
+        status = HTML("")                       # handoff outcome, next to btn
+        report = _handoff_reporter(status)
 
         def _sync(idx):
             r = rows[idx]
@@ -1370,11 +1391,12 @@ def setup_lucj_callbacks(ctx):
                 return
             payload = payload_fn(r)
             if payload is not None:
-                _stage_handoff(r['name'], payload)   # single candidate OR list
+                _stage_handoff(r['name'], payload, report)   # one OR a list
 
         btn.on_click(_open)
         _sync(0)
-        return [dd, det, HBox([btn], layout=Layout(align_items='center'))]
+        return [dd, det, HBox([btn, status],
+                              layout=Layout(align_items='center'))]
 
     def _scan_detail_line2(r):
         """Second detail line — the per-backend data the removed comparison

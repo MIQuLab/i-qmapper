@@ -262,7 +262,8 @@ def test_batch_selector_handoff_payload(monkeypatch):
         _batch_result_row('ibm_hi', 0.61, 2)],
         'n_scanned': 1, 'n_failed': 0, 'n_skipped': 0})
     staged = []
-    b._inter_qpu_handoff[0] = lambda name, payload: staged.append((name, payload))
+    b._inter_qpu_handoff[0] = (lambda name, payload, report=None:
+                               staged.append((name, payload)))
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_scan_batch.click()
 

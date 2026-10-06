@@ -136,6 +136,7 @@ def setup_inter_qpu(ctx):
     _pre_inter_fig_size = [None, None]  # (width, height) before toggling on
     _qpu_toggle = [None]          # ToggleButtons for QPU1/QPU2 sidebar swap
     _pending_handoff = [None]     # (backend_name, candidate) staged from a scan pick
+    _last_paint_err = [None]      # candidate-paint failure of the last connect
     _qpu2_content_box = [None]    # Container holding the QPU2 sidebar
 
     # ── Toggle handler ──────────────────────────────────────────
@@ -309,25 +310,55 @@ def setup_inter_qpu(ctx):
                 d['styles'][q] = {'fill': fills[role], 'line': line,
                                   'width': 2, 'text_color': '#000000'}
 
-    def _apply_candidate_to_state(s2, candidate):
+    def _clear_slot(d):
+        d['alpha'] = []; d['beta'] = []; d['other'] = []
+        d['qubits'] = []; d['ancilla'] = []; d['styles'] = {}
+
+    def _set_circuit_count(w2, n):
+        """Show exactly `n` circuits on QPU 2: a batch turns multi-circuit
+        mode on with n circuits, a single candidate turns it off. Without this
+        QPU 2 draws C1 only and a batch's other circuits stay invisible."""
+        intra = getattr(w2, 'intra_qpu_mode', None)
+        count = getattr(w2, 'num_circuits', None)
+        if intra is None or count is None:
+            return
+        if n > 1:
+            count.value = min(n, getattr(count, 'max', n))
+            intra.value = True
+        else:
+            intra.value = False
+
+    def _apply_candidate_to_state(s2, candidate, w2=None):
         """Pre-load scan-selected candidate(s) onto QPU-2's layout state so the
         secondary map renders from its first paint. A single candidate lands on
         C1; a LIST (a multi-circuit batch) lands on C1..Cn, one per slot — the
-        list form is what the batch-scan handoff sends."""
-        cands = candidate if isinstance(candidate, (list, tuple)) else [candidate]
-        for i, cand in enumerate(cands):
-            d = s2.layouts_data.get(i)
-            if d is not None:
-                _apply_one_to_slot(d, cand)
+        list form is what the batch-scan handoff sends. Every other slot is
+        cleared, so circuits left over from an earlier, larger batch go, and
+        QPU 2's circuit count follows the payload (`w2`, when given)."""
+        cands = list(candidate) if isinstance(candidate, (list, tuple)) \
+            else [candidate]
+        for i in sorted(s2.layouts_data):
+            if i < len(cands):
+                _apply_one_to_slot(s2.layouts_data[i], cands[i])
+            else:
+                _clear_slot(s2.layouts_data[i])
+        if w2 is not None:
+            _set_circuit_count(w2, len(cands))
 
-    def stage_remote_candidate(backend_name, candidate):
+    def stage_remote_candidate(backend_name, candidate, report=None):
         """Scan-side entry point: reveal the inter-QPU panel, prefill the
         QPU-2 backend dropdown, and stage the candidate so it renders as
         soon as the (user-clicked) connect completes."""
         if not chk_inter_qpu.value:
             chk_inter_qpu.value = True          # fires _on_toggle_inter_qpu
-        with contextlib.suppress(Exception):
+        try:
             dd_backend_qpu2.value = backend_name
+        except Exception as exc:                # noqa: BLE001 - reported
+            _log.warning("QPU-2 backend dropdown rejected %s: %s",
+                         backend_name, exc)
+            if report is not None:
+                report('warn', f"{backend_name} is not in the QPU 2 list "
+                               f"({exc})")
         _pending_handoff[0] = (backend_name, candidate)
         # Prominent one-liner explaining the half-open state until the
         # user clicks Connect. Replaced by the connect status once connected.
@@ -348,7 +379,8 @@ def setup_inter_qpu(ctx):
     # connect), defined after the connect handler below. Bound via a trampoline
     # so this assignment can precede _auto_connect's definition.
     if handoff_cell is not None:
-        handoff_cell[0] = lambda bn, cand: _auto_connect(bn, cand)
+        handoff_cell[0] = (lambda bn, cand, report=None:
+                           _auto_connect(bn, cand, report))
 
     # ── Connect-QPU2: worker-safe FETCH + main-thread PAINT ──────
     # Every ipywidgets / plotly FigureWidget mutation (build_mapper_ui,
@@ -409,16 +441,18 @@ def setup_inter_qpu(ctx):
             # clear_all_layouts()).
             pend = _pending_handoff[0]
             paint_err = None
+            _last_paint_err[0] = None
             if pend is not None and pend[0] == backend_name:
                 # Narrow try (was a blanket suppress): a candidate-paint failure
                 # must never crash the connect, but it must NOT be hidden either.
                 # Log it and surface it on the QPU-2 status below.
                 try:
-                    _apply_candidate_to_state(s2, pend[1])
+                    _apply_candidate_to_state(s2, pend[1], w2)
                     from .. import plot as _plot
                     _plot.refresh_plot(f2, s2, w2)
                 except Exception as _pe:            # noqa: BLE001 - reported below
                     paint_err = _pe
+                    _last_paint_err[0] = _pe
                     _log.warning("QPU-2 candidate paint failed for %s: %s",
                                  backend_name, _pe, exc_info=True)
                 _pending_handoff[0] = None
@@ -537,21 +571,31 @@ def setup_inter_qpu(ctx):
     btn_connect_qpu2.on_click(_on_connect_qpu2)
 
     # ── one-click auto-connect on a scan-candidate pick ───────
-    def _staged_with_error(backend_name, candidate, err):
+    def _staged_with_error(backend_name, candidate, err, report=None):
         """Failure → back to today's STAGED state (re-stage so a manual
         Connect re-applies the candidate) plus an esc()'d one-line error. The
         user loses nothing; one click recovers."""
-        stage_remote_candidate(backend_name, candidate)
+        stage_remote_candidate(backend_name, candidate, report)
         lbl_qpu2_status.value = lbl_qpu2_status.value + (
             f"<div style='font-size:13px;color:#e74c3c;margin:2px 0;'>"
             f"❌ auto-connect failed: {esc(str(err))}</div>")
+        if report is not None:
+            report('error', f"could not open {backend_name} on QPU 2: {err}")
 
-    def _auto_connect(backend_name, candidate):
+    def _n_circuits(candidate):
+        return len(candidate) if isinstance(candidate, (list, tuple)) else 1
+
+    def _auto_connect(backend_name, candidate, report=None):
         """The scan handoff hook (replaces bare staging): stage, then drive the
-        SAME Connect-QPU2 handler automatically. Idempotent + race-guarded."""
+        SAME Connect-QPU2 handler automatically. Idempotent + race-guarded.
+
+        `report(level, text)`, when given, receives every outcome — started,
+        opened, applied, failed — so the caller can show it next to the button
+        that was clicked; the QPU-2 status label is updated as before."""
+        n = _n_circuits(candidate)
         # Always stage first (reveal panel, prefill dropdown, preload candidate,
         # staged banner) — identical to the prior staging behaviour and the fallback.
-        stage_remote_candidate(backend_name, candidate)
+        stage_remote_candidate(backend_name, candidate, report)
 
         # Same backend already connected as QPU-2 → skip the reconnect,
         # just apply the candidate and repaint. _state2[0] holds the connected
@@ -564,7 +608,7 @@ def setup_inter_qpu(ctx):
             # and surfaced, not hidden — see the first-connect path.
             paint_err = None
             try:
-                _apply_candidate_to_state(s2, candidate)
+                _apply_candidate_to_state(s2, candidate, _w2[0])
                 if _fig2[0] is not None and _w2[0] is not None:
                     from .. import plot as _plot
                     _plot.refresh_plot(_fig2[0], s2, _w2[0])
@@ -580,11 +624,21 @@ def setup_inter_qpu(ctx):
                 + ("" if paint_err is None else
                    f"<div style='font-size:13px;color:#e67e22;margin:2px 0;'>"
                    f"⚠ candidate paint failed: {esc(str(paint_err))}</div>"))
+            if report is not None:
+                if paint_err is None:
+                    report('ok', f"applied to {backend_name} on QPU 2 · "
+                                 f"{n} circuit(s)")
+                else:
+                    report('warn', f"{backend_name} on QPU 2, but painting "
+                                   f"failed: {paint_err}")
             return
 
         # A connect already in flight → the staging above is enough;
         # don't launch a second connect.
         if _connect_in_flight[0]:
+            if report is not None:
+                report('info', f"a QPU 2 connect is running; {backend_name} "
+                               f"is staged")
             return
 
         _connect_in_flight[0] = True
@@ -594,6 +648,9 @@ def setup_inter_qpu(ctx):
             f"padding:6px 10px;border-radius:4px;border:1px solid #ffe08a;"
             f"margin:3px 0;font-weight:bold;'>📡 connecting "
             f"{esc(str(backend_name))}…</div>")
+        if report is not None:
+            report('info', f"opening {backend_name} on QPU 2 · "
+                           f"{n} circuit(s)…")
 
         def _finish():
             _connect_in_flight[0] = False
@@ -607,11 +664,18 @@ def setup_inter_qpu(ctx):
             _finish()
             err = _connect_qpu2_paint(backend_name, fetched)
             if err:               # paint reported a failure string
-                _staged_with_error(backend_name, candidate, err)
+                _staged_with_error(backend_name, candidate, err, report)
+            elif report is not None:
+                if _last_paint_err[0] is None:
+                    report('ok', f"{backend_name} open on QPU 2 · "
+                                 f"{n} circuit(s)")
+                else:
+                    report('warn', f"{backend_name} on QPU 2, but painting "
+                                   f"failed: {_last_paint_err[0]}")
 
         def _error(exc):          # the worker fetch itself raised
             _finish()
-            _staged_with_error(backend_name, candidate, exc)
+            _staged_with_error(backend_name, candidate, exc, report)
 
         _spawn_bg(lambda: _connect_qpu2_fetch(backend_name),
                   on_done=_paint, on_error=_error)

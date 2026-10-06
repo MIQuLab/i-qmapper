@@ -214,7 +214,8 @@ def test_scan_handoff_on_select(monkeypatch):
     b = _build(monkeypatch, marshal=lambda cb: cb())
     _patch_scan(monkeypatch)
     staged = []
-    b._inter_qpu_handoff[0] = lambda name, cand: staged.append((name, cand))
+    b._inter_qpu_handoff[0] = (lambda name, cand, report=None:
+                               staged.append((name, cand)))
 
     b.btn_scan_qpus.click()
     # Select the top QPU in the selector, then click its "open on QPU 2" button.
