@@ -12,6 +12,12 @@ import pytest
 from iqmapper import evaluation as ev
 
 
+@pytest.fixture(autouse=True)
+def _isolated_cwd(tmp_path, monkeypatch):
+    """The session scan reads the working directory; keep it hermetic."""
+    monkeypatch.chdir(tmp_path)
+
+
 # ── a synthetic cache ───────────────────────────────────────────────
 
 def _ladder_edges(n_rungs):
@@ -54,16 +60,19 @@ def _write_cache(tmp_path, backend, stamps, n_rungs=8):
         _data._CACHE_DIR = old
 
 
-def _write_session(session_dir, backend, edges, n_qubits):
-    os.makedirs(session_dir, exist_ok=True)
-    payload = {
-        'active_backend_name': backend,
-        'qubit_ids': [str(i) for i in range(n_qubits)],
-        'edges_list': [list(e) for e in edges],
-    }
-    with open(os.path.join(session_dir, 'sess.json'), 'w',
-              encoding='utf-8') as fh:
-        json.dump(payload, fh)
+def _write_session(session_dir, backend, edges, n_qubits,
+                   name='sess.qpusession.json'):
+    """A session saved the way the app saves one: a real SessionState,
+    serialised by `to_session_dict` through `save_session_to_path`."""
+    from iqmapper.export.session import save_session_to_path
+    from iqmapper.state import SessionState
+    state = SessionState()
+    state.active_backend_name = backend
+    state.qubit_ids = [str(i) for i in range(n_qubits)]
+    state.edges_list = [tuple(e) for e in edges]
+    path = os.path.join(str(session_dir), name)
+    save_session_to_path(state, path)
+    return path
 
 
 # ── 8. the harness ──────────────────────────────────────────────────
@@ -395,3 +404,108 @@ def test_cli_prints_the_suggestion_and_takes_the_new_flags(
     assert 'hybrid k<=1' in printed
     assert 'Suggested "Guided up to k":' in printed
     assert '- norb 5:' in printed
+
+
+# ── finding a real saved session ────────────────────────────────────
+
+def test_a_real_session_is_keyed_by_backend_name(tmp_path):
+    path = _write_session(tmp_path / 'any', 'ibm_fixture', [(0, 1)], 2)
+    with open(path, encoding='utf-8') as fh:
+        payload = json.load(fh)
+    assert payload['backend_name'] == 'ibm_fixture'
+    assert 'active_backend_name' not in payload
+
+
+def test_session_path_is_used_directly(tmp_path):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    path = _write_session(tmp_path / 'elsewhere' / 'deep', backend, edges, 24,
+                          name='mine.qpusession.json')
+    report = ev.compare_engines(backend, norbs=(4,), top_n=2, min_bridges=1,
+                                cache_dir=tmp_path, session_path=path,
+                                beam_width=50)
+    assert not report.errors, report.errors
+    assert report.rows
+
+
+def test_a_session_in_the_working_directory_is_found(tmp_path):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    _write_session(tmp_path, backend, edges, 24,
+                   name='my_session.qpusession.json')         # app default
+    assert ev.coupling_from_sessions(backend) == [tuple(e) for e in edges]
+    report = ev.compare_engines(backend, norbs=(4,), top_n=2, min_bridges=1,
+                                cache_dir=tmp_path, beam_width=50)
+    assert not report.errors, report.errors
+    assert report.rows
+
+
+def test_the_working_directory_scan_reads_only_session_files(tmp_path):
+    backend = 'ibm_fixture'
+    path = _write_session(tmp_path, backend, [(0, 1)], 2,
+                          name='my_session.qpusession.json')
+    os.rename(path, tmp_path / 'notes.json')
+    assert ev.coupling_from_sessions(backend) is None
+
+
+def test_a_session_for_another_backend_is_refused(tmp_path):
+    backend = 'ibm_fixture'
+    _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    path = _write_session(tmp_path / 'x', 'ibm_other', [(0, 1)], 2)
+    report = ev.compare_engines(backend, norbs=(4,), cache_dir=tmp_path,
+                                session_path=path)
+    assert report.rows == []
+    assert 'is a session for ibm_other, not ibm_fixture' in report.errors[0]
+    # The scan skips it rather than using another chip's topology.
+    _write_session(tmp_path, 'ibm_other', [(0, 1)], 2,
+                   name='other.qpusession.json')
+    assert ev.coupling_from_sessions(backend) is None
+
+
+def test_a_session_without_edges_is_refused(tmp_path):
+    backend = 'ibm_fixture'
+    _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    path = _write_session(tmp_path / 'x', backend, [], 0)
+    report = ev.compare_engines(backend, norbs=(4,), cache_dir=tmp_path,
+                                session_path=path)
+    assert report.rows == []
+    assert 'has no edges_list' in report.errors[0]
+
+
+def test_a_missing_session_file_is_reported(tmp_path):
+    report = ev.compare_engines('ibm_fixture', norbs=(4,), cache_dir=tmp_path,
+                                session_path=str(tmp_path / 'nope.json'))
+    assert report.rows == []
+    assert 'cannot read session file' in report.errors[0]
+
+
+def test_nothing_found_says_how_to_pass_a_session(tmp_path):
+    backend = 'ibm_fixture'
+    _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    report = ev.compare_engines(backend, norbs=(4,), cache_dir=tmp_path)
+    message = report.errors[0]
+    assert '--session PATH' in message and 'session_path=' in message
+    assert '.iqmapper_sessions' in message and str(tmp_path) in message
+
+
+def test_the_legacy_key_is_still_accepted(tmp_path):
+    directory = tmp_path / '.iqmapper_sessions'
+    directory.mkdir()
+    (directory / 'old.json').write_text(json.dumps({
+        'active_backend_name': 'ibm_fixture', 'edges_list': [[0, 1]]}),
+        encoding='utf-8')
+    assert ev.coupling_from_sessions('ibm_fixture') == [(0, 1)]
+
+
+def test_cli_takes_a_session_path(tmp_path, capsys, monkeypatch):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    path = _write_session(tmp_path / 'saved', backend, edges, 24)
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    code = ev.main([backend, '--norb', '4', '--top-n', '2',
+                    '--min-bridges', '1', '--beam-width', '50',
+                    '--session', path, '--out-dir', str(tmp_path / 'out')])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert '## Errors' not in printed
+    assert '| ' + '2026-09-01T00:00:00Z' in printed

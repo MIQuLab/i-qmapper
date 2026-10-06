@@ -47,13 +47,19 @@ cache. `data.py` is a frozen engine, so this module cannot start caching it.
 So the coupling has to come from somewhere else, in this order:
 
   1. an explicit `coupling=[(u, v), ...]` argument;
-  2. a saved session for that backend under `.iqmapper_sessions/`, which does
-     persist `edges_list` and `qubit_ids` (see `state.to_dict`);
-  3. otherwise the run reports a clear error rather than guessing — an
+  2. an explicit saved session file (`session_path=`, CLI `--session PATH`),
+     which must be a session for the requested backend and carry an
+     `edges_list`, or the run reports why it is not usable;
+  3. a saved session for that backend found by scanning
+     `<cwd>/.iqmapper_sessions/` (any `.json`) and `<cwd>/`
+     (`*.qpusession.json`, where "Export Session" saves by default);
+  4. otherwise the run reports a clear error rather than guessing — an
      invented topology would produce numbers that look real and mean nothing.
 
-Save a session once for the backend you want to evaluate and every cached
-calibration for it becomes replayable.
+Sessions persist `backend_name`, `edges_list` and `qubit_ids` (see
+`state.to_session_dict`). Save a session once for the backend you want to
+evaluate and every cached calibration for it becomes replayable; if it was
+saved elsewhere, pass it with `--session`.
 
 The gate arrays are positional, so the edges must be the backend's own edge
 list in the app's order (`data._generate_ibm`: `coupling_map.get_edges()`,
@@ -66,7 +72,8 @@ CLI
     python -m iqmapper.evaluation ibm_boston --norb 8 12 16 --hybrid-k 1 2
 
 prints the table and the suggested "Guided up to k" per norb, and writes both
-to `.scratch/eval_<backend>_<timestamp>.md`. `--scorer` defaults to `lqs`.
+to `.scratch/eval_<backend>_<timestamp>.md`. `--scorer` defaults to `lqs`;
+`--session PATH` names the saved session to take the coupling map from.
 """
 import argparse
 import json as _json
@@ -91,6 +98,9 @@ DEFAULT_NORBS = (8, 12, 16)
 
 #: Scorer names accepted by `compare_engines`, and the metric each reports.
 SCORERS = {'proxy': 'lqs_proxy', 'lqs': 'lqs'}
+
+#: Extension "Export Session" gives a saved session.
+SESSION_SUFFIX = '.qpusession.json'
 
 
 # ── replaying a cached calibration as a backend/props pair ──────────
@@ -356,7 +366,8 @@ def _best_lqs(result, k):
 def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
                     min_bridges=0, cache_dir=None, beam_width=200,
                     circuit_score_fn=None, limit=None, coupling=None,
-                    session_dir=None, scorer='proxy', hybrid_ks=()):
+                    session_dir=None, scorer='proxy', hybrid_ks=(),
+                    session_path=None):
     """Run both engines over the cached calibrations and report.
 
     Read-only and offline: reads the local calibration cache, never the
@@ -373,6 +384,8 @@ def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
             `circuit_score_fn` wins over both.
         hybrid_ks: thresholds at which to also run the hybrid engine; each
             adds a `hybrid k<=t` column. Empty = the two-engine table.
+        session_path: a saved session file to take the coupling map from,
+            instead of scanning for one. Ignored when `coupling` is given.
     """
     if scorer not in SCORERS:
         raise ValueError(f"scorer={scorer!r}; expected one of "
@@ -397,16 +410,19 @@ def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
         rows, errors = [], []
         # The cache has no topology; resolve it once for the whole run.
         session_ids = None
+        if coupling is None and session_path is not None:
+            try:
+                coupling, session_ids = _session_from_path(backend_name,
+                                                           session_path)
+            except ValueError as exc:
+                errors.append(f'No coupling map for {backend_name}: {exc}')
+                return Report(backend_name, [], errors, metric, hybrid_ks)
         if coupling is None:
             topology = _session_topology(backend_name, session_dir)
             if topology is not None:
                 coupling, session_ids = topology
         if coupling is None:
-            errors.append(
-                f'No coupling map for {backend_name}: the calibration cache '
-                f'stores only property arrays. Pass coupling=[(u, v), ...] or '
-                f'save a session for this backend so .iqmapper_sessions/ '
-                f'carries its edges_list.')
+            errors.append(_no_session_message(backend_name, session_dir))
             return Report(backend_name, [], errors, metric, hybrid_ks)
 
         for stamp in stamps:
@@ -464,41 +480,128 @@ def _unpack(snapshot):
 def coupling_from_sessions(backend_name, session_dir=None):
     """Recover a coupling map for `backend_name` from a saved session.
 
-    Sessions persist `edges_list` (and `qubit_ids`) via `state.to_dict`, so one
-    saved session makes every cached calibration for that backend replayable.
-    Returns a list of (u, v), or None when nothing matches.
+    Sessions persist `edges_list` (and `qubit_ids`) via
+    `state.to_session_dict`, so one saved session makes every cached
+    calibration for that backend replayable. Returns a list of (u, v), or None
+    when nothing matches.
     """
     topology = _session_topology(backend_name, session_dir)
     return None if topology is None else topology[0]
 
 
+def _session_backend(payload):
+    """The backend a session belongs to. `to_session_dict` writes
+    `backend_name`; `active_backend_name` is accepted as well."""
+    return str(payload.get('backend_name')
+               or payload.get('active_backend_name') or '')
+
+
+def _read_session(path):
+    """A saved session as a dict. Raises ValueError saying what is wrong."""
+    from .export import MAX_IMPORT_BYTES
+    try:
+        size = os.path.getsize(path)
+    except OSError as exc:
+        raise ValueError(f'cannot read session file {path} ({exc}).') from exc
+    if size > MAX_IMPORT_BYTES:
+        raise ValueError(f'session file {path} is larger than '
+                         f'{MAX_IMPORT_BYTES // 1_048_576} MB.')
+    try:
+        with open(path, 'r', encoding='utf-8') as fh:
+            payload = _json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'{path} is not a readable session file '
+                         f'({exc}).') from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f'{path} is not a session file.')
+    return payload
+
+
+def _topology_of(payload):
+    """`(edges, qubit_ids)` from a session, or None without an edges_list."""
+    edges = payload.get('edges_list') or []
+    if not edges:
+        return None
+    ids = payload.get('qubit_ids')
+    return ([tuple(int(x) for x in e) for e in edges],
+            [str(q) for q in ids] if ids else None)
+
+
+def _session_from_path(backend_name, path):
+    """`(edges, qubit_ids)` from one named session file.
+
+    Raises ValueError when the file is unreadable, belongs to another backend,
+    or carries no edges_list.
+    """
+    payload = _read_session(path)
+    found = _session_backend(payload)
+    if found != str(backend_name):
+        raise ValueError(f'{path} is a session for '
+                         f'{found or "no named backend"}, not {backend_name}.')
+    topology = _topology_of(payload)
+    if topology is None:
+        raise ValueError(f'{path} is a session for {backend_name} but has no '
+                         f'edges_list; save it again with the backend '
+                         f'connected.')
+    return topology
+
+
+def _session_dirs(session_dir=None):
+    """(managed session directory, working directory) — where to scan."""
+    return (session_dir or os.path.join(os.getcwd(), '.iqmapper_sessions'),
+            os.getcwd())
+
+
+def _session_files(session_dir=None):
+    """Candidate session files: any `.json` in the managed directory, then
+    `*.qpusession.json` in the working directory. Sorted, deduplicated."""
+    managed, cwd = _session_dirs(session_dir)
+    out, seen = [], set()
+    for directory, any_json in ((managed, True), (cwd, False)):
+        try:
+            names = sorted(os.listdir(directory))
+        except OSError:
+            continue
+        for name in names:
+            if not (name.endswith(SESSION_SUFFIX)
+                    or (any_json and name.endswith('.json'))):
+                continue
+            path = os.path.realpath(os.path.join(directory, name))
+            if path not in seen and os.path.isfile(path):
+                seen.add(path)
+                out.append(path)
+    return out
+
+
 def _session_topology(backend_name, session_dir=None):
     """`(edges, qubit_ids)` from the first matching saved session, or None.
 
-    `qubit_ids` is None when the session does not carry it.
+    `qubit_ids` is None when the session does not carry it. Unreadable files,
+    other backends' sessions and sessions without an edges_list are skipped.
     """
-    directory = session_dir or os.path.join(os.getcwd(), '.iqmapper_sessions')
-    try:
-        names = sorted(os.listdir(directory))
-    except OSError:
-        return None
-    for name in names:
-        if not name.endswith('.json'):
-            continue
+    for path in _session_files(session_dir):
         try:
-            with open(os.path.join(directory, name), 'r',
-                      encoding='utf-8') as fh:
-                payload = _json.load(fh)
-        except Exception:
+            payload = _read_session(path)
+        except ValueError:
             continue
-        if str(payload.get('active_backend_name') or '') != str(backend_name):
+        if _session_backend(payload) != str(backend_name):
             continue
-        edges = payload.get('edges_list') or []
-        if edges:
-            ids = payload.get('qubit_ids')
-            return ([tuple(int(x) for x in e) for e in edges],
-                    [str(q) for q in ids] if ids else None)
+        topology = _topology_of(payload)
+        if topology is not None:
+            return topology
     return None
+
+
+def _no_session_message(backend_name, session_dir=None):
+    """The error for a run with no coupling map: where it looked, and how
+    to point it at a session saved somewhere else."""
+    managed, cwd = _session_dirs(session_dir)
+    return (f'No coupling map for {backend_name}: the calibration cache '
+            f'stores only property arrays, and no saved session for this '
+            f'backend with an edges_list was found in {managed} or in {cwd} '
+            f'(*{SESSION_SUFFIX}). Save a session for {backend_name} in the '
+            f'app and pass it with --session PATH (session_path= in '
+            f'compare_engines), or pass coupling=[(u, v), ...].')
 
 
 def _compare_one(stamp, norb, backend, props, top_n, min_bridges, beam_width,
@@ -567,6 +670,9 @@ def main(argv=None):
     parser.add_argument('--session-dir', default=None,
                         help='where to look for a saved session carrying the '
                              'coupling map (default .iqmapper_sessions)')
+    parser.add_argument('--session', default=None, metavar='PATH',
+                        help='saved session file (.qpusession.json) for this '
+                             'backend to take the coupling map from')
     parser.add_argument('--scorer', choices=sorted(SCORERS), default='lqs',
                         help='lqs = the app\'s circuit-level LQS (default); '
                              'proxy = product score')
@@ -583,7 +689,8 @@ def main(argv=None):
                              beam_width=args.beam_width, limit=args.limit,
                              session_dir=args.session_dir,
                              scorer=args.scorer,
-                             hybrid_ks=tuple(args.hybrid_k))
+                             hybrid_ks=tuple(args.hybrid_k),
+                             session_path=args.session)
     markdown = (report.to_markdown() + '\n'
                 + format_suggestion(suggest_guided_max_k(report, args.tol)))
     print(markdown)
