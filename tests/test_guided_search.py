@@ -170,7 +170,7 @@ def test_a_wider_beam_finds_a_superset_of_completed_layouts():
     engine, norb = _engine_for(backend, props, norb=6)
     k = 2
 
-    narrow = {s.key() for s in engine.run_beam(k, 40)}
+    narrow = {s.key() for s in engine.run_beam(k, 50)}
     engine.expansions = 0
     wide = {s.key() for s in engine.run_beam(k, 200)}
 

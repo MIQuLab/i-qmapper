@@ -33,8 +33,12 @@ engine searches for, so the rules are restated explicitly:
   node `2*norb + i` and is adjacent to exactly two nodes: alpha slot `4*i` and
   beta slot `4*i`.
 * A layout is the list `alpha(norb) + beta(norb) + bridges(k)`, and an
-  embedding is valid iff it is injective and every template edge maps to a
-  coupling edge.
+  embedding is valid iff it is injective, every template edge maps to a
+  coupling edge, and no other coupling edge joins two of its qubits. That
+  last rule makes the embedding induced, which is what
+  `rustworkx.vf2_mapping(subgraph=True)` returns by default, so both engines
+  search the same space. The LQS counts every coupler between layout qubits,
+  so a non-template one would be scored as a gate the circuit never runs.
 
 LUCJ PREFIX CONTRACT (from ancilla_sweep, and binding here)
     A k'-bridge variant keeps the bridges at the FIRST k' standard slots
@@ -142,9 +146,10 @@ def template_edges(norb, k):
 
 
 def validate_layout(layout, norb, k, adjacency):
-    """True iff `layout` is a valid embedding of the (norb, k) template.
+    """True iff `layout` is a valid induced embedding of the (norb, k) template.
 
-    Checks injectivity and that every template edge lands on a coupling edge.
+    Checks injectivity, that every template edge lands on a coupling edge, and
+    that every coupling edge between two layout qubits is a template edge.
     Used after every refinement move, because a move that produced an invalid
     layout would be worse than no refinement at all.
     """
@@ -153,9 +158,17 @@ def validate_layout(layout, norb, k, adjacency):
         return False
     if len(set(layout)) != expected:
         return False
-    for u, v in template_edges(norb, k):
+    edges = template_edges(norb, k)
+    for u, v in edges:
         if layout[v] not in adjacency.get(layout[u], ()):
             return False
+    allowed = {frozenset(e) for e in edges}
+    position = {q: i for i, q in enumerate(layout)}
+    for i, q in enumerate(layout):
+        for n in adjacency.get(q, ()):
+            j = position.get(n)
+            if j is not None and frozenset((i, j)) not in allowed:
+                return False
     return True
 
 
@@ -251,6 +264,15 @@ class _GuidedEngine:
     def e_factor(self, a, b):
         return max(0.0, 1.0 - self.e_of(a, b))
 
+    def couples_only_to(self, q, placed, allowed):
+        """Is every coupler from `q` into `placed` one of the `allowed` ends?
+
+        Growth calls this for each qubit it adds, against everything already
+        placed, so every pair of layout qubits is checked once and the
+        finished layout is an induced embedding.
+        """
+        return self.adjacency.get(q, frozenset()) & placed <= allowed
+
     # ── seeding ─────────────────────────────────────────────────
     def seeds(self, k_target):
         """Initial states at orbital slot 0.
@@ -258,7 +280,8 @@ class _GuidedEngine:
         Slot 0 always carries a bridge when k >= 1 (n % 4 == 0 includes 0), so
         a seed is a (bridge, alpha0, beta0) triple with the bridge adjacent to
         both chain heads. With k == 0 there is no bridge and a seed is any
-        ordered pair of distinct qubits — collapsed by canonicalisation.
+        ordered pair of distinct qubits — collapsed by canonicalisation. The
+        two chain heads are never coupled to each other.
         """
         out = []
         # Iterate the ADJACENCY, not the graph: excluded qubits (and any
@@ -269,6 +292,8 @@ class _GuidedEngine:
                 neighbours = sorted(self.adjacency[r])
                 for i, a in enumerate(neighbours):
                     for b in neighbours[i + 1:]:
+                        if b in self.adjacency.get(a, frozenset()):
+                            continue
                         d_log = (_safe_log(self.q_factor(a))
                                  + _safe_log(self.q_factor(b))
                                  + _safe_log(self.q_factor(r))
@@ -282,6 +307,8 @@ class _GuidedEngine:
             nodes = sorted(self.adjacency)
             for i, a in enumerate(nodes):
                 for b in nodes[i + 1:]:
+                    if b in self.adjacency.get(a, frozenset()):
+                        continue
                     d_log = (_safe_log(self.q_factor(a))
                              + _safe_log(self.q_factor(b)))
                     d_add = self.r_of(a) + self.r_of(b)
@@ -294,7 +321,12 @@ class _GuidedEngine:
         return j % 4 == 0 and (j // 4) < k_target
 
     def expand(self, state, k_target):
-        """Every legal one-slot extension of `state`."""
+        """Every legal one-slot extension of `state`.
+
+        A new qubit may couple only to its template neighbours among the
+        qubits already placed: a chain qubit to its predecessor, a bridge to
+        the two chain qubits it joins.
+        """
         j = state.depth
         a_prev, b_prev = state.alpha[-1], state.beta[-1]
         want_bridge = self._slot_has_bridge(j, k_target)
@@ -302,8 +334,12 @@ class _GuidedEngine:
         for a in sorted(self.adjacency.get(a_prev, frozenset())):
             if a in state.used:
                 continue
+            if not self.couples_only_to(a, state.used, {a_prev}):
+                continue
             for b in sorted(self.adjacency.get(b_prev, frozenset())):
                 if b in state.used or b == a:
+                    continue
+                if not self.couples_only_to(b, state.used | {a}, {b_prev}):
                     continue
                 self.expansions += 1
                 d_log = (_safe_log(self.q_factor(a))
@@ -319,6 +355,9 @@ class _GuidedEngine:
                           & self.adjacency.get(b, frozenset()))
                 for r in sorted(common):
                     if r in state.used or r in (a, b):
+                        continue
+                    if not self.couples_only_to(r, state.used | {a, b},
+                                                {a, b}):
                         continue
                     b_log = (_safe_log(self.q_factor(r))
                              + _safe_log(self.e_factor(a, r))
@@ -412,8 +451,8 @@ def _entry_from_state(engine, alpha, beta, bridges, k):
 def _candidate_moves(engine, entry, k):
     """Every 1-opt neighbour of `entry`, as (label, new_layout_parts).
 
-    Three move families, all preserving the template by construction and
-    re-validated afterwards anyway:
+    Three move families. A move can bring in a coupler the template does not
+    have, so `refine_entry` re-validates every one with `validate_layout`:
 
       bridge — swap a bridge for another common unused neighbour of the two
           chain qubits it joins;

@@ -427,10 +427,17 @@ you connect a backend from the Hardware section.
 ### LQS
 
 Layout Quality Score: an estimate of how well a circuit would run on a given
-set of qubits, combining the readout and gate errors of every qubit and
-coupling it uses. It is the same number the Estimated Layout-Quality box
-shows. A `(template)` suffix means the full calculation was unavailable and a
-simpler heuristic was used instead.
+set of qubits. It is the product of (1 − readout error) over the qubits the
+circuit uses and (1 − two-qubit gate error) over every coupler joining two of
+those qubits, each coupler counted once whichever directions the backend
+lists. It is the same number the Estimated Layout-Quality box shows; each
+circuit's line there, for example `C1: …% (17q × 16g · …)`, gives the qubit
+count and that coupler count. Layouts found by the LUCJ search engines never
+contain a coupler the ansatz does not use, so for them the coupler count is
+the ansatz's two-qubit gate count: 2 × (norb − 1) along the two chains plus
+2 per ancilla (16 for norb = 8 with one ancilla). A `(template)` suffix means
+the full calculation was unavailable and a simpler heuristic was used
+instead.
 
 ## Extending to other vendors
 

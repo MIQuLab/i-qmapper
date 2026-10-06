@@ -72,6 +72,23 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   in one short sentence, and each is explained in the README section
   "Understanding the messages".
 
+### Fixed
+- LQS counted every two-qubit gate twice on backends that list each coupler
+  in both directions (CZ devices such as Heron), so their scores were too low
+  and could not be compared with ECR devices such as Eagle, which list one
+  direction. Each coupler now counts once, in the Layout-Quality box, the
+  sweep ranking and the multi-QPU scan alike.
+- The guided search could return layouts in which two qubits were joined by
+  a coupler the ansatz does not use (for example the two ends of a chain that
+  wraps round a hexagon). The LQS counted that coupler as a gate, so such a
+  layout was scored, and could be ranked, on a gate the circuit never runs.
+  Guided layouts now contain only the ansatz's own couplers, as exhaustive
+  ones already did.
+- With "Auto-Color Gates" on, an ancilla coloured its edges towards qubits of
+  other circuits too, so a coupler between two circuits looked like a gate
+  of one of them. An ancilla now colours only edges to qubits of its own
+  circuit, on the map and in the PNG export.
+
 ## [0.0.5] — 2026-08
 
 First public-ready release.

@@ -319,18 +319,20 @@ def refresh_plot(fig, state, widgets_ref):
                 if not both_other:
                     s_u, s_v = global_style[u], global_style[v]
                     # Highlight only same-group edges (α-α, β-β, …) or
-                    # ancilla-adjacent edges; α/β boundary stays grey.
-                    # Same-group check compares (circuit, role) tuples
-                    # — NOT fill colour (see qubit_group_key comment above).
-                    if state.qubit_ids[u] in all_ancillas:
+                    # ancilla-adjacent edges inside one circuit; α/β
+                    # boundary and edges between circuits stay grey.
+                    # Group checks compare (circuit, role) tuples — NOT
+                    # fill colour (see qubit_group_key comment above).
+                    gk_u = qubit_group_key.get(u)
+                    gk_v = qubit_group_key.get(v)
+                    same_circuit = (gk_u is not None and gk_v is not None
+                                    and gk_u[0] == gk_v[0])
+                    if same_circuit and state.qubit_ids[u] in all_ancillas:
                         match_col = s_u['line']
-                    elif state.qubit_ids[v] in all_ancillas:
+                    elif same_circuit and state.qubit_ids[v] in all_ancillas:
                         match_col = s_v['line']
-                    else:
-                        gk_u = qubit_group_key.get(u)
-                        gk_v = qubit_group_key.get(v)
-                        if gk_u is not None and gk_u == gk_v:
-                            match_col = s_u['line']
+                    elif gk_u is not None and gk_u == gk_v:
+                        match_col = s_u['line']
             edge_colors.append(match_col if match_col else w.pp_gate_col.value)
             edge_widths.append(hl_w if match_col else base_w)
 
@@ -1021,15 +1023,16 @@ def build_static_figure(state, opts, margin=40, crop_to_selection=False, annotat
                 both_other = (state.qubit_ids[u] in all_others and state.qubit_ids[v] in all_others)
                 if not both_other:
                     s_u, s_v = global_style[u], global_style[v]
-                    if state.qubit_ids[u] in all_ancillas:
+                    gk_u = qubit_group_key.get(u)
+                    gk_v = qubit_group_key.get(v)
+                    same_circuit = (gk_u is not None and gk_v is not None
+                                    and gk_u[0] == gk_v[0])
+                    if same_circuit and state.qubit_ids[u] in all_ancillas:
                         match_col = s_u['line']
-                    elif state.qubit_ids[v] in all_ancillas:
+                    elif same_circuit and state.qubit_ids[v] in all_ancillas:
                         match_col = s_v['line']
-                    else:
-                        gk_u = qubit_group_key.get(u)
-                        gk_v = qubit_group_key.get(v)
-                        if gk_u is not None and gk_u == gk_v:
-                            match_col = s_u['line']
+                    elif gk_u is not None and gk_u == gk_v:
+                        match_col = s_u['line']
 
             if match_col:
                 edge_shapes.append(dict(type='line', x0=x0, y0=y0, x1=x1, y1=y1,
