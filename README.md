@@ -2,7 +2,7 @@
 
 **Interactive, noise-aware qubit layout selection for IBM Quantum hardware — see your device, understand its errors, and place your circuit where it will actually run well.**
 
-[![tests](https://github.com/mbazayeva/i-qmapper/actions/workflows/tests.yml/badge.svg)](https://github.com/mbazayeva/i-qmapper/actions/workflows/tests.yml)
+[![tests](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml/badge.svg)](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
@@ -77,18 +77,23 @@ Install from [PyPI](https://pypi.org/project/i-qmapper/):
 
 ```bash
 pip install i-qmapper
-pip install "i-qmapper[png]"
-pip install "i-qmapper[png,timelapse]"
-pip install "i-qmapper[benchmark]"
+```
+
+Optional extras, combinable (e.g. `"i-qmapper[png,timelapse]"`):
+
+```bash
+pip install "i-qmapper[png]"         # publication PNG export (kaleido)
+pip install "i-qmapper[timelapse]"   # time-lapse GIF/MP4 export (imageio, imageio-ffmpeg)
+pip install "i-qmapper[benchmark]"   # real-time benchmarking (qiskit-experiments)
 ```
 
 ### From source (development)
 
 ```bash
-git clone https://github.com/MIQuLab/i-qmapper 
+git clone https://github.com/MIQuLab/i-qmapper
 cd i-qmapper
-pip install -e ".[dev]"        
-pytest -q                     
+pip install -e ".[dev]"
+pytest -q
 ```
 
 ## Set up your IBM Quantum account
@@ -453,11 +458,14 @@ iqmapper/
 ├── data.py           # calibration fetch + per-user cache
 ├── plot.py           # device graph & heatmap rendering
 ├── auto_lucj.py      # LUCJ auto-placement + layout error scoring
+├── ancilla_sweep.py, guided_search.py, engine_select.py, multi_sweep.py,
+│   joint_plan.py, qpu_scan.py …   # layout search engines and planners
+├── benchmark.py      # opt-in real-time benchmarking
 ├── stability.py      # multi-day stability analysis
 ├── state.py          # session state, undo/redo, (de)serialization
 ├── export/           # scoring (LQS), layout I/O, codegen, PNG/analysis export
 └── ui/               # ipywidgets panels (builder, time, history, analysis, …)
-tests/                # 183 tests, offline, no QPU required
+tests/                # offline, no QPU required — run with: python -m pytest -q
 ```
 
 For a guided tour of the modules and data flow, see

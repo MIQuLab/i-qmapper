@@ -7,7 +7,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - Opt-in real-time benchmarking (`iqmapper.benchmark`, extra
-  `pip install "i-qmapper[benchmark]"`): three tiers that re-measure the
+  `pip install "i-qmapper[benchmark]"`): three levels that re-measure the
   candidate qubits and edges with `qiskit-experiments` and feed the result
   back as a "measured" calibration epoch, so the heatmap, LQS, re-ranking and
   export all read fresh numbers. Never automatic, never inside the multi-QPU
@@ -16,45 +16,61 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   layouts / sweep candidates / whole QPU / a custom qubit list) and, in
   inter-QPU mode, a QPU 1 | QPU 2 selector. The experiment plan is composite
   (one `ParallelExperiment` per kind, edge-coloured layers for two-qubit RB),
-  so a full-chip Level 3 is ~134 circuits rather than ~43,400, and is split
+  so a full-chip Level 3 stays small enough for IBM to accept, and is split
   across jobs when it would exceed IBM's per-job shot limit. A rejected or
   errored job now reports IBM's own message with the job ids, and a run that
   measured nothing is reported as a failure instead of being applied and
   labelled "measured". Measured values are checked against the reported
-  calibration after every run; a systematic offset (median more than 2x away)
+  calibration after every run; a systematic offset (median ratio outside
+  0.5x–2x)
   is treated as an estimator mismatch and the epoch is applied in relative
   mode, preserving per-element ratios so outlying couplers still stand out.
   Two-qubit RB now subtracts the measured single-qubit error rates, and a
   calibration-check mode separates estimator bias from crosstalk.
-- Stratified ancilla sweep: a single VF2 solve at `k_max` feeding a
-  bridge-subtraction cascade down to `k_min`, with a hybrid mode, a shuffled
-  search for hard instances, and region-diversity selection across the chip.
-- Stability filter with an always-on quality floor, so layouts that score well
-  on one calibration epoch but drift across neighbouring ones are rejected.
-- Multi-circuit sweep: sequential orchestration over several circuits with
-  replan-from-step to recover a run without restarting it.
+- Stratified ancilla sweep (the default, exhaustive engine): one VF2 solve at
+  the maximum ancilla count feeding a bridge-subtraction cascade down to the
+  minimum, plus a direct search per ancilla count ("Deep search per ancilla
+  count", on by default), a shuffled search order so a capped search samples
+  the whole chip, and region-diversity selection ("Prefer diverse regions").
+- Diverse enumeration (on by default): layouts that are near-copies of one
+  already kept no longer use up the search cap, so a capped search spreads
+  across the chip instead of filling up with variations of the first region
+  it finds.
+- Guided search engine (opt-in via "Search engine"; Exhaustive stays the
+  default): a calibration-led beam search that grows layouts on the
+  best-calibrated qubits, then polishes the finalists with small local moves
+  (swap a bridge or chain-end qubit, shift a chain by one) kept only when they
+  raise the circuit-level LQS.
+- Opt-in stability filter that excludes qubits volatile across the cached
+  calibration history, and an always-on quality floor (3σ by default, 0 turns
+  it off) that removes outlier qubits from every search.
+- Multi-circuit sweep: places several circuits one after another; picking a
+  different layout for one circuit re-plans the circuits after it.
 - Multi-QPU scan across the available backends, with one-click inter-QPU
   handoff that reopens the chosen layout on the second QPU.
 - Epoch-consistent scoring: fidelity and ranking read a single pinned
   calibration epoch, so comparisons within a sweep stay commensurable.
-- Hybrid search engine: guided search for low ancilla counts, where the
+- Hybrid search engine (opt-in; the default stays exhaustive): guided search
+  for ancilla counts up to a threshold you set ("Guided up to k"), where the
   exhaustive search hits its cap and only ranks a sample, and the exhaustive
-  search above a threshold you set ("Guided up to k").
-- Joint multi-circuit planner: keeps several placement plans at once instead
-  of placing each circuit greedily, so the first circuit no longer takes a
-  region the next one needed. Never worse than the sequential planner, uses
-  the selected search engine, and reports couplers shared by two circuits at
-  buffer 0 (with an optional penalty to avoid them).
-- Engine comparison harness (`python -m iqmapper.evaluation`) now ranks with
-  the app's real circuit-level LQS, rebuilt for every cached calibration
-  (`--scorer lqs`, the new default; `proxy` keeps the product score). It can
-  add a hybrid-engine column (`--hybrid-k`) and prints the suggested
+  search above it.
+- Joint multi-circuit planner (opt-in; Sequential stays the default): keeps
+  several placement plans at once instead of placing each circuit greedily,
+  so the first circuit no longer takes a region the next one needed. Never
+  worse than the sequential planner, uses the selected search engine, and
+  reports couplers shared by two circuits at buffer 0 (with an optional
+  penalty to avoid them).
+- Engine comparison harness (`python -m iqmapper.evaluation`): replays the
+  search engines over the cached calibrations, offline, and ranks with the
+  app's real circuit-level LQS rebuilt for every calibration (`--scorer lqs`,
+  the default; `proxy` uses the product score). It takes the coupling map
+  from a saved session (`--session PATH`, or found in the working folder),
+  can add a hybrid-engine column (`--hybrid-k`), and prints the suggested
   "Guided up to k" for each orbital count (`--tol` sets how far guided may
   trail and still count).
-
-### Fixed
-- Batch scan scored every backend's layouts with the active backend's
-  calibration; each backend is now scored with its own.
+- Shorter UI messages: status lines, notices and tooltips say what happened
+  in one short sentence, and each is explained in the README section
+  "Understanding the messages".
 
 ## [0.0.5] — 2026-08
 

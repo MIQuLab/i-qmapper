@@ -15,7 +15,10 @@ htmlcov/
 # iqmapper runtime data (never commit)
 .qpu_calibration_cache/
 .iqmapper_sessions/
+.iqmapper_styles/
 iqmapper/.qpu_calibration_cache/
 iqmapper/.iqmapper_sessions/
+*.qpusession.json
+*.qpustyle.json
 .scratch/
 .ipynb_checkpoints/

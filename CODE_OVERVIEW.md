@@ -110,8 +110,8 @@ at runtime gets its own `Layout(...)`, and its UI test asserts it is not
 
 ## Tests
 
-`tests/` — 736 tests in 68 files, deterministic and fully offline (no QPU, no
-network, no credentials). A few skip when an optional dependency is missing:
+`tests/` — deterministic and fully offline (no QPU, no network, no
+credentials). A few skip when an optional dependency is missing:
 the QPY round-trip without qiskit, and `test_benchmark_integration.py` without
 the `[benchmark]` extra. Coverage concentrates on the pure logic: the search
 engines and planners (on synthetic lattices from
