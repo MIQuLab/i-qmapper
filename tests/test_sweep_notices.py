@@ -79,6 +79,7 @@ def _build(monkeypatch):
     state.cal_history_dates = ["_seed_"]
     b = MapperUIBuilder(state)
     b.build()
+    b.chk_guided_search.value = False    # stubbed exhaustive engine only
     return b
 
 

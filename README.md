@@ -309,32 +309,46 @@ makes a difference where the cap is actually reached.
 
 ### Search engine
 
-**Exhaustive** enumerates layouts that fit the template and only then asks how
-good they are — thorough, but blind to calibration until the end. **Guided**
-grows each layout using the calibration as it goes and polishes the finalists.
-Guided is a heuristic: it can miss the best layout that exhaustive would find,
-so it stays opt-in until the comparison harness says otherwise.
+One search, two engines, and you get the best of both. The **exhaustive**
+engine lists the layouts that fit the template and only then asks how good
+they are. That is thorough, but at low ancilla counts on a large chip so many
+layouts fit that it stops at the search cap and ranks only a sample. The
+**guided** engine grows each layout on the best-calibrated qubits and polishes
+the finalists. It is never capped, but it is a heuristic and can miss a layout
+the exhaustive engine would find.
 
-**Hybrid** uses guided where exhaustive is capped (few ancillas: so many
-layouts fit that exhaustive only ranks a sample) and exhaustive where it is
-complete (many ancillas: few layouts fit, and all of them are checked). Set
-**Guided up to k** to the highest ancilla count where guided does at least as
-well as exhaustive in the engine comparison (`python -m iqmapper.evaluation`).
-The status line names the split, e.g. `engine: hybrid (guided ≤ k1)`; the
-`refined 2/5` tally counts the guided finalists the polish improved.
+For every ancilla count the two shortlists are merged, a layout both engines
+found is listed once, and the usual ranking (LQS) and region-diversity choice
+pick the final list. The best layout is therefore never worse than either
+engine alone. Each entry in the layout list ends with where it came from:
+`· E` exhaustive, `· G` guided, `· E+G` both. When guided alone found the best
+layout for some ancilla counts, the status line says so, e.g.
+`· best from guided at k=1,2`.
+
+**Guided search** (in Advanced, on by default) runs the guided engine. Turn it
+off to search with the exhaustive engine alone, as 0.0.5 did. **Beam width**
+and **Refine top** tune the guided engine and show only while it is on.
+
+The multi-QPU scan and the stability filter still use the exhaustive engine
+only, and so does the multi-circuit planner unless **Optimize placement
+jointly** is on. The engine comparison (`python -m iqmapper.evaluation`) still
+offers the hybrid engine, guided up to a chosen ancilla count and exhaustive
+above it, to compare against.
 
 ### Multi-circuit planner
 
-**Sequential** places circuits one at a time, each on the best region left.
-It is fast but short-sighted: the first circuit can take a region that leaves
-the next one only a poor spot, or none at all.
+By default circuits are placed one at a time (sequential), each on the best
+region left, with the exhaustive engine. It is fast but short-sighted: the
+first circuit can take a region that leaves the next one only a poor spot, or
+none at all.
 
-**Joint** keeps several partial plans instead of one. After each circuit it
-tries **Candidates per circuit** layouts on every plan it holds and keeps the
-best **Plans kept** of them. It also builds the sequential plan and returns
-whichever is better, so it is never worse — only slower. It searches with the
-selected search engine (Sequential always uses exhaustive). While it runs, the
-status shows `joint plan · up to N searches`, the worst case.
+**Optimize placement jointly** keeps several partial plans instead of one.
+After each circuit it tries **Candidates per circuit** layouts on every plan it
+holds and keeps the best **Plans kept** of them. It also builds the sequential
+plan and returns whichever is better, so it is never worse — only slower. It
+searches each circuit with the search described under *Search engine* (both
+engines while **Guided search** is on). While it runs, the status shows
+`joint plan · up to N searches`, the worst case.
 
 When it finishes, `joint plan · +X% vs sequential · N searches` compares the
 two plans' totals (the product of each circuit's LQS) and counts the searches

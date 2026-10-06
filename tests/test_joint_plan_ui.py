@@ -1,4 +1,4 @@
-"""The Planner selector: Sequential (default, unchanged) vs Joint.
+"""The planner checkbox: Sequential (default, unchanged) vs Joint.
 
 Headless, offline. Planner engines are monkeypatched with canned results
 except in the batch-scan test, which runs the real joint planner on two stub
@@ -39,21 +39,22 @@ def _patch_joint(monkeypatch, result):
 
 def test_planner_defaults_to_sequential_with_joint_params_hidden(monkeypatch):
     b, _ = _build(monkeypatch)
-    assert b.dd_planner.value == 'sequential'
-    assert [v for _l, v in b.dd_planner.options] == ['sequential', 'joint']
+    assert b.chk_joint_plan.value is False
+    assert b.chk_joint_plan.description == 'Optimize placement jointly'
+    assert not hasattr(b, 'dd_planner')
     assert b.int_plans_kept.value == 4
     assert b.int_cands_per_circuit.value == 3
     assert b.ft_boundary_penalty.value == 0.0
     assert b.joint_params_box.layout.display == 'none'
     b.intra_qpu_mode.value = True
     b._build_auto_lucj_view()
-    for w in (b.dd_planner, b.joint_params_box):
+    for w in (b.chk_joint_plan, b.joint_params_box):
         assert any(c is w for c in b._auto_multi_panel.children)
 
 
 def test_planner_widgets_own_their_layouts(monkeypatch):
     b, _ = _build(monkeypatch)
-    widgets = (b.dd_planner, b.joint_params_box, b.int_plans_kept,
+    widgets = (b.chk_joint_plan, b.joint_params_box, b.int_plans_kept,
                b.int_cands_per_circuit, b.ft_boundary_penalty)
     for w in widgets:
         assert w.layout is not b.txt_auto.layout
@@ -64,10 +65,10 @@ def test_planner_widgets_own_their_layouts(monkeypatch):
 
 def test_joint_reveals_its_params(monkeypatch):
     b, _ = _build(monkeypatch)
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     assert b.joint_params_box.layout.display == ''
     assert b.txt_auto.layout.display != 'none'
-    b.dd_planner.value = 'sequential'
+    b.chk_joint_plan.value = False
     assert b.joint_params_box.layout.display == 'none'
 
 
@@ -106,7 +107,7 @@ def test_joint_dispatches_with_its_params_and_reports_the_gain(monkeypatch):
     result, _ = _result()
     seen = _patch_joint(monkeypatch, _joint(result))
     _patch_engine(monkeypatch, None)            # must not be called
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     b.int_plans_kept.value = 6
     b.int_cands_per_circuit.value = 2
     b.ft_boundary_penalty.value = 0.25
@@ -128,7 +129,7 @@ def test_joint_that_places_more_circuits_says_so(monkeypatch):
     result, _ = _result()
     _patch_joint(monkeypatch, _joint(result, greedy_placed=1,
                                      greedy_total=0.9))
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_lucj_multi_sweep.click()
     status = b.lbl_lucj_multi.value
@@ -140,38 +141,39 @@ def test_joint_names_shared_couplers(monkeypatch):
     b, _ = _build(monkeypatch)
     result, _ = _result()
     _patch_joint(monkeypatch, _joint(result, boundary_couplers=[(47, 48)]))
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_lucj_multi_sweep.click()
     assert 'shared couplers: 47–48' in b.lbl_lucj_multi.value
 
 
-def test_joint_search_fn_honours_the_selected_engine(monkeypatch):
+@pytest.mark.parametrize('guided', [True, False])
+def test_joint_searches_with_the_combined_search(monkeypatch, guided):
     b, _ = _build(monkeypatch)
     result, _ = _result()
     seen = _patch_joint(monkeypatch, _joint(result))
-    b.dd_planner.value = 'joint'
-    b.dd_search_engine.value = 'hybrid'
-    b.int_guided_max_k.value = 2
+    b.chk_joint_plan.value = True
+    b.chk_guided_search.value = guided
+    b.int_beam_width.value = 64
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_lucj_multi_sweep.click()
 
-    hybrid_calls = []
-    monkeypatch.setattr('iqmapper.engine_select.hybrid_sweep',
+    calls = []
+    monkeypatch.setattr('iqmapper.engine_select.combined_sweep',
                         lambda norb, backend, props, **k:
-                        hybrid_calls.append((norb, k)) or {'strata': {}})
+                        calls.append((norb, k)) or {'strata': {}})
     seen['kwargs']['search_fn'](8, exclude_qubits={3}, min_bridges=1)
-    norb, k = hybrid_calls[0]
-    assert norb == 8 and k['guided_max_k'] == 2
+    norb, k = calls[0]
+    assert norb == 8 and k['use_guided'] is guided
     assert k['exclude_qubits'] == {3} and k['min_bridges'] == 1
-    assert 'mapping_cap' in k['vf2_kwargs']
+    assert k['beam_width'] == 64 and 'mapping_cap' in k
 
 
 def test_joint_pending_line_shows_the_worst_case_count(monkeypatch):
     queued = []
     b, _ = _build(monkeypatch, spawn=lambda fn, on_done=None, on_error=None:
                   queued.append(fn))
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     b.int_plans_kept.value = 4
     b.lucj_multi_norbs.value = '8, 8, 8'
     b.btn_lucj_multi_sweep.click()
@@ -191,7 +193,7 @@ def test_joint_replan_uses_the_joint_planner(monkeypatch):
                         lambda r, i, c: called.append((r, i, c)) or joint)
     monkeypatch.setattr(ms, 'replan_from', lambda *a: pytest.fail(
         'sequential replan used for a joint result'))
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_lucj_multi_sweep.click()
     _dropdowns(b.lucj_multi_detail_box)[0].value = 1
@@ -255,7 +257,8 @@ def test_batch_joint_scores_each_backend_with_its_own_props(monkeypatch):
     real_scan = qs.scan_qpus
     monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: captured.setdefault(
         'res', real_scan(*a, **k)))
-    b.dd_planner.value = 'joint'
+    b.chk_joint_plan.value = True
+    b.chk_guided_search.value = True             # both engines, real ones
     b.lucj_multi_norbs.value = '4, 4'
     b.btn_scan_batch.click()
 

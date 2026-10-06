@@ -42,6 +42,7 @@ def _build(monkeypatch):
     # build() returns the assembled tree rather than storing it; keep it so
     # tests can walk the real sidebar/figure widget graph.
     b._test_full_ui, _fig = b.build()
+    b.chk_guided_search.value = False    # stubbed exhaustive engine only
     return b, state
 
 
@@ -230,61 +231,7 @@ def test_benchmark_widgets_do_not_share_a_mutated_layout(monkeypatch):
     assert b.tb_bench_qpu.layout.display == 'none'
 
 
-# ── t7: the search-engine selector ─────────────────────────────────────────
-
-def test_engine_selector_defaults_to_exhaustive(monkeypatch):
-    """Guided stays opt-in until iqmapper.evaluation says otherwise."""
-    b, _ = _build(monkeypatch)
-    assert b.dd_search_engine.value == 'vf2'
-    assert [v for _label, v in b.dd_search_engine.options] == [
-        'vf2', 'guided', 'hybrid']
-    # Guided-only params are hidden while Exhaustive is selected.
-    assert b.bench_guided_box.layout.display == 'none'
-    assert b.int_beam_width.value == 200
-    assert b.int_refine_top.value == 5
-
-    b.dd_search_engine.value = 'guided'
-    assert b.bench_guided_box.layout.display == ''
-    b.dd_search_engine.value = 'vf2'
-    assert b.bench_guided_box.layout.display == 'none'
-
-
-def test_engine_selector_lives_in_the_advanced_accordion(monkeypatch):
-    b, _ = _build(monkeypatch)
-    inside = _descendants(b.lucj_advanced_acc)
-    for widget, name in ((b.dd_search_engine, 'dd_search_engine'),
-                         (b.bench_guided_box, 'guided params')):
-        assert any(w is widget for w in inside), f'{name} not in Advanced'
-
-
-def test_selecting_guided_routes_the_sweep_to_guided_sweep(monkeypatch):
-    """The dispatch helper must call the guided engine with the beam params."""
-    b, _ = _build(monkeypatch)
-    seen = {}
-
-    def _spy(norb, backend, props, **kwargs):
-        seen['norb'] = norb
-        seen['kwargs'] = kwargs
-        return {'strata': {}, 'k_max_effective': 1, 'min_bridges': 1,
-                'vf2_truncated': False, 'n_raw_embeddings': 0,
-                'n_candidates_scored': 0, 'excluded_qubits': [],
-                'per_stratum': {}, 'mapping_cap': None, 'engine': 'guided',
-                'refined_count': 0, 'refine_attempted': 0}
-
-    monkeypatch.setattr('iqmapper.guided_search.guided_sweep', _spy)
-    b.dd_search_engine.value = 'guided'
-    b.int_beam_width.value = 64
-    b.int_refine_top.value = 2
-    b.lucj_ancilla_dd.value = -1                      # sweep mode
-    b.btn_lucj_run.click()
-
-    assert seen, 'guided_sweep was never called'
-    assert seen['kwargs']['beam_width'] == 64
-    assert seen['kwargs']['refine_top'] == 2
-    # VF2-only knobs must not be forwarded to a bounded beam search.
-    assert 'mapping_cap' not in seen['kwargs']
-    assert 'hybrid' not in seen['kwargs']
-
+# ── t7: the search (engine widgets: see test_search_ui.py) ─────────────────
 
 def test_exhaustive_still_routes_to_the_frozen_sweep(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -320,105 +267,6 @@ def test_guided_results_render_through_the_existing_display(monkeypatch):
     from iqmapper.ui.lucj_panel import _format_best_per_k
     best = _format_best_per_k(res['strata'])
     assert best, 'best-per-k line empty for a guided result'
-
-
-def test_status_line_names_the_engine_and_refinement_tally(monkeypatch):
-    b, _ = _build(monkeypatch)
-    seen = {}
-
-    def _spy(norb, backend, props, **kwargs):
-        seen['called'] = True
-        entry = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
-                 'ancillas': [4], 'bridge_slots': (0,),
-                 'product_score': 0.9, 'additive_score': 0.1,
-                 'lqs_circuit': 0.8, 'rank_in_stratum': 1,
-                 'source': 'guided', 'refined': True}
-        return {'strata': {1: [entry]}, 'k_max_effective': 1, 'min_bridges': 1,
-                'vf2_truncated': False, 'n_raw_embeddings': 3,
-                'n_candidates_scored': 3, 'excluded_qubits': [],
-                'per_stratum': {1: {'n_direct': 3, 'n_derived': 0,
-                                    'truncated': False, 'shuffled': False}},
-                'mapping_cap': None, 'engine': 'guided',
-                'refined_count': 2, 'refine_attempted': 5}
-
-    monkeypatch.setattr('iqmapper.guided_search.guided_sweep', _spy)
-    b.dd_search_engine.value = 'guided'
-    b.lucj_ancilla_dd.value = -1
-    b.btn_lucj_run.click()
-
-    assert seen.get('called')
-    status = b.lbl_lucj_status.value
-    assert 'engine: guided' in status, status
-    assert 'refined 2/5' in status, status
-
-
-def test_hybrid_shows_the_threshold_and_the_beam_params(monkeypatch):
-    b, _ = _build(monkeypatch)
-    assert b.int_guided_max_k.value == 1 and b.int_guided_max_k.min == 0
-    assert b.int_guided_max_k.layout.display == 'none'
-    # Toggled at runtime, so it must not share the builder-wide layout.
-    assert b.int_guided_max_k.layout is not b.txt_auto.layout
-    assert b.int_guided_max_k.layout is not b.bench_guided_box.layout
-    assert any(w is b.int_guided_max_k
-               for w in _descendants(b.lucj_advanced_acc))
-
-    b.dd_search_engine.value = 'hybrid'
-    assert b.int_guided_max_k.layout.display == ''
-    assert b.bench_guided_box.layout.display == ''
-    b.dd_search_engine.value = 'guided'
-    assert b.int_guided_max_k.layout.display == 'none'
-    assert b.bench_guided_box.layout.display == ''
-    b.dd_search_engine.value = 'vf2'
-    assert b.int_guided_max_k.layout.display == 'none'
-    assert b.txt_auto.layout.display != 'none'
-
-
-def test_selecting_hybrid_routes_the_sweep_to_hybrid_sweep(monkeypatch):
-    b, _ = _build(monkeypatch)
-    seen = {}
-
-    def _spy(norb, backend, props, **kwargs):
-        seen['kwargs'] = kwargs
-        return dict(_empty_sweep(), engine='hybrid', guided_max_k=2,
-                    refined_count=0, refine_attempted=0)
-
-    monkeypatch.setattr('iqmapper.engine_select.hybrid_sweep', _spy)
-    b.dd_search_engine.value = 'hybrid'
-    b.int_guided_max_k.value = 2
-    b.int_beam_width.value = 64
-    b.lucj_ancilla_dd.value = -1
-    b.btn_lucj_run.click()
-
-    kw = seen['kwargs']
-    assert kw['guided_max_k'] == 2
-    assert kw['guided_kwargs']['beam_width'] == 64
-    # VF2-only knobs reach the VF2 half only.
-    assert {'hybrid', 'mapping_cap', 'diverse_cap'} <= set(kw['vf2_kwargs'])
-    for key in ('hybrid', 'mapping_cap', 'diverse_cap'):
-        assert key not in kw
-    assert 'top_n' in kw and 'circuit_score_fn' in kw
-
-
-def test_status_line_names_the_hybrid_threshold(monkeypatch):
-    b, _ = _build(monkeypatch)
-    entry = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
-             'ancillas': [4], 'bridge_slots': (0,),
-             'product_score': 0.9, 'additive_score': 0.1,
-             'lqs_circuit': 0.8, 'rank_in_stratum': 1, 'source': 'guided'}
-    res = dict(_empty_sweep(), strata={1: [entry]},
-               per_stratum={1: {'n_direct': 1, 'n_derived': 0,
-                                'truncated': False, 'shuffled': False,
-                                'engine': 'guided'}},
-               engine='hybrid', guided_max_k=1, refined_count=1,
-               refine_attempted=3, reservoir_notices=[])
-    monkeypatch.setattr('iqmapper.engine_select.hybrid_sweep',
-                        lambda *a, **k: res)
-    b.dd_search_engine.value = 'hybrid'
-    b.lucj_ancilla_dd.value = -1
-    b.btn_lucj_run.click()
-    status = b.lbl_lucj_status.value
-    assert 'engine: hybrid (guided ≤ k1)' in status, status
-    assert 'refined 1/3' in status, status
 
 
 # ── t8: diverse enumeration ────────────────────────────────────────────────

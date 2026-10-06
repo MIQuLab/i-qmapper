@@ -36,11 +36,17 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   already kept no longer use up the search cap, so a capped search spreads
   across the chip instead of filling up with variations of the first region
   it finds.
-- Guided search engine (opt-in via "Search engine"; Exhaustive stays the
-  default): a calibration-led beam search that grows layouts on the
+- Guided search: a calibration-led beam search that grows layouts on the
   best-calibrated qubits, then polishes the finalists with small local moves
   (swap a bridge or chain-end qubit, shift a chain by one) kept only when they
-  raise the circuit-level LQS.
+  raise the circuit-level LQS. Every Auto search now runs it alongside the
+  exhaustive search and keeps the best of both for each ancilla count, so the
+  best layout is never worse than either engine alone. Each layout in the list
+  shows its source (`· E`, `· G`, `· E+G`), and the status line names the
+  ancilla counts where guided alone found the best one. One checkbox in
+  Advanced, "Guided search" (on by default), turns it off to search as 0.0.5
+  did. The multi-QPU scan and the stability filter still use the exhaustive
+  search.
 - Opt-in stability filter that excludes qubits volatile across the cached
   calibration history, and an always-on quality floor (3σ by default, 0 turns
   it off) that removes outlier qubits from every search.
@@ -50,23 +56,24 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   handoff that reopens the chosen layout on the second QPU.
 - Epoch-consistent scoring: fidelity and ranking read a single pinned
   calibration epoch, so comparisons within a sweep stay commensurable.
-- Hybrid search engine (opt-in; the default stays exhaustive): guided search
-  for ancilla counts up to a threshold you set ("Guided up to k"), where the
-  exhaustive search hits its cap and only ranks a sample, and the exhaustive
-  search above it.
-- Joint multi-circuit planner (opt-in; Sequential stays the default): keeps
-  several placement plans at once instead of placing each circuit greedily,
-  so the first circuit no longer takes a region the next one needed. Never
-  worse than the sequential planner, uses the selected search engine, and
-  reports couplers shared by two circuits at buffer 0 (with an optional
-  penalty to avoid them).
+- Hybrid search engine (`engine_select.hybrid_sweep`, used by the engine
+  comparison harness, not offered in the UI): guided search for ancilla counts
+  up to a threshold, where the exhaustive search hits its cap and only ranks a
+  sample, and the exhaustive search above it.
+- Joint multi-circuit placement ("Optimize placement jointly", off by
+  default, which keeps the sequential placement): keeps several placement
+  plans at once instead of placing each circuit greedily, so the first circuit
+  no longer takes a region the next one needed. Never worse than sequential
+  placement, searches each circuit with the combined search, and reports
+  couplers shared by two circuits at buffer 0 (with an optional penalty to
+  avoid them).
 - Engine comparison harness (`python -m iqmapper.evaluation`): replays the
   search engines over the cached calibrations, offline, and ranks with the
   app's real circuit-level LQS rebuilt for every calibration (`--scorer lqs`,
   the default; `proxy` uses the product score). It takes the coupling map
   from a saved session (`--session PATH`, or found in the working folder),
   can add a hybrid-engine column (`--hybrid-k`), and prints the suggested
-  "Guided up to k" for each orbital count (`--tol` sets how far guided may
+  hybrid threshold for each orbital count (`--tol` sets how far guided may
   trail and still count).
 - Shorter UI messages: status lines, notices and tooltips say what happened
   in one short sentence, and each is explained in the README section

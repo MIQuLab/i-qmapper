@@ -1,6 +1,11 @@
 """
-engine_select.py — the hybrid search engine: guided below a bridge-count
-threshold, exhaustive VF2 above it.
+engine_select.py — searches built from the two frozen single-circuit engines.
+
+`combined_sweep` runs both engines over every stratum and keeps the best of
+the two (the search the UI uses). `hybrid_sweep` splits the k range between
+them at a threshold (used by the evaluation harness).
+
+HYBRID: guided below a bridge-count threshold, exhaustive VF2 above it.
 
 The two single-circuit engines fail in opposite places. With few bridges (low
 k) the LUCJ template is loose, VF2 finds far more embeddings on a large chip
@@ -17,7 +22,9 @@ the k range and merges the two result dicts into the shared sweep shape.
 """
 import time
 
-from .ancilla_sweep import sweep_ancilla_layouts
+from . import ancilla_sweep as _ancilla_sweep
+from . import guided_search as _guided_search
+from .ancilla_sweep import _select_with_diversity, sweep_ancilla_layouts
 from .auto_lucj import (_make_backend_cmap_pygraph, _remove_nodes_from_graph,
                         create_lucj_zigzag_layout)
 from .guided_search import guided_sweep
@@ -154,3 +161,136 @@ def hybrid_sweep(norb, backend, props, *, guided_max_k, min_bridges=None,
         'expansions': guided.get('expansions', 0),
         'elapsed_s': time.time() - started,
     }
+
+
+# ── combined: both engines on every stratum, keep the best ──────────
+
+#: Keyword arguments both engines take.
+SHARED_KWARGS = frozenset({'min_bridges', 'top_n', 'exclude_qubits',
+                           'circuit_score_fn', 'diversity_threshold'})
+#: Keyword arguments only the exhaustive (VF2) engine takes.
+VF2_ONLY_KWARGS = frozenset({'hybrid', 'mapping_cap', 'shuffle_seed',
+                             'diverse_cap'})
+#: Keyword arguments only the guided engine takes.
+GUIDED_ONLY_KWARGS = frozenset({'beam_width', 'refine_top', 'qubit_weight',
+                                'max_iter', 'seed'})
+
+
+def _identity(entry):
+    """Same layout in both engines: same qubits, same ancillas."""
+    return (frozenset(entry['alpha']) | frozenset(entry['beta'])
+            | frozenset(entry['ancillas']), frozenset(entry['ancillas']))
+
+
+def _lqs_rank_key(entry):
+    """The VF2 sweep's displayed-metric order: LQS, None sinks, then product."""
+    lqs = entry.get('lqs_circuit')
+    return (lqs is not None, lqs if lqs is not None else 0.0,
+            entry['product_score'])
+
+
+def _product_rank_key(entry):
+    return entry['product_score']
+
+
+def combined_sweep(norb, backend, props, *, use_guided=True, **kwargs):
+    """Exhaustive and guided search on every stratum; keep the best of both.
+
+    Runs `sweep_ancilla_layouts` and, when `use_guided`, `guided_sweep` with
+    the same floor, exclusions, scorer, top_n and diversity threshold. Per
+    stratum the two shortlists are merged, a layout found by both counted
+    once (same qubits, same ancillas; the exhaustive entry is kept), ranked
+    by `lqs_circuit` (by `product_score` without a scorer), and sliced with
+    the exhaustive sweep's own selection: top_n, or the region-diversity
+    quota of `ancilla_sweep._select_with_diversity` when a threshold is set.
+    The best layout of a stratum is therefore never worse than either
+    engine's best.
+
+    Each kept entry gets `source` = 'exhaustive', 'guided' or 'both'.
+
+    Args:
+        use_guided: False runs the exhaustive search alone and returns its
+            result unchanged apart from `source` and the run-level keys
+            below.
+        **kwargs: the shared arguments (`SHARED_KWARGS`) go to both engines,
+            the engine-specific ones (`VF2_ONLY_KWARGS`,
+            `GUIDED_ONLY_KWARGS`) to their engine only.
+
+    Returns the exhaustive sweep's dict: `vf2_truncated`, `reservoir`,
+    `reservoir_notices`, `mapping_cap`, `per_stratum` and the counts come
+    from the exhaustive half. Added: `engine='combined'`, `use_guided`,
+    `guided_winners` (strata, k-descending, whose best layout only the guided
+    search found), `guided_error` (why the guided half produced nothing, or
+    None) and, when it ran, the guided half's `beam_width`, `refined_count`,
+    `refine_attempted` and `expansions`.
+    """
+    unknown = set(kwargs) - SHARED_KWARGS - VF2_ONLY_KWARGS - GUIDED_ONLY_KWARGS
+    if unknown:
+        raise TypeError(f"combined_sweep got unexpected keyword argument(s): "
+                        f"{', '.join(sorted(unknown))}")
+    # Engines are looked up on their modules at call time, so a caller that
+    # substitutes one (tests, the evaluation harness) is honoured here too.
+    vf2_res = _ancilla_sweep.sweep_ancilla_layouts(
+        norb, backend, props,
+        **{k: v for k, v in kwargs.items() if k not in GUIDED_ONLY_KWARGS})
+
+    guided_res, guided_error = None, None
+    if use_guided:
+        try:
+            guided_res = _guided_search.guided_sweep(
+                norb, backend, props,
+                **{k: v for k, v in kwargs.items()
+                   if k not in VF2_ONLY_KWARGS})
+        except RuntimeError as exc:          # the beam completed nothing
+            guided_error = str(exc)
+
+    out = dict(vf2_res)
+    out.update(engine='combined', use_guided=use_guided, guided_winners=[],
+               guided_error=guided_error)
+    for entries in vf2_res['strata'].values():
+        for entry in entries:
+            entry['source'] = 'exhaustive'
+    if guided_res is None:
+        return out
+
+    top_n = kwargs.get('top_n', 3)
+    threshold = kwargs.get('diversity_threshold')
+    rank_key = (_product_rank_key if kwargs.get('circuit_score_fn') is None
+                else _lqs_rank_key)
+    strata = {}
+    for k in sorted(set(vf2_res['strata']) | set(guided_res['strata']),
+                    reverse=True):
+        # Either shortlist can hold one layout twice (same qubits reached by
+        # a different chain order); only a match against the exhaustive list
+        # makes an entry 'both'.
+        merged, exhaustive_keys = {}, set()
+        for entry in vf2_res['strata'].get(k, []):
+            key = _identity(entry)
+            if key not in merged:
+                merged[key] = entry
+                exhaustive_keys.add(key)
+        for entry in guided_res['strata'].get(k, []):
+            key = _identity(entry)
+            if key in exhaustive_keys:
+                merged[key]['source'] = 'both'
+            elif key not in merged:
+                entry['source'] = 'guided'
+                merged[key] = entry
+        ranked = sorted(merged.values(), key=rank_key, reverse=True)
+        if threshold is None:
+            entries = ranked[:top_n]
+        else:
+            entries = _select_with_diversity(ranked, top_n, threshold)
+        for rank, entry in enumerate(entries, start=1):
+            entry['rank_in_stratum'] = rank
+        strata[k] = entries
+
+    out['strata'] = strata
+    out['guided_winners'] = [k for k, entries in strata.items()
+                             if entries and entries[0]['source'] == 'guided']
+    for key in ('n_raw_embeddings', 'n_candidates_scored'):
+        out[key] = (vf2_res.get(key) or 0) + (guided_res.get(key) or 0)
+    for key in ('beam_width', 'refined_count', 'refine_attempted',
+                'expansions'):
+        out[key] = guided_res.get(key)
+    return out

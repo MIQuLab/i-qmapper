@@ -325,10 +325,9 @@ class MapperUIBuilder:
             lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
             chk_lucj_diverse=self.chk_lucj_diverse,
             chk_diverse_cap=self.chk_diverse_cap,
-            dd_search_engine=self.dd_search_engine,
+            chk_guided_search=self.chk_guided_search,
             int_beam_width=self.int_beam_width,
             int_refine_top=self.int_refine_top,
-            int_guided_max_k=self.int_guided_max_k,
             guided_params_box=self.bench_guided_box,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
@@ -336,7 +335,8 @@ class MapperUIBuilder:
             dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
-            dd_planner=self.dd_planner, int_plans_kept=self.int_plans_kept,
+            chk_joint_plan=self.chk_joint_plan,
+            int_plans_kept=self.int_plans_kept,
             int_cands_per_circuit=self.int_cands_per_circuit,
             ft_boundary_penalty=self.ft_boundary_penalty,
             joint_params_box=self.joint_params_box,
@@ -1466,29 +1466,19 @@ class MapperUIBuilder:
             tooltip='Counts only distinct candidates toward the search '
                     'cap · README: Diverse enumeration')
 
-        # ── Search engine (Advanced) ─────────────────────────────
-        # Default stays Exhaustive (VF2) until iqmapper.evaluation says the
-        # guided beam wins on real cached calibration — see the harness.
-        self.dd_search_engine = Dropdown(
-            options=[('Exhaustive (VF2)', 'vf2'), ('Guided (beam)', 'guided'),
-                     ('Hybrid', 'hybrid')],
-            value='vf2',
-            description='Search engine:',
-            layout=Layout(width='280px'),
-            style={'description_width': '110px'},
-            tooltip='Exhaustive = VF2; Guided = calibration-led beam; '
-                    'Hybrid = both, split by k · README: Search engine')
-        # Own Layout: display is toggled at runtime (Hybrid only).
-        self.int_guided_max_k = BoundedIntText(
-            value=1, min=0, max=50,
-            description='Guided up to k:',
-            layout=Layout(width='220px', display='none'),
-            style={'description_width': '110px'},
-            tooltip='ancilla counts up to this use Guided, above it '
-                    'Exhaustive · README: Search engine')
+        # ── Search (Advanced) ────────────────────────────────────
+        # Every search runs the exhaustive engine; this adds the guided one
+        # and keeps the best of both. Off = exhaustive only.
+        self.chk_guided_search = Checkbox(
+            value=True,
+            description='Guided search',
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width),
+            tooltip='also run the guided search and keep the best of both '
+                    '· README: Search engine')
+        # Own Layout: display is toggled at runtime (Guided search on only).
         _guided_layout = Layout(width=W.width, margin=W.margin,
                                 min_width=W.min_width)
-        _guided_layout.display = 'none'      # shown for Guided and Hybrid
         self.bench_guided_box = VBox([], layout=_guided_layout)
         self.int_beam_width = BoundedIntText(
             value=200, min=10, max=5000, step=50,
@@ -1511,7 +1501,7 @@ class MapperUIBuilder:
         self.lucj_advanced_acc = Accordion(
             children=[VBox([self.lucj_search_cap, self.chk_deep_search,
                             self.chk_diverse_cap,
-                            self.dd_search_engine, self.int_guided_max_k,
+                            self.chk_guided_search,
                             self.bench_guided_box])],
             layout=W)
         self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
@@ -1612,16 +1602,15 @@ class MapperUIBuilder:
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
         # ── Multi-circuit planner ─────────────────────────────────
-        # Default Sequential = the greedy multi_sweep, unchanged. Each widget
-        # owns its Layout: the Joint-only box is toggled at runtime.
-        self.dd_planner = Dropdown(
-            options=[('Sequential', 'sequential'), ('Joint', 'joint')],
-            value='sequential',
-            description='Planner:',
-            layout=Layout(width='220px'),
-            style={'description_width': '110px'},
-            tooltip='Sequential = best region per circuit in turn; Joint = '
-                    'plan all together · README: Multi-circuit planner')
+        # Off (default) = Sequential, the greedy multi_sweep, unchanged. Each
+        # widget owns its Layout: the Joint-only box is toggled at runtime.
+        self.chk_joint_plan = Checkbox(
+            value=False,
+            description='Optimize placement jointly',
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width),
+            tooltip='plan all circuits together instead of one at a time '
+                    '· README: Multi-circuit planner')
         self.int_plans_kept = BoundedIntText(
             value=4, min=1, max=50,
             description='Plans kept:',
@@ -2105,7 +2094,7 @@ class MapperUIBuilder:
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
-            self.dd_planner,
+            self.chk_joint_plan,
             self.joint_params_box,
             # Legacy btn_lucj_multi intentionally omitted — the sweep button is
             # the single generate action. Handler/engine remain wired + pinned.

@@ -44,6 +44,7 @@ def builder(monkeypatch):
 
     b = MapperUIBuilder(state)
     b.build()
+    b.chk_guided_search.value = False    # stubbed exhaustive engine only
     return b
 
 
@@ -116,9 +117,9 @@ def test_sweep_mode_populates_stratified_dropdown(builder, monkeypatch):
 
     assert len(calls) == 1                          # sweep path taken
     assert _labels(b.dd_lucj_layout) == [
-        "k=3 · #1 · LQS 20.0%",
-        "k=2 · #1 · LQS 30.0%",
-        "k=1 · #1 · LQS 40.0%",
+        "k=3 · #1 · LQS 20.0% · E",
+        "k=2 · #1 · LQS 30.0% · E",
+        "k=1 · #1 · LQS 40.0% · E",
     ]
     # k descending, values are flat indices.
     assert [opt[1] for opt in b.dd_lucj_layout.options] == [0, 1, 2]
@@ -309,9 +310,9 @@ def test_sweep_mode_label():
     assert _sweep_mode_label(dv) == 'derived-only'
 
 
-# ── diverse entries get a "· alt region" dropdown-label suffix ──────────
+# ── a region-diversity pick carries no "alt region" suffix ──────────────
 
-def test_diverse_entry_label_suffix(builder, monkeypatch):
+def test_diverse_entry_has_no_alt_region_suffix(builder, monkeypatch):
     def _fake(*a, **k):
         def e(anc, prod, diverse):
             return {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
@@ -332,5 +333,5 @@ def test_diverse_entry_label_suffix(builder, monkeypatch):
     b = builder
     b.btn_lucj_run.click()
     labels = _labels(b.dd_lucj_layout)
-    assert any('· alt region' in lab for lab in labels)          # the diverse one
-    assert sum('· alt region' in lab for lab in labels) == 1     # only it
+    assert labels == ['k=2 · #1 · LQS 30.0% · E', 'k=2 · #2 · LQS 28.0% · E']
+    assert not any('alt region' in lab for lab in labels)

@@ -191,10 +191,9 @@ def setup_lucj_callbacks(ctx):
     chk_deep_search = ctx.chk_deep_search
     chk_lucj_diverse = ctx.chk_lucj_diverse
     chk_diverse_cap = getattr(ctx, 'chk_diverse_cap', None)
-    dd_search_engine = getattr(ctx, 'dd_search_engine', None)
+    chk_guided_search = getattr(ctx, 'chk_guided_search', None)
     int_beam_width = getattr(ctx, 'int_beam_width', None)
     int_refine_top = getattr(ctx, 'int_refine_top', None)
-    int_guided_max_k = getattr(ctx, 'int_guided_max_k', None)
     guided_params_box = getattr(ctx, 'guided_params_box', None)
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
@@ -206,7 +205,7 @@ def setup_lucj_callbacks(ctx):
     lucj_multi_norbs = ctx.lucj_multi_norbs
     lucj_multi_ancillas = ctx.lucj_multi_ancillas
     lucj_buffer_slider = ctx.lucj_buffer_slider
-    dd_planner = getattr(ctx, 'dd_planner', None)
+    chk_joint_plan = getattr(ctx, 'chk_joint_plan', None)
     int_plans_kept = getattr(ctx, 'int_plans_kept', None)
     int_cands_per_circuit = getattr(ctx, 'int_cands_per_circuit', None)
     ft_boundary_penalty = getattr(ctx, 'ft_boundary_penalty', None)
@@ -479,14 +478,14 @@ def setup_lucj_callbacks(ctx):
             # 0.8 default when ON; None → exact top-N (byte-compatible).
             'diversity_threshold': 0.8 if chk_lucj_diverse.value else None,
             # The cap counts distinct candidates (engine #17). VF2-only —
-            # the dispatcher drops it for the guided engine.
+            # combined_sweep passes it to the exhaustive half only.
             'diverse_cap': bool(getattr(chk_diverse_cap, 'value', True)),
         }
 
-    # ── ONE dispatch point for the search engine ─────────────────
-    def _selected_engine():
-        """'vf2' (default), 'guided' or 'hybrid'. Absent widget → 'vf2'."""
-        return getattr(dd_search_engine, 'value', 'vf2') or 'vf2'
+    # ── ONE dispatch point for the search ────────────────────────
+    def _guided_on():
+        """Guided search checkbox; absent widget → on (the default)."""
+        return bool(getattr(chk_guided_search, 'value', True))
 
     def _guided_params():
         return {
@@ -494,36 +493,17 @@ def setup_lucj_callbacks(ctx):
             'refine_top': int(getattr(int_refine_top, 'value', 5) or 5),
         }
 
-    _VF2_ONLY = ('hybrid', 'mapping_cap', 'shuffle_seed', 'diverse_cap')
-
     def _run_sweep(norb, backend, props, **kwargs):
-        """Run the selected search engine.
+        """Run the search: exhaustive, plus guided when its checkbox is on.
 
-        All engines return the same dict shape, so every caller below and all
-        the display code downstream is engine-agnostic. `hybrid` and
-        `mapping_cap` are VF2-only concepts (the beam is bounded by
-        construction and never truncates), so they are dropped for guided
-        rather than passed and ignored; the hybrid engine routes them to its
-        VF2 half only.
+        `engine_select.combined_sweep` keeps the best of both engines per
+        ancilla count and returns the exhaustive sweep's dict shape, so every
+        caller below and all the display code downstream is unchanged. It
+        routes each engine-specific argument to its own engine.
         """
-        engine = _selected_engine()
-        if engine not in ('guided', 'hybrid'):
-            from ..ancilla_sweep import sweep_ancilla_layouts
-            return sweep_ancilla_layouts(norb, backend, props, **kwargs)
-
-        shared = {k: v for k, v in kwargs.items() if k not in _VF2_ONLY}
-        if engine == 'hybrid':
-            from ..engine_select import hybrid_sweep
-            vf2_kwargs = {k: v for k, v in kwargs.items() if k in _VF2_ONLY}
-            return hybrid_sweep(
-                norb, backend, props,
-                guided_max_k=int(getattr(int_guided_max_k, 'value', 1)),
-                vf2_kwargs=vf2_kwargs, guided_kwargs=_guided_params(),
-                **shared)
-
-        from ..guided_search import guided_sweep
-        shared.update(_guided_params())
-        return guided_sweep(norb, backend, props, **shared)
+        from ..engine_select import combined_sweep
+        return combined_sweep(norb, backend, props, use_guided=_guided_on(),
+                              **kwargs, **_guided_params())
 
     def _reservoir_suffix(res):
         """The per-stratum cap notice, when a cap was actually reached."""
@@ -532,38 +512,37 @@ def setup_lucj_callbacks(ctx):
             return ""
         return "<br>" + "<br>".join(f"\u2139 {esc(n)}" for n in notes)
 
-    def _engine_suffix(res):
-        """Status-line tail naming the engine, and the refinement tally."""
-        engine = res.get('engine') if isinstance(res, dict) else None
-        if engine == 'guided':
-            name = "guided"
-        elif engine == 'hybrid':
-            name = f"hybrid (guided ≤ k{res.get('guided_max_k')})"
-        else:
+    def _guided_suffix(res):
+        """' · best from guided at k=1,2' when guided alone found a stratum's
+        best layout; '' otherwise."""
+        ks = (res.get('guided_winners') if isinstance(res, dict) else None) or []
+        if not ks:
             return ""
-        attempted = res.get('refine_attempted') or 0
-        refined = res.get('refined_count') or 0
-        return (f" · engine: {name} · refined {refined}/{attempted}"
-                if attempted else f" · engine: {name}")
+        return " · best from guided at k=" + ",".join(str(k) for k in ks)
 
-    def _on_engine_change(_change=None):
-        """Beam params show for Guided and Hybrid; the threshold for Hybrid."""
-        engine = _selected_engine()
+    def _source_tag(entry):
+        """' · G' (guided only), ' · E+G' (both engines) or ' · E'
+        (exhaustive) for a search entry; '' for one with no source."""
+        source = entry.get('source')
+        if not source:
+            return ""
+        return {'guided': ' · G', 'both': ' · E+G'}.get(source, ' · E')
+
+    def _on_guided_toggle(_change=None):
+        """Beam parameters show only while Guided search is on."""
         if guided_params_box is not None:
-            guided_params_box.layout.display = (
-                '' if engine in ('guided', 'hybrid') else 'none')
-        if int_guided_max_k is not None:
-            int_guided_max_k.layout.display = (
-                '' if engine == 'hybrid' else 'none')
+            guided_params_box.layout.display = '' if _guided_on() else 'none'
 
-    if dd_search_engine is not None:
-        dd_search_engine.observe(_on_engine_change, names='value')
-        _on_engine_change()
+    if chk_guided_search is not None:
+        chk_guided_search.observe(_on_guided_toggle, names='value')
+        _on_guided_toggle()
 
-    # ── ONE dispatch point for the multi-circuit planner ─────────
+    # ── Multi-circuit planner: Sequential (default) or Joint ─────────
     def _selected_planner():
-        """'sequential' (default) or 'joint'. Absent widget → 'sequential'."""
-        return getattr(dd_planner, 'value', 'sequential') or 'sequential'
+        """'joint' when "Optimize placement jointly" is checked, else
+        'sequential' (also when the widget is absent)."""
+        return 'joint' if getattr(chk_joint_plan, 'value', False) \
+            else 'sequential'
 
     def _joint_params():
         return {
@@ -579,7 +558,7 @@ def setup_lucj_callbacks(ctx):
         Sequential passes `seq_kwargs` to `multi_sweep.sweep_multi_circuits`
         untouched, so each call site keeps its exact call. Joint plans with
         `joint_plan.plan_multi_circuits`, searching each circuit through
-        `_run_sweep` with `sweep_kwargs`, so the selected engine is used.
+        `_run_sweep` with `sweep_kwargs`, so it uses the combined search.
         """
         if _selected_planner() != 'joint':
             from ..multi_sweep import sweep_multi_circuits
@@ -639,13 +618,13 @@ def setup_lucj_callbacks(ctx):
         return line
 
     def _on_planner_change(_change=None):
-        """Joint-only params are hidden while Sequential is selected."""
+        """Joint-only params show only while joint placement is checked."""
         if joint_params_box is not None:
             joint_params_box.layout.display = (
                 '' if _selected_planner() == 'joint' else 'none')
 
-    if dd_planner is not None:
-        dd_planner.observe(_on_planner_change, names='value')
+    if chk_joint_plan is not None:
+        chk_joint_plan.observe(_on_planner_change, names='value')
         _on_planner_change()
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
@@ -765,10 +744,9 @@ def setup_lucj_callbacks(ctx):
             for entry in strata[k]:
                 pct, is_tmpl = _entry_lqs_pct(entry)
                 suffix = " (template)" if is_tmpl else ""
-                alt = " · alt region" if entry.get('diverse') else ""   # region-diversity flag
                 dd_opts.append((
                     f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
-                    f"{alt}",
+                    f"{_source_tag(entry)}",
                     len(flat),
                 ))
                 flat.append(entry)
@@ -821,7 +799,7 @@ def setup_lucj_callbacks(ctx):
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
                 f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
-                f"{cap_txt}{vin_txt}{_engine_suffix(res)}"
+                f"{cap_txt}{vin_txt}{_guided_suffix(res)}"
                 f"{_reservoir_suffix(res)}</div>")
         else:
             lbl_lucj_status.value = (
@@ -904,11 +882,10 @@ def setup_lucj_callbacks(ctx):
             for i, entry in enumerate(ranked):
                 pct, is_tmpl = _entry_lqs_pct(entry)
                 suffix = " (template)" if is_tmpl else ""
-                alt = " · alt region" if entry.get('diverse') else ""
                 k = entry.get('n_ancillas', len(entry.get('ancillas') or []))
                 dd_opts.append((
                     f"k={k} · #{entry.get('rank_in_stratum', i + 1)} · "
-                    f"LQS {pct}{suffix}{alt} · measured", i))
+                    f"LQS {pct}{suffix}{_source_tag(entry)} · measured", i))
             _seed_layout_dropdown(ranked, dd_opts)
             circ = [e['lqs_circuit'] for e in ranked
                     if e.get('lqs_circuit') is not None]
@@ -1238,8 +1215,8 @@ def setup_lucj_callbacks(ctx):
         k = len(entry['ancillas'])
         pct, is_tmpl = _entry_lqs_pct(entry)
         suffix = " (template)" if is_tmpl else ""
-        alt = " · alt region" if entry.get('diverse') else ""    # region-diversity flag
-        return f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}{alt}"
+        return (f"k={k} · #{entry['rank_in_stratum']} · LQS {pct}{suffix}"
+                f"{_source_tag(entry)}")
 
     def _short_reason(reason):
         """Map a full ineligibility reason to a compact form for the one-line

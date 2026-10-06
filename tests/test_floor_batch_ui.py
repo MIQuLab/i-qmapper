@@ -64,6 +64,7 @@ def _build(monkeypatch, spawn=_sync_spawn):
     state.cal_history_dates = ["_seed_"]
     b = MapperUIBuilder(state)
     b.build()
+    b.chk_guided_search.value = False    # stubbed exhaustive engine only
     # current readout with one outlier at qubit 5 (16 samples → floor can judge).
     ro = np.array([0.01] * 16)
     ro[5] = 0.5

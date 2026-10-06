@@ -65,7 +65,7 @@ which one ran.
 | `ancilla_sweep.py` | The exhaustive engine: one VF2 solve at the maximum ancilla count, a bridge-subtraction cascade down to the floor, optional direct VF2 per lower count, diversity selection. Capped at 2000 mappings per stratum. |
 | `reservoir.py` | Makes the VF2 cap count *distinct* candidates: near-duplicate layouts are discarded without using a slot, so the capped sample spreads across the chip. |
 | `guided_search.py` | The guided engine: calibration-led beam search that grows layouts on the best neighbours, then a 1-opt polish against the circuit-level LQS. |
-| `engine_select.py` | The hybrid engine: guided for ancilla counts up to a threshold, exhaustive above it, merged into the shared result shape. |
+| `engine_select.py` | Searches built from the two engines: `combined_sweep` (the UI's search) runs both on every ancilla count and keeps the best of both, tagging each entry's source; `hybrid_sweep` (used by the evaluation harness) takes guided up to a threshold and exhaustive above it. Both return the shared result shape. |
 | `stability_filter.py` | Stability-aware sweep: excludes qubits that are volatile across cached history (and statistical outliers), then runs the exhaustive sweep, relaxing the filter when the circuit would no longer fit. |
 | `multi_sweep.py` | Sequential multi-circuit placement: each circuit greedily on the best region left, with a buffer around placed ones; replan from any circuit. |
 | `joint_plan.py` | Joint multi-circuit planner: a beam over placement plans with an injected single-circuit search, memoised searches and boundary-coupler accounting. Same result shape as `multi_sweep`, never worse than it. |
@@ -93,7 +93,7 @@ which one ran.
 | `time_panel.py` | Time navigation: live / point / intraday / multi-day modes, snapshot sliders, delta reference selection. |
 | `history.py` | Multi-day history fetch and the time-lapse GIF/MP4 export (optional `imageio` / `imageio-ffmpeg`). |
 | `analysis_panel.py` | LQS display, layout rankings, and the Stability Check section. |
-| `lucj_panel.py` | LUCJ controls: the single dispatch points for the search engine (`_run_sweep`) and the multi-circuit planner (`_run_multi` / `_replan_multi`), the sweep and scan displays, and replan. |
+| `lucj_panel.py` | LUCJ controls: the single dispatch points for the search (`_run_sweep`, the combined search) and the multi-circuit planner (`_run_multi` / `_replan_multi`), the sweep and scan displays, and replan. |
 | `benchmark_panel.py` | Sidebar section "5. Benchmark": targets, cost estimate, run, and applying the measured epoch. |
 | `inter_qpu.py` | Multi-backend comparison view. |
 | `png_export.py` | Publication PNG export (optional `kaleido`). |
