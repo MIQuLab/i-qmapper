@@ -1361,7 +1361,8 @@ def setup_lucj_callbacks(ctx):
         """One Dropdown over scan rows (already ranked) + one detail line + one
         '🔗 open on QPU 2' button. Selecting a row updates the detail; the open
         button is disabled (with a tooltip) for rows that cannot be opened
-        (errors, or a batch that does not fully fit)."""
+        (errors, a batch that does not fully fit, the QPU 1 reference row).
+        `disabled_tip` is a string, or a callable(row) returning one."""
         opts = [(label_fn(r), i) for i, r in enumerate(rows)]
         if not opts:
             return []
@@ -1378,7 +1379,8 @@ def setup_lucj_callbacks(ctx):
             det.value = detail_fn(r)
             ok = open_ok_fn(r)
             btn.disabled = not ok
-            btn.tooltip = '' if ok else disabled_tip
+            tip = disabled_tip(r) if callable(disabled_tip) else disabled_tip
+            btn.tooltip = '' if ok else tip
 
         dd.observe(lambda ch: ch['new'] is not None and _sync(ch['new']),
                    names='value')
@@ -2081,12 +2083,48 @@ def setup_lucj_callbacks(ctx):
         parts.append(f"batch: {m * 100.0:.1f}%{' (template)' if is_tmpl else ''}")
         return ' | '.join(parts)
 
-    def _render_batch_results(scan_result):
+    def _local_batch_reference(norbs):
+        """The local multi-circuit result, if it was planned on the active
+        backend for these norbs; else None."""
+        local = _multi_sweep['result']
+        if not local:
+            return None
+        ctx = local.get('_context') or {}
+        if ctx.get('backend') is not state.active_backend:
+            return None
+        if list(ctx.get('norbs') or []) != list(norbs):
+            return None
+        return local
+
+    def _with_reference_row(results, active_name, local):
+        """Scan rows without the active backend; with a local result, a
+        reference row for it at its rank among the ranked rows."""
+        rows = [r for r in results if r.get('name') != active_name]
+        if local is None or not active_name:
+            return rows
+        metric, _ = _batch_metric(local)
+        ref = {'name': active_name, 'family': None, 'sweep': local,
+               'best_lqs': metric, 'best_k': None, 'error': None,
+               'reference': True}
+        pos = next((i for i, r in enumerate(rows)
+                    if r.get('best_lqs') is None or r['best_lqs'] < metric),
+                   len(rows))
+        rows.insert(pos, ref)
+        return rows
+
+    def _render_batch_results(scan_result, active_name=None, norbs=()):
         # ONE QPU selector over the scan_qpus-ranked batches: pick a backend,
         # see its per-circuit detail, open the whole batch on QPU 2. A batch
-        # that does not fully fit is selectable but not openable.
+        # that does not fully fit is selectable but not openable. The active
+        # backend is QPU 1: it appears only as a reference row built from the
+        # local multi-circuit result, never openable.
+        local = _local_batch_reference(norbs)
+        rows = _with_reference_row(scan_result['results'], active_name, local)
+
         def _label(r):
             name = esc(str(r['name']))
+            if r.get('reference'):
+                name += ' (this QPU)'
             if r.get('error'):
                 return f"{name} — ✗ error"
             m, is_tmpl = _batch_metric(r.get('sweep') or {})
@@ -2102,18 +2140,28 @@ def setup_lucj_callbacks(ctx):
 
         def _open_ok(r):
             res = r.get('sweep') or {}
-            return (not r.get('error') and bool(res.get('circuits'))
+            return (not r.get('error') and not r.get('reference')
+                    and bool(res.get('circuits'))
                     and res.get('failed_at') is None)
 
         def _payload(r):
             res = r.get('sweep') or {}
             return [c['chosen'] for c in res.get('circuits', [])]
 
-        scan_batch_box.children = _scan_selector(
-            scan_result['results'],
-            label_fn=_label, detail_fn=_detail, open_ok_fn=_open_ok,
-            payload_fn=_payload,
-            disabled_tip='batch does not fully fit on this backend')
+        def _tip(r):
+            if r.get('reference'):
+                return 'already QPU 1'
+            return 'batch does not fully fit on this backend'
+
+        children = _scan_selector(
+            rows, label_fn=_label, detail_fn=_detail, open_ok_fn=_open_ok,
+            payload_fn=_payload, disabled_tip=_tip)
+        if local is None and active_name:
+            children.append(HTML(
+                "<div style='font-size:13px;color:#555;margin:3px 0;'>"
+                "this QPU not included — run Generate Multi-Circuit to "
+                "compare</div>"))
+        scan_batch_box.children = children
 
     def _on_scan_batch(b):
         if state.active_backend is None:
@@ -2142,6 +2190,7 @@ def setup_lucj_callbacks(ctx):
             lbl_lucj_multi.value = _joint_pending_html(len(norbs))
         kwargs = _sweep_kwargs_from_ui()
         buffer = lucj_buffer_slider.value
+        active_name = getattr(state, 'active_backend_name', None)
 
         def _batch_sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
             excl = _batch_backend_exclusions(props, getattr(backend, 'name', None))
@@ -2176,6 +2225,12 @@ def setup_lucj_callbacks(ctx):
             targets = qpu_scan.list_scan_targets(
                 state, norbs[0], same_family_as=family,
                 include_other_families=chk_scan_other_families.value)
+            # Never re-search the active backend: it is QPU 1. No sweep, no
+            # fetch; the local multi-circuit result stands in for it.
+            for t in targets:
+                if t.get('name') == active_name:
+                    t['eligible'] = False
+                    t['reason'] = 'current backend — see local results above'
             get_backend = state.active_service.backend
             get_props = make_scan_get_props(state)
             return qpu_scan.scan_qpus(
@@ -2185,7 +2240,7 @@ def setup_lucj_callbacks(ctx):
 
         def _done(result):
             _reset()
-            _render_batch_results(result)
+            _render_batch_results(result, active_name, norbs)
 
         def _err(exc):
             _reset()
