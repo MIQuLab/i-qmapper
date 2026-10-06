@@ -195,3 +195,203 @@ def test_cli_runs_and_writes_a_report(tmp_path, capsys, monkeypatch):
     written = list(out_dir.glob('eval_ibm_fixture_*.md'))
     assert written, 'the CLI did not write a report'
     assert '# Engine comparison' in written[0].read_text(encoding='utf-8')
+
+
+# ── the real-LQS scorer ─────────────────────────────────────────────
+
+def _entry(alpha, beta, ancillas):
+    return {'alpha': list(alpha), 'beta': list(beta),
+            'ancillas': list(ancillas), 'product_score': 0.5}
+
+
+def _snapshot(n_rungs=8, seed=0, gate_scale=1.0):
+    edges = _ladder_edges(n_rungs)
+    n_q = 3 * n_rungs
+    rng = np.random.default_rng(seed)
+    qubit_props = {'readout_error': 0.01 + 0.01 * rng.random(n_q)}
+    gate_props = {'cz_error': gate_scale * (0.005 + 0.01
+                                            * rng.random(len(edges)))}
+    return qubit_props, gate_props, edges, [str(i) for i in range(n_q)]
+
+
+def test_lqs_scorer_matches_the_app_path():
+    """Same value as estimate_circuit_fidelity on a real SessionState, and
+    on the scratch state the panel's _circuit_score builds."""
+    from types import SimpleNamespace
+    from iqmapper.export.scoring import estimate_circuit_fidelity
+    from iqmapper.state import SessionState
+
+    qubit_props, gate_props, edges, ids = _snapshot()
+    entry = _entry([0, 1, 2, 3], [8, 9, 10, 11], [16])
+    ours = ev._lqs_scorer(qubit_props, gate_props, edges, ids)(entry)
+
+    layout = {'alpha': ['0', '1', '2', '3'], 'beta': ['8', '9', '10', '11'],
+              'other': [], 'ancilla': ['16']}
+    fake = SimpleNamespace(layouts_data={0: layout},
+                           qubit_props_data=qubit_props,
+                           gate_props_data=gate_props, qubit_ids=ids,
+                           edges_list=[tuple(e) for e in edges])
+    panel = estimate_circuit_fidelity(fake, 0, 'lucj')['fidelity']
+
+    state = SessionState()
+    state.qubit_ids = list(ids)
+    state.edges_list = [tuple(e) for e in edges]
+    state.qubit_props_data = {k: np.asarray(v) for k, v in qubit_props.items()}
+    state.gate_props_data = {k: np.asarray(v) for k, v in gate_props.items()}
+    state.layouts_data = {0: dict(layout)}
+    real = estimate_circuit_fidelity(state, 0, 'lucj')['fidelity']
+
+    assert ours == pytest.approx(panel, rel=1e-12)
+    assert ours == pytest.approx(real, rel=1e-12)
+    assert 0.0 < ours < entry['product_score'] * 2
+
+
+def test_lqs_scorer_is_rebuilt_for_every_snapshot(tmp_path, monkeypatch):
+    backend = 'ibm_fixture'
+    stamps = ['2026-09-01T00:00:00Z', '2026-09-02T00:00:00Z']
+    edges = _write_cache(tmp_path, backend, stamps)
+    built = []
+    real = ev._lqs_scorer
+
+    def _spy(qubit_props, gate_props, edges_, ids):
+        fn = real(qubit_props, gate_props, edges_, ids)
+        built.append(fn)
+        return fn
+
+    monkeypatch.setattr(ev, '_lqs_scorer', _spy)
+    report = ev.compare_engines(backend, norbs=(4,), top_n=2, min_bridges=1,
+                                cache_dir=tmp_path, coupling=edges,
+                                beam_width=50, scorer='lqs')
+    assert not report.errors, report.errors
+    assert len(built) == len(stamps)
+    entry = _entry([0, 1, 2, 3], [8, 9, 10, 11], [16])
+    assert built[0](entry) != built[1](entry)     # different gate errors
+    assert report.metric == 'lqs'
+    assert 'Metric: lqs\n' in report.to_markdown()
+
+
+def test_lqs_scorer_takes_qubit_ids_from_the_session(tmp_path, monkeypatch):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    session_dir = tmp_path / 'sessions'
+    _write_session(str(session_dir), backend, edges, 24)
+    seen = []
+    real = ev._lqs_scorer
+    monkeypatch.setattr(ev, '_lqs_scorer', lambda q, g, e, ids: (
+        seen.append((list(e), list(ids))) or real(q, g, e, ids)))
+    ev.compare_engines(backend, norbs=(4,), top_n=2, min_bridges=1,
+                       cache_dir=tmp_path, session_dir=str(session_dir),
+                       beam_width=50, scorer='lqs')
+    assert seen == [([tuple(e) for e in edges],
+                     [str(i) for i in range(24)])]
+
+
+def _numbers(report):
+    return [(r.date, r.norb, r.k, r.vf2_lqs, r.guided_lqs, r.vf2_scaffolds,
+             r.guided_scaffolds, r.vf2_capped, r.refined)
+            for r in report.rows]
+
+
+def test_proxy_and_an_explicit_scorer_reproduce_the_default(tmp_path):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    kw = dict(norbs=(4,), top_n=2, min_bridges=1, cache_dir=tmp_path,
+              coupling=edges, beam_width=50)
+    default = ev.compare_engines(backend, **kw)
+    proxy = ev.compare_engines(backend, scorer='proxy', **kw)
+    explicit = ev.compare_engines(backend, scorer='lqs',
+                                  circuit_score_fn=ev._product_scorer(), **kw)
+    assert _numbers(default) == _numbers(proxy) == _numbers(explicit)
+    assert default.metric == proxy.metric == 'lqs_proxy'
+    assert explicit.metric == 'custom'
+
+
+def test_an_unknown_scorer_is_refused(tmp_path):
+    with pytest.raises(ValueError, match='scorer'):
+        ev.compare_engines('ibm_fixture', scorer='fidelity',
+                           cache_dir=tmp_path, coupling=[(0, 1)])
+
+
+# ── the threshold suggestion ────────────────────────────────────────
+
+def _row(norb, k, vf2, guided, date='d1'):
+    return ev.Row(date, norb, k, vf2, guided, 0.0, 0.0, 1, 1, False, 0)
+
+
+def test_suggest_guided_max_k():
+    rows = [
+        # norb 8: guided holds at k=1 and 2, loses at 3 → t = 2
+        _row(8, 1, 0.50, 0.52), _row(8, 1, 0.50, 0.49, 'd2'),
+        _row(8, 1, 0.50, 0.51, 'd3'),
+        _row(8, 2, 0.40, 0.40), _row(8, 3, 0.30, 0.25),
+        # norb 12: loses at the floor → None
+        _row(12, 1, 0.50, 0.45), _row(12, 2, 0.40, 0.45),
+        # norb 16: 0.4 pt behind at k=1 — a tolerance of 0.5 pt lets it pass
+        _row(16, 1, 0.500, 0.496), _row(16, 2, 0.4, None),
+    ]
+    report = ev.Report('ibm_x', rows)
+    assert ev.suggest_guided_max_k(report) == {8: 2, 12: None, 16: None}
+    assert ev.suggest_guided_max_k(report, tol=0.5) == {8: 2, 12: None,
+                                                         16: 1}
+    assert ev.suggest_guided_max_k(report, tol=6.0)[8] == 3
+    text = ev.format_suggestion({8: 2, 12: None})
+    assert '- norb 8: 2' in text
+    assert '- norb 12: none (guided loses at the floor)' in text
+
+
+# ── the hybrid column ───────────────────────────────────────────────
+
+def test_hybrid_column_is_added_and_matches_its_halves(tmp_path):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    report = ev.compare_engines(backend, norbs=(5,), top_n=2, min_bridges=1,
+                                cache_dir=tmp_path, coupling=edges,
+                                beam_width=50, hybrid_ks=(1,))
+    assert not report.errors, report.errors
+    assert {r.k for r in report.rows} == {1, 2}
+    for r in report.rows:
+        expected = r.guided_lqs if r.k <= 1 else r.vf2_lqs
+        assert r.hybrid_lqs == {1: expected}
+    text = report.to_markdown()
+    header = next(line for line in text.splitlines()
+                  if line.startswith('| date'))
+    assert header.endswith(' refined | hybrid k<=1 |')
+
+
+def test_no_hybrid_leaves_the_table_unchanged():
+    rows = [_row(8, 1, 0.5, 0.52)]
+    report = ev.Report('ibm_x', rows)
+    assert report.to_markdown() == ev.Report('ibm_x', rows,
+                                             hybrid_ks=()).to_markdown()
+    assert report.to_markdown() == (
+        '# Engine comparison - ibm_x\n'
+        '\n'
+        'Metric: lqs_proxy\n'
+        '\n'
+        f'{report.summary()}\n'
+        '\n'
+        '| date | norb | k | VF2 | guided | dLQS (pt) | VF2 s | guided s |'
+        ' VF2 scaffolds | guided scaffolds | VF2 capped | refined |\n'
+        '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|\n'
+        '| d1 | 8 | 1 | 0.5000 | 0.5200 | +2.00 | 0.00 | 0.00 | 1 | 1 |'
+        ' no | 0 |\n')
+
+
+def test_cli_prints_the_suggestion_and_takes_the_new_flags(
+        tmp_path, capsys, monkeypatch):
+    backend = 'ibm_fixture'
+    edges = _write_cache(tmp_path, backend, ['2026-09-01T00:00:00Z'])
+    session_dir = tmp_path / 'sessions'
+    _write_session(str(session_dir), backend, edges, 24)
+    monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
+    code = ev.main([backend, '--norb', '5', '--top-n', '2',
+                    '--min-bridges', '1', '--beam-width', '50',
+                    '--session-dir', str(session_dir),
+                    '--out-dir', str(tmp_path / 'out'),
+                    '--hybrid-k', '1', '--tol', '0.5'])
+    assert code == 0
+    printed = capsys.readouterr().out
+    assert 'Metric: lqs\n' in printed                 # CLI default
+    assert 'hybrid k<=1' in printed
+    assert 'Suggested "Guided up to k":' in printed
+    assert '- norb 5:' in printed

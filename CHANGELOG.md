@@ -45,6 +45,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   region the next one needed. Never worse than the sequential planner, uses
   the selected search engine, and reports couplers shared by two circuits at
   buffer 0 (with an optional penalty to avoid them).
+- Engine comparison harness (`python -m iqmapper.evaluation`) now ranks with
+  the app's real circuit-level LQS, rebuilt for every cached calibration
+  (`--scorer lqs`, the new default; `proxy` keeps the product score). It can
+  add a hybrid-engine column (`--hybrid-k`) and prints the suggested
+  "Guided up to k" for each orbital count (`--tol` sets how far guided may
+  trail and still count).
 
 ### Fixed
 - Batch scan scored every backend's layouts with the active backend's

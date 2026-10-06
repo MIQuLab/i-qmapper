@@ -11,18 +11,30 @@ It replays both engines over the calibration snapshots already sitting in the
 local cache — no network, no QPU time, no credentials. For each (date, norb, k)
 it records the best circuit-level LQS each engine reached, the wall time, how
 many distinct chain scaffolds each produced, and whether VF2 truncated.
+Optionally it also runs the hybrid engine (`engine_select.hybrid_sweep`) at one
+or more thresholds, and `suggest_guided_max_k` turns the table into the value
+to enter as "Guided up to k".
+
+The metric
+----------
+`scorer='lqs'` ranks with the real circuit-level LQS — the same
+`export.scoring.estimate_circuit_fidelity` call the app makes — rebuilt for
+every snapshot, because the properties change from date to date.
+`scorer='proxy'` ranks with the product score instead (reported as
+`lqs_proxy`); it needs nothing but the property arrays. An explicit
+`circuit_score_fn` overrides both (reported as `custom`).
 
 Reading the table
 -----------------
 `delta_lqs` is `guided - vf2` in LQS points. Positive means guided found a
 better layout on that snapshot. `vf2_capped` matters: where VF2 truncated, it
-was ranking an arbitrary 2% sample, so a guided win there says the guided
+was ranking an arbitrary sample, so a guided win there says the guided
 sample is better-chosen, not that beam search beats exhaustive search. Where
 VF2 did NOT truncate it enumerated everything, so a guided win is a genuine
 win and a guided loss is the heuristic's real cost.
 
-Both engines get the same graph, the same properties and the same
-`circuit_score_fn`, so the comparison is like-for-like.
+Both engines get the same graph, the same properties and the same scorer,
+so the comparison is like-for-like.
 
 Where the topology comes from
 -----------------------------
@@ -36,18 +48,25 @@ So the coupling has to come from somewhere else, in this order:
 
   1. an explicit `coupling=[(u, v), ...]` argument;
   2. a saved session for that backend under `.iqmapper_sessions/`, which does
-     persist `edges_list` (see `state.to_dict`);
+     persist `edges_list` and `qubit_ids` (see `state.to_dict`);
   3. otherwise the run reports a clear error rather than guessing — an
      invented topology would produce numbers that look real and mean nothing.
 
 Save a session once for the backend you want to evaluate and every cached
 calibration for it becomes replayable.
 
+The gate arrays are positional, so the edges must be the backend's own edge
+list in the app's order (`data._generate_ibm`: `coupling_map.get_edges()`,
+both directions). A saved session's `edges_list` is exactly that; an explicit
+`coupling=` must be too. Qubit ids are `str(i)` for i in 0..n-1 in the app,
+which is also the fallback when no session supplies them.
+
 CLI
 ---
-    python -m iqmapper.evaluation ibm_boston --norb 8 12 16
+    python -m iqmapper.evaluation ibm_boston --norb 8 12 16 --hybrid-k 1 2
 
-prints the table and writes `.scratch/eval_<backend>_<timestamp>.md`.
+prints the table and the suggested "Guided up to k" per norb, and writes both
+to `.scratch/eval_<backend>_<timestamp>.md`. `--scorer` defaults to `lqs`.
 """
 import argparse
 import json as _json
@@ -63,11 +82,15 @@ import rustworkx
 
 from . import data as _data
 from .ancilla_sweep import sweep_ancilla_layouts
+from .engine_select import hybrid_sweep
 from .guided_search import guided_sweep
 
 _log = logging.getLogger(__name__)
 
 DEFAULT_NORBS = (8, 12, 16)
+
+#: Scorer names accepted by `compare_engines`, and the metric each reports.
+SCORERS = {'proxy': 'lqs_proxy', 'lqs': 'lqs'}
 
 
 # ── replaying a cached calibration as a backend/props pair ──────────
@@ -136,6 +159,39 @@ def _product_scorer():
     return _score
 
 
+def _lqs_scorer(qubit_props, gate_props, edges, qubit_ids):
+    """The app's circuit-level LQS for one calibration snapshot.
+
+    Mirrors `ui.lucj_panel._circuit_score`: a scratch one-layout state with the
+    candidate's qubits as string ids, scored by
+    `export.scoring.estimate_circuit_fidelity(fake, 0, 'lucj')`. The arrays
+    are bound once, so build a new scorer for every snapshot.
+    """
+    from .export.scoring import estimate_circuit_fidelity
+    qubit_props_data = {k: np.asarray(v) for k, v in qubit_props.items()}
+    gate_props_data = {k: np.asarray(v) for k, v in gate_props.items()}
+    edges_list = [tuple(int(x) for x in e) for e in edges]
+    ids = [str(q) for q in qubit_ids]
+
+    def _score(entry):
+        layout = {
+            'alpha': [str(q) for q in entry['alpha']],
+            'beta': [str(q) for q in entry['beta']],
+            'other': [],
+            'ancilla': [str(q) for q in entry['ancillas']],
+        }
+        fake = SimpleNamespace(
+            layouts_data={0: layout},
+            qubit_props_data=qubit_props_data,
+            gate_props_data=gate_props_data,
+            qubit_ids=ids,
+            edges_list=edges_list,
+        )
+        res = estimate_circuit_fidelity(fake, 0, 'lucj')
+        return res['fidelity'] if res else None
+    return _score
+
+
 # ── report ──────────────────────────────────────────────────────────
 
 class Row:
@@ -143,11 +199,11 @@ class Row:
 
     __slots__ = ('date', 'norb', 'k', 'vf2_lqs', 'guided_lqs', 'vf2_time',
                  'guided_time', 'vf2_scaffolds', 'guided_scaffolds',
-                 'vf2_capped', 'refined')
+                 'vf2_capped', 'refined', 'hybrid_lqs')
 
     def __init__(self, date, norb, k, vf2_lqs, guided_lqs, vf2_time,
                  guided_time, vf2_scaffolds, guided_scaffolds, vf2_capped,
-                 refined):
+                 refined, hybrid_lqs=None):
         self.date = date
         self.norb = norb
         self.k = k
@@ -159,6 +215,8 @@ class Row:
         self.guided_scaffolds = guided_scaffolds
         self.vf2_capped = vf2_capped
         self.refined = refined
+        # {guided_max_k: best LQS at this k}, one entry per hybrid threshold.
+        self.hybrid_lqs = dict(hybrid_lqs or {})
 
     @property
     def delta(self):
@@ -175,10 +233,13 @@ class Row:
 class Report:
     """The rows plus the summary a human actually reads."""
 
-    def __init__(self, backend_name, rows, errors=None):
+    def __init__(self, backend_name, rows, errors=None, metric='lqs_proxy',
+                 hybrid_ks=()):
         self.backend_name = backend_name
         self.rows = list(rows)
         self.errors = list(errors or [])
+        self.metric = metric
+        self.hybrid_ks = tuple(hybrid_ks)
 
     # ── aggregates ──────────────────────────────────────────────
     def _comparable(self):
@@ -202,29 +263,72 @@ class Report:
 
     def to_markdown(self):
         lines = [f'# Engine comparison - {self.backend_name}', '',
-                 self.summary(), '']
+                 f'Metric: {self.metric}', '', self.summary(), '']
         if self.errors:
             lines += ['## Errors', '']
             lines += [f'- {e}' for e in self.errors]
             lines += ['']
+        hybrid_head = ''.join(f' hybrid k<={t} |' for t in self.hybrid_ks)
+        hybrid_rule = '---:|' * len(self.hybrid_ks)
         lines += [
             '| date | norb | k | VF2 | guided | dLQS (pt) | VF2 s | guided s |'
-            ' VF2 scaffolds | guided scaffolds | VF2 capped | refined |',
-            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|']
+            ' VF2 scaffolds | guided scaffolds | VF2 capped | refined |'
+            + hybrid_head,
+            '|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|:--:|---:|'
+            + hybrid_rule]
         for r in self.rows:
             def _f(value, digits=4):
                 return '-' if value is None else f'{value:.{digits}f}'
             delta = ('-' if r.delta is None else f'{r.delta * 100:+.2f}')
+            hybrid_cells = ''.join(f' {_f(r.hybrid_lqs.get(t))} |'
+                                   for t in self.hybrid_ks)
             lines.append(
                 f'| {r.date} | {r.norb} | {r.k} | {_f(r.vf2_lqs)} | '
                 f'{_f(r.guided_lqs)} | {delta} | {r.vf2_time:.2f} | '
                 f'{r.guided_time:.2f} | {r.vf2_scaffolds} | '
                 f'{r.guided_scaffolds} | {"yes" if r.vf2_capped else "no"} | '
-                f'{r.refined} |')
+                f'{r.refined} |' + hybrid_cells)
         return '\n'.join(lines) + '\n'
 
     def __repr__(self):                       # pragma: no cover - debug aid
         return f'<Report {self.backend_name} rows={len(self.rows)}>'
+
+
+def suggest_guided_max_k(report, tol=0.0):
+    """The highest k up to which guided holds its own, per norb.
+
+    For each norb: the largest `t` such that, for every k from the floor up
+    to `t`, the median `delta` (guided - VF2) over the snapshots is
+    `>= -tol`. `tol` is in LQS points, the unit of the dLQS column. `None`
+    when guided already loses at the floor (or the floor has no comparable
+    rows). This is the value for "Guided up to k".
+    """
+    by_norb = {}
+    for r in report.rows:
+        if r.delta is not None:
+            by_norb.setdefault(r.norb, {}).setdefault(r.k, []).append(r.delta)
+    suggestion = {}
+    for norb in sorted({r.norb for r in report.rows}):
+        per_k = by_norb.get(norb, {})
+        ks = sorted({r.k for r in report.rows if r.norb == norb})
+        best = None
+        for k in ks:
+            deltas = per_k.get(k)
+            if not deltas or statistics.median(deltas) * 100.0 < -tol:
+                break
+            best = k
+        suggestion[norb] = best
+    return suggestion
+
+
+def format_suggestion(suggestion):
+    """One line per norb, for the CLI."""
+    lines = ['Suggested "Guided up to k":']
+    for norb, t in sorted(suggestion.items()):
+        lines.append(f'- norb {norb}: '
+                     + ('none (guided loses at the floor)' if t is None
+                        else f'{t}'))
+    return '\n'.join(lines) + '\n'
 
 
 # ── the comparison ──────────────────────────────────────────────────
@@ -252,7 +356,7 @@ def _best_lqs(result, k):
 def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
                     min_bridges=0, cache_dir=None, beam_width=200,
                     circuit_score_fn=None, limit=None, coupling=None,
-                    session_dir=None):
+                    session_dir=None, scorer='proxy', hybrid_ks=()):
     """Run both engines over the cached calibrations and report.
 
     Read-only and offline: reads the local calibration cache, never the
@@ -264,8 +368,19 @@ def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
         norbs: orbital counts to test.
         cache_dir: override `data._CACHE_DIR` for the duration (tests).
         limit: cap the number of calibrations replayed.
+        scorer: 'proxy' (product score, `lqs_proxy`) or 'lqs' (the app's
+            circuit-level LQS, rebuilt per snapshot). An explicit
+            `circuit_score_fn` wins over both.
+        hybrid_ks: thresholds at which to also run the hybrid engine; each
+            adds a `hybrid k<=t` column. Empty = the two-engine table.
     """
-    scorer = circuit_score_fn or _product_scorer()
+    if scorer not in SCORERS:
+        raise ValueError(f"scorer={scorer!r}; expected one of "
+                         f"{sorted(SCORERS)}.")
+    metric = 'custom' if circuit_score_fn is not None else SCORERS[scorer]
+    fixed_scorer = circuit_score_fn or (
+        _product_scorer() if scorer == 'proxy' else None)
+    hybrid_ks = tuple(int(t) for t in hybrid_ks)
     min_bridges = max(1, int(min_bridges))
 
     old_cache = None
@@ -281,15 +396,18 @@ def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
 
         rows, errors = [], []
         # The cache has no topology; resolve it once for the whole run.
+        session_ids = None
         if coupling is None:
-            coupling = coupling_from_sessions(backend_name, session_dir)
+            topology = _session_topology(backend_name, session_dir)
+            if topology is not None:
+                coupling, session_ids = topology
         if coupling is None:
             errors.append(
                 f'No coupling map for {backend_name}: the calibration cache '
                 f'stores only property arrays. Pass coupling=[(u, v), ...] or '
                 f'save a session for this backend so .iqmapper_sessions/ '
                 f'carries its edges_list.')
-            return Report(backend_name, [], errors)
+            return Report(backend_name, [], errors, metric, hybrid_ks)
 
         for stamp in stamps:
             snapshot = _data._load_calibration(backend_name, stamp)
@@ -305,12 +423,20 @@ def compare_engines(backend_name, dates=None, norbs=DEFAULT_NORBS, top_n=3,
                 continue
             backend = _backend_from_edges(edges, n_qubits, backend_name)
             props = _CachedProps(qubit_props, gate_props, edges)
+            if fixed_scorer is not None:
+                snapshot_scorer = fixed_scorer
+            else:
+                ids = (session_ids if session_ids is not None
+                       and len(session_ids) == n_qubits
+                       else [str(i) for i in range(n_qubits)])
+                snapshot_scorer = _lqs_scorer(qubit_props, gate_props, edges,
+                                              ids)
 
             for norb in norbs:
                 rows.extend(_compare_one(stamp, norb, backend, props,
                                          top_n, min_bridges, beam_width,
-                                         scorer, errors))
-        return Report(backend_name, rows, errors)
+                                         snapshot_scorer, errors, hybrid_ks))
+        return Report(backend_name, rows, errors, metric, hybrid_ks)
     finally:
         if old_cache is not None:
             _data._CACHE_DIR = old_cache
@@ -342,6 +468,15 @@ def coupling_from_sessions(backend_name, session_dir=None):
     saved session makes every cached calibration for that backend replayable.
     Returns a list of (u, v), or None when nothing matches.
     """
+    topology = _session_topology(backend_name, session_dir)
+    return None if topology is None else topology[0]
+
+
+def _session_topology(backend_name, session_dir=None):
+    """`(edges, qubit_ids)` from the first matching saved session, or None.
+
+    `qubit_ids` is None when the session does not carry it.
+    """
     directory = session_dir or os.path.join(os.getcwd(), '.iqmapper_sessions')
     try:
         names = sorted(os.listdir(directory))
@@ -360,13 +495,15 @@ def coupling_from_sessions(backend_name, session_dir=None):
             continue
         edges = payload.get('edges_list') or []
         if edges:
-            return [tuple(int(x) for x in e) for e in edges]
+            ids = payload.get('qubit_ids')
+            return ([tuple(int(x) for x in e) for e in edges],
+                    [str(q) for q in ids] if ids else None)
     return None
 
 
 def _compare_one(stamp, norb, backend, props, top_n, min_bridges, beam_width,
-                 scorer, errors):
-    """One (date, norb): run both engines, emit a row per shared stratum."""
+                 scorer, errors, hybrid_ks=()):
+    """One (date, norb): run the engines, emit a row per stratum."""
     try:
         t0 = time.time()
         vf2 = sweep_ancilla_layouts(norb, backend, props,
@@ -386,6 +523,17 @@ def _compare_one(stamp, norb, backend, props, top_n, min_bridges, beam_width,
         errors.append(f'{stamp} norb={norb}: guided failed ({exc})')
         return []
 
+    hybrid = {}
+    for t in hybrid_ks:
+        try:
+            hybrid[t] = hybrid_sweep(norb, backend, props, guided_max_k=t,
+                                     min_bridges=min_bridges, top_n=top_n,
+                                     circuit_score_fn=scorer,
+                                     guided_kwargs={'beam_width': beam_width})
+        except Exception as exc:              # noqa: BLE001 - recorded
+            errors.append(f'{stamp} norb={norb}: hybrid k<={t} failed '
+                          f'({exc})')
+
     vf2_scaffolds = _scaffolds(vf2)
     guided_scaffolds = _scaffolds(guided)
     capped = bool(vf2.get('vf2_truncated'))
@@ -396,7 +544,8 @@ def _compare_one(stamp, norb, backend, props, top_n, min_bridges, beam_width,
                     reverse=True):
         rows.append(Row(stamp, norb, k, _best_lqs(vf2, k),
                         _best_lqs(guided, k), vf2_time, guided_time,
-                        vf2_scaffolds, guided_scaffolds, capped, refined))
+                        vf2_scaffolds, guided_scaffolds, capped, refined,
+                        {t: _best_lqs(res, k) for t, res in hybrid.items()}))
     return rows
 
 
@@ -418,14 +567,25 @@ def main(argv=None):
     parser.add_argument('--session-dir', default=None,
                         help='where to look for a saved session carrying the '
                              'coupling map (default .iqmapper_sessions)')
+    parser.add_argument('--scorer', choices=sorted(SCORERS), default='lqs',
+                        help='lqs = the app\'s circuit-level LQS (default); '
+                             'proxy = product score')
+    parser.add_argument('--hybrid-k', type=int, nargs='+', default=[],
+                        help='also run the hybrid engine at these thresholds')
+    parser.add_argument('--tol', type=float, default=0.0,
+                        help='LQS points guided may trail VF2 by and still '
+                             'count as holding its own (default 0)')
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.WARNING)
     report = compare_engines(args.backend, norbs=tuple(args.norb),
                              top_n=args.top_n, min_bridges=args.min_bridges,
                              beam_width=args.beam_width, limit=args.limit,
-                             session_dir=args.session_dir)
-    markdown = report.to_markdown()
+                             session_dir=args.session_dir,
+                             scorer=args.scorer,
+                             hybrid_ks=tuple(args.hybrid_k))
+    markdown = (report.to_markdown() + '\n'
+                + format_suggestion(suggest_guided_max_k(report, args.tol)))
     print(markdown)
 
     try:
