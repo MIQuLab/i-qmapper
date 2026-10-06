@@ -347,8 +347,8 @@ def test_a_raising_scorer_never_breaks_refinement():
 def test_low_k_does_not_explode_on_heavy_hex():
     """The failure mode this engine exists to fix, asserted structurally.
 
-    VF2 enumerates 37k-100k+ mappings for k<=1 on a large heavy-hex and gets
-    capped. The beam is bounded by construction: expansions can never exceed
+    At k<=1 on a large lattice VF2 finds far more mappings than its cap and
+    gets cut off. The beam is bounded by construction: expansions can never exceed
     beam_width x norb x max_degree^2, so the assertion is on a counter rather
     than on wall time (which would be flaky on CI).
     """

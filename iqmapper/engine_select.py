@@ -3,8 +3,8 @@ engine_select.py — the hybrid search engine: guided below a bridge-count
 threshold, exhaustive VF2 above it.
 
 The two single-circuit engines fail in opposite places. With few bridges (low
-k) the LUCJ template is loose, VF2 finds tens of thousands of embeddings on a
-large heavy-hex and ranks only what fits under its mapping cap. With many
+k) the LUCJ template is loose, VF2 finds far more embeddings on a large chip
+than its mapping cap holds and ranks only the capped sample. With many
 bridges (high k) the template is tight, the embeddings are few, and VF2 is
 genuinely exhaustive — exactly where a beam search can only tie or lose. So
 each stratum is taken from the engine that is reliable there:

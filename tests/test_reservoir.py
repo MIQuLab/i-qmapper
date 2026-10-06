@@ -1,10 +1,10 @@
 """Tests for the diverse VF2 reservoir (engine #17).
 
 The reservoir exists because a blind cap keeps a spatially clustered sample:
-on a 193-qubit heavy-hex at k=1 the first 2000 of 37,044 mappings have mean
-pairwise Jaccard 0.161 and touch only 109 of 193 qubits, against 0.068 / 193
-for a representative sample. These tests pin the sieve's semantics, its
-agreement with the sweep's own score, and that it actually widens the sample.
+VF2 yields mappings in traversal order, so the first ones are near-copies of
+one region and much of a large lattice is never seen. These tests pin the
+sieve's semantics, its agreement with the sweep's own score, and that it
+actually widens the sample.
 """
 import random
 from types import SimpleNamespace

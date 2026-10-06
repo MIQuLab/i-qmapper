@@ -6,16 +6,9 @@ The problem
 `auto_lucj._collect_vf2_mappings` takes the first `cap` mappings rustworkx
 yields and stops. VF2 walks the graph in a deterministic traversal order, so
 those first mappings are spatially clustered: the same region of the chip with
-one qubit shifted, over and over. Measured on a 193-qubit heavy-hex at
-norb=8, k=1 (37,044 mappings available, cap 2000 = 5.4 %):
-
-    kept set                mean pairwise Jaccard    qubits covered
-    first 2000 (the cap)            0.161                109 / 193
-    random 2000                     0.068                193 / 193
-    all 37,044                      0.069                193 / 193
-
-The cap's sample is 2.3x more self-similar than a representative one and
-never sees 44 % of the chip. The downstream cascade, monotonicity anchors and
+one qubit shifted, over and over. Where the cap is reached, the capped sample
+is far more self-similar than a representative one, and much of a large chip
+is never seen. The downstream cascade, monotonicity anchors and
 diversity quota are all good, but they can only choose among what enumeration
 handed them.
 
@@ -78,10 +71,9 @@ _log = logging.getLogger(__name__)
 DEFAULT_JACCARD = 0.8
 
 #: Mappings considered per kept slot. The cap bounds what is HELD; this
-#: bounds what is EXAMINED. Iterating VF2 is cheap (37k mappings in ~0.1 s on
-#: a 193-qubit heavy-hex) — it is materialising and scoring them that the cap
-#: was protecting against — so a generous factor buys most of the available
-#: diversity at negligible cost.
+#: bounds what is EXAMINED. Iterating VF2 is cheap — it is materialising and
+#: scoring the mappings that the cap was protecting against — so a generous
+#: factor buys most of the available diversity at negligible cost.
 OFFER_BUDGET_FACTOR = 20
 
 

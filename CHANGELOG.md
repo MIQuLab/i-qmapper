@@ -37,6 +37,18 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   handoff that reopens the chosen layout on the second QPU.
 - Epoch-consistent scoring: fidelity and ranking read a single pinned
   calibration epoch, so comparisons within a sweep stay commensurable.
+- Hybrid search engine: guided search for low ancilla counts, where the
+  exhaustive search hits its cap and only ranks a sample, and the exhaustive
+  search above a threshold you set ("Guided up to k").
+- Joint multi-circuit planner: keeps several placement plans at once instead
+  of placing each circuit greedily, so the first circuit no longer takes a
+  region the next one needed. Never worse than the sequential planner, uses
+  the selected search engine, and reports couplers shared by two circuits at
+  buffer 0 (with an optional penalty to avoid them).
+
+### Fixed
+- Batch scan scored every backend's layouts with the active backend's
+  calibration; each backend is now scored with its own.
 
 ## [0.0.5] — 2026-08
 

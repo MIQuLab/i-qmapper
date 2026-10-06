@@ -3,9 +3,9 @@ guided_search.py — calibration-guided beam search for LUCJ layouts.
 
 The existing engine (`ancilla_sweep.sweep_ancilla_layouts`) enumerates zigzag
 embeddings with VF2, which is blind to calibration: it finds subgraphs that fit
-the template and only then asks how good they are. On a 193-qubit heavy-hex at
-low bridge counts that enumeration runs to 37k-100k+ mappings and gets cut off
-at the 2000 cap, so the ranking sees an arbitrary 2% sample of the search
+the template and only then asks how good they are. On a large chip at low
+bridge counts that enumeration yields far more mappings than the 2000 cap and
+gets cut off, so the ranking sees only an arbitrary sample of the search
 space. Quality survives because the downstream cascade, monotonicity anchors
 and diversity quota are good — but generation is throwing away information it
 already has.
@@ -76,7 +76,7 @@ WHAT THIS DOES NOT DO
 Beam search is a heuristic. It can miss the global optimum that exhaustive VF2
 would find on a small device, which is precisely why the default stays VF2 and
 why `evaluation.compare_engines` exists. On the fixtures in the test suite the
-two agree; on a 193-qubit chip VF2 cannot enumerate the space at all, so the
+two agree; on a large chip VF2 cannot enumerate the space at all, so the
 comparison there is between a guided sample and an arbitrary one.
 """
 import logging

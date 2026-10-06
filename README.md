@@ -288,8 +288,8 @@ Tooltips that end with `· README: <name>` point at the matching entry below.
 ### Search cap
 
 The exhaustive engine enumerates candidate layouts and stops at this many. On
-a large chip there can be tens of thousands, so the cap is normally reached at
-low ancilla counts. When it is, the notices bar says so — raise the cap for a
+a large chip there can be far more layouts than the cap, so it is normally
+reached at low ancilla counts. When it is, the notices bar says so — raise the cap for a
 more thorough (slower) search, or leave it and rely on diverse enumeration.
 
 ### Diverse enumeration
@@ -297,9 +297,10 @@ more thorough (slower) search, or leave it and rely on diverse enumeration.
 With this on, the cap counts *distinct* candidates. During the search a layout
 that overlaps one already kept by more than 80% of its qubits, and does not
 score better, is discarded without using a slot; one that scores better takes
-its place. Without it the cap fills with near-copies of whatever the search
-found first, which on a 193-qubit chip meant never looking at 44% of the
-device. It only makes a difference where the cap is actually reached.
+its place. Without it the cap fills with near-copies of the first region the
+search finds, and much of a large chip is never looked at. With it, similar
+layouts don't use up the cap, so the sample spreads across the chip. It only
+makes a difference where the cap is actually reached.
 
 ### Search engine
 
@@ -309,10 +310,40 @@ grows each layout using the calibration as it goes and polishes the finalists.
 Guided is a heuristic: it can miss the best layout that exhaustive would find,
 so it stays opt-in until the comparison harness says otherwise.
 
+**Hybrid** uses guided where exhaustive is capped (few ancillas: so many
+layouts fit that exhaustive only ranks a sample) and exhaustive where it is
+complete (many ancillas: few layouts fit, and all of them are checked). Set
+**Guided up to k** to the highest ancilla count where guided does at least as
+well as exhaustive in the engine comparison (`python -m iqmapper.evaluation`).
+The status line names the split, e.g. `engine: hybrid (guided ≤ k1)`; the
+`refined 2/5` tally counts the guided finalists the polish improved.
+
 ### Multi-circuit planner
 
 **Sequential** places circuits one at a time, each on the best region left.
-**Joint** keeps several partial plans and returns the best complete one.
+It is fast but short-sighted: the first circuit can take a region that leaves
+the next one only a poor spot, or none at all.
+
+**Joint** keeps several partial plans instead of one. After each circuit it
+tries **Candidates per circuit** layouts on every plan it holds and keeps the
+best **Plans kept** of them. It also builds the sequential plan and returns
+whichever is better, so it is never worse — only slower. It searches with the
+selected search engine (Sequential always uses exhaustive). While it runs, the
+status shows `joint plan · up to N searches`, the worst case.
+
+When it finishes, `joint plan · +X% vs sequential · N searches` compares the
+two plans' totals (the product of each circuit's LQS) and counts the searches
+actually run. If the joint plan fits more circuits than sequential could, it
+says `places 3 vs 2 sequential` instead, since a total over more circuits is
+not comparable.
+
+**Boundary penalty** matters only at **Buffer qubits: 0**. With a buffer of 1
+or more, two circuits can never touch. At 0 they can sit side by side, and a
+coupler between them carries gates of one circuit next to idle qubits of the
+other: crosstalk the LQS does not model. `shared couplers: 47–48` lists such
+couplers. Each one multiplies the plan's score by `1 − penalty`, so a penalty
+of 0.5 makes the planner prefer a plan without them when one exists; 0 only
+reports them.
 
 ### Prefer diverse regions
 
