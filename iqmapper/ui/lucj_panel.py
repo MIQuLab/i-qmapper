@@ -206,6 +206,11 @@ def setup_lucj_callbacks(ctx):
     lucj_multi_norbs = ctx.lucj_multi_norbs
     lucj_multi_ancillas = ctx.lucj_multi_ancillas
     lucj_buffer_slider = ctx.lucj_buffer_slider
+    dd_planner = getattr(ctx, 'dd_planner', None)
+    int_plans_kept = getattr(ctx, 'int_plans_kept', None)
+    int_cands_per_circuit = getattr(ctx, 'int_cands_per_circuit', None)
+    ft_boundary_penalty = getattr(ctx, 'ft_boundary_penalty', None)
+    joint_params_box = getattr(ctx, 'joint_params_box', None)
     btn_lucj_multi = ctx.btn_lucj_multi
     btn_lucj_multi_sweep = ctx.btn_lucj_multi_sweep
     btn_scan_batch = ctx.btn_scan_batch
@@ -554,6 +559,94 @@ def setup_lucj_callbacks(ctx):
     if dd_search_engine is not None:
         dd_search_engine.observe(_on_engine_change, names='value')
         _on_engine_change()
+
+    # ── ONE dispatch point for the multi-circuit planner ─────────
+    def _selected_planner():
+        """'sequential' (default) or 'joint'. Absent widget → 'sequential'."""
+        return getattr(dd_planner, 'value', 'sequential') or 'sequential'
+
+    def _joint_params():
+        return {
+            'beam_width': int(getattr(int_plans_kept, 'value', 4) or 4),
+            'branch': int(getattr(int_cands_per_circuit, 'value', 3) or 3),
+            'boundary_penalty': float(
+                getattr(ft_boundary_penalty, 'value', 0.0) or 0.0),
+        }
+
+    def _run_multi(norbs, backend, props, *, sweep_kwargs, **seq_kwargs):
+        """Place several circuits with the selected planner.
+
+        Sequential passes `seq_kwargs` to `multi_sweep.sweep_multi_circuits`
+        untouched, so each call site keeps its exact call. Joint plans with
+        `joint_plan.plan_multi_circuits`, searching each circuit through
+        `_run_sweep` with `sweep_kwargs`, so the selected engine is used.
+        """
+        if _selected_planner() != 'joint':
+            from ..multi_sweep import sweep_multi_circuits
+            return sweep_multi_circuits(norbs, backend, props, **seq_kwargs)
+
+        from ..joint_plan import plan_multi_circuits
+        scorer = seq_kwargs.get('circuit_score_fn')
+        base = {k: v for k, v in sweep_kwargs.items() if k != 'min_bridges'}
+
+        def _search(norb, *, exclude_qubits, min_bridges):
+            return _run_sweep(norb, backend, props, circuit_score_fn=scorer,
+                              exclude_qubits=exclude_qubits,
+                              min_bridges=min_bridges, **base)
+
+        return plan_multi_circuits(
+            norbs, backend, props, search_fn=_search,
+            buffer_qubits=seq_kwargs.get('buffer_qubits', 1),
+            exclude_qubits=seq_kwargs.get('exclude_qubits'),
+            min_bridges=seq_kwargs.get('min_bridges'),
+            top_n=seq_kwargs.get('top_n', 3), circuit_score_fn=scorer,
+            **_joint_params())
+
+    def _replan_multi(result, index, new_choice):
+        """Replan with the planner that produced `result`."""
+        if result.get('planner') == 'joint':
+            from ..joint_plan import replan_from
+        else:
+            from ..multi_sweep import replan_from
+        return replan_from(result, index, new_choice)
+
+    def _joint_pending_html(n_circuits):
+        """'running…' line for a joint run: the worst-case search count."""
+        from ..joint_plan import worst_case_searches
+        n = worst_case_searches(n_circuits, _joint_params()['beam_width'])
+        return (f"<div style='font-size:13px;color:#555;margin:3px 0;'>"
+                f"⏳ joint plan · up to {n} searches</div>")
+
+    def _joint_status_html(result):
+        """Gain over sequential and search count; shared couplers if any."""
+        if result.get('planner') != 'joint':
+            return ""
+        greedy, joint = result.get('greedy_total'), result.get('joint_total')
+        placed = len(result.get('circuits') or [])
+        greedy_placed = result.get('greedy_placed', placed)
+        if placed > greedy_placed:
+            gain = f"places {placed} vs {greedy_placed} sequential"
+        elif greedy and joint is not None:
+            gain = f"+{(joint / greedy - 1.0) * 100.0:.1f}% vs sequential"
+        else:
+            gain = "no plan"
+        line = (f"<br>joint plan · {gain} · "
+                f"{result.get('n_searches', 0)} searches")
+        shared = result.get('boundary_couplers') or []
+        if shared:
+            line += ("<br>shared couplers: "
+                     + ", ".join(f"{u}–{v}" for u, v in shared))
+        return line
+
+    def _on_planner_change(_change=None):
+        """Joint-only params are hidden while Sequential is selected."""
+        if joint_params_box is not None:
+            joint_params_box.layout.display = (
+                '' if _selected_planner() == 'joint' else 'none')
+
+    if dd_planner is not None:
+        dd_planner.observe(_on_planner_change, names='value')
+        _on_planner_change()
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
     # active backend's reference in the scan table, so the scan never
@@ -1821,7 +1914,8 @@ def setup_lucj_callbacks(ctx):
             f"padding:8px 10px;border-radius:5px;border:1px solid #abebc6;"
             f"margin:4px 0;line-height:1.7;'>🧺 <b>"
             f"{len(result['circuits'])} circuit(s) placed</b> "
-            f"(buffer={lucj_buffer_slider.value})<br>{summary}</div>"
+            f"(buffer={lucj_buffer_slider.value})<br>{summary}"
+            f"{_joint_status_html(result)}</div>"
             + _multi_failed_banner(result))
         _build_multi_override_dropdowns(result)
 
@@ -1835,9 +1929,8 @@ def setup_lucj_callbacks(ctx):
         _multi_override_disabled(True)
 
         def _work():
-            from ..multi_sweep import replan_from
             with _capture_qpu_notices(lambda: f'replan C{i + 1}') as handler:
-                new_result = replan_from(result, i, choice)
+                new_result = _replan_multi(result, i, choice)
             return (new_result, list(handler.records))
 
         def _done(payload):
@@ -1879,7 +1972,8 @@ def setup_lucj_callbacks(ctx):
 
         btn_lucj_multi_sweep.disabled = True
         btn_lucj_multi_sweep.description = '⏳ Sweeping...'
-        lbl_lucj_multi.value = ""
+        lbl_lucj_multi.value = (_joint_pending_html(len(norbs))
+                                if _selected_planner() == 'joint' else "")
         lbl_lucj_multi_notices.value = ""
         kwargs = _sweep_kwargs_from_ui()
         excl = _multi_stability_exclusions()
@@ -1891,10 +1985,10 @@ def setup_lucj_callbacks(ctx):
             btn_lucj_multi_sweep.description = '🧺 Generate Multi-Circuit'
 
         def _work():
-            from ..multi_sweep import sweep_multi_circuits
             with _capture_qpu_notices(lambda: 'multi sweep') as handler:
-                result = sweep_multi_circuits(
+                result = _run_multi(
                     norbs, state.active_backend, scoring_props,
+                    sweep_kwargs=kwargs,
                     min_bridges=min_bridges_list, top_n=kwargs['top_n'],
                     buffer_qubits=buffer, exclude_qubits=excl,
                     mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
@@ -2022,14 +2116,16 @@ def setup_lucj_callbacks(ctx):
         btn_scan_batch.disabled = True
         btn_scan_batch.description = '⏳ Scanning batch...'
         scan_batch_box.children = []
+        if _selected_planner() == 'joint':
+            lbl_lucj_multi.value = _joint_pending_html(len(norbs))
         kwargs = _sweep_kwargs_from_ui()
         buffer = lucj_buffer_slider.value
 
         def _batch_sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
-            from ..multi_sweep import sweep_multi_circuits
             excl = _batch_backend_exclusions(props, getattr(backend, 'name', None))
-            res = sweep_multi_circuits(
-                norbs, backend, props, buffer_qubits=buffer,
+            res = _run_multi(
+                norbs, backend, props, sweep_kwargs=kwargs,
+                buffer_qubits=buffer,
                 min_bridges=min_bridges_list, top_n=kwargs['top_n'],
                 mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
                 diversity_threshold=kwargs['diversity_threshold'],
@@ -2044,6 +2140,8 @@ def setup_lucj_callbacks(ctx):
         def _reset():
             btn_scan_batch.disabled = False
             btn_scan_batch.description = '🌐 Scan batch on all QPUs'
+            if _selected_planner() == 'joint':
+                lbl_lucj_multi.value = ""        # drop the pending line
 
         def _work():
             from .. import qpu_scan

@@ -336,6 +336,10 @@ class MapperUIBuilder:
             dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
+            dd_planner=self.dd_planner, int_plans_kept=self.int_plans_kept,
+            int_cands_per_circuit=self.int_cands_per_circuit,
+            ft_boundary_penalty=self.ft_boundary_penalty,
+            joint_params_box=self.joint_params_box,
             lucj_multi_ancillas=self.lucj_multi_ancillas,
             btn_lucj_multi=self.btn_lucj_multi,
             btn_lucj_multi_sweep=self.btn_lucj_multi_sweep,
@@ -1607,6 +1611,42 @@ class MapperUIBuilder:
             description='Buffer qubits:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
+        # ── Multi-circuit planner ─────────────────────────────────
+        # Default Sequential = the greedy multi_sweep, unchanged. Each widget
+        # owns its Layout: the Joint-only box is toggled at runtime.
+        self.dd_planner = Dropdown(
+            options=[('Sequential', 'sequential'), ('Joint', 'joint')],
+            value='sequential',
+            description='Planner:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='Sequential = best region per circuit in turn; Joint = '
+                    'plan all together · README: Multi-circuit planner')
+        self.int_plans_kept = BoundedIntText(
+            value=4, min=1, max=50,
+            description='Plans kept:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='partial plans kept after each circuit '
+                    '· README: Multi-circuit planner')
+        self.int_cands_per_circuit = BoundedIntText(
+            value=3, min=1, max=50,
+            description='Candidates per circuit:',
+            layout=Layout(width='220px'),
+            style={'description_width': '150px'},
+            tooltip='layouts each plan tries for the next circuit '
+                    '· README: Multi-circuit planner')
+        self.ft_boundary_penalty = BoundedFloatText(
+            value=0.0, min=0.0, max=0.95, step=0.05,
+            description='Boundary penalty:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='cost per coupler shared by two circuits; matters only '
+                    'at buffer 0 · README: Multi-circuit planner')
+        self.joint_params_box = VBox(
+            [self.int_plans_kept, self.int_cands_per_circuit,
+             self.ft_boundary_penalty],
+            layout=Layout(display='none'))
         # Legacy multi-circuit button — no longer shown in the Multi subpanel
         # (the sweep is the single generate action). The widget + its handler
         # (_on_lucj_multi) and engine (get_multi_circuit_layouts) stay wired and
@@ -2065,6 +2105,8 @@ class MapperUIBuilder:
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
+            self.dd_planner,
+            self.joint_params_box,
             # Legacy btn_lucj_multi intentionally omitted — the sweep button is
             # the single generate action. Handler/engine remain wired + pinned.
             self.btn_lucj_multi_sweep,

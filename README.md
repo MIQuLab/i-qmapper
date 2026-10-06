@@ -309,6 +309,11 @@ grows each layout using the calibration as it goes and polishes the finalists.
 Guided is a heuristic: it can miss the best layout that exhaustive would find,
 so it stays opt-in until the comparison harness says otherwise.
 
+### Multi-circuit planner
+
+**Sequential** places circuits one at a time, each on the best region left.
+**Joint** keeps several partial plans and returns the best complete one.
+
 ### Prefer diverse regions
 
 The top half of each candidate list is always the best-scoring layouts. The
