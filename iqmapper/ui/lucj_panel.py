@@ -194,6 +194,7 @@ def setup_lucj_callbacks(ctx):
     dd_search_engine = getattr(ctx, 'dd_search_engine', None)
     int_beam_width = getattr(ctx, 'int_beam_width', None)
     int_refine_top = getattr(ctx, 'int_refine_top', None)
+    int_guided_max_k = getattr(ctx, 'int_guided_max_k', None)
     guided_params_box = getattr(ctx, 'guided_params_box', None)
     btn_lucj_run = ctx.btn_lucj_run
     lbl_lucj_status = ctx.lbl_lucj_status
@@ -479,7 +480,7 @@ def setup_lucj_callbacks(ctx):
 
     # ── ONE dispatch point for the search engine ─────────────────
     def _selected_engine():
-        """'vf2' (default) or 'guided'. Absent widget → the frozen default."""
+        """'vf2' (default), 'guided' or 'hybrid'. Absent widget → 'vf2'."""
         return getattr(dd_search_engine, 'value', 'vf2') or 'vf2'
 
     def _guided_params():
@@ -488,25 +489,36 @@ def setup_lucj_callbacks(ctx):
             'refine_top': int(getattr(int_refine_top, 'value', 5) or 5),
         }
 
+    _VF2_ONLY = ('hybrid', 'mapping_cap', 'shuffle_seed', 'diverse_cap')
+
     def _run_sweep(norb, backend, props, **kwargs):
         """Run the selected search engine.
 
-        Both engines return the same dict shape, so every caller below and all
+        All engines return the same dict shape, so every caller below and all
         the display code downstream is engine-agnostic. `hybrid` and
         `mapping_cap` are VF2-only concepts (the beam is bounded by
         construction and never truncates), so they are dropped for guided
-        rather than passed and ignored.
+        rather than passed and ignored; the hybrid engine routes them to its
+        VF2 half only.
         """
-        if _selected_engine() != 'guided':
+        engine = _selected_engine()
+        if engine not in ('guided', 'hybrid'):
             from ..ancilla_sweep import sweep_ancilla_layouts
             return sweep_ancilla_layouts(norb, backend, props, **kwargs)
 
+        shared = {k: v for k, v in kwargs.items() if k not in _VF2_ONLY}
+        if engine == 'hybrid':
+            from ..engine_select import hybrid_sweep
+            vf2_kwargs = {k: v for k, v in kwargs.items() if k in _VF2_ONLY}
+            return hybrid_sweep(
+                norb, backend, props,
+                guided_max_k=int(getattr(int_guided_max_k, 'value', 1)),
+                vf2_kwargs=vf2_kwargs, guided_kwargs=_guided_params(),
+                **shared)
+
         from ..guided_search import guided_sweep
-        guided_kwargs = {k: v for k, v in kwargs.items()
-                         if k not in ('hybrid', 'mapping_cap',
-                                      'shuffle_seed', 'diverse_cap')}
-        guided_kwargs.update(_guided_params())
-        return guided_sweep(norb, backend, props, **guided_kwargs)
+        shared.update(_guided_params())
+        return guided_sweep(norb, backend, props, **shared)
 
     def _reservoir_suffix(res):
         """The per-stratum cap notice, when a cap was actually reached."""
@@ -517,19 +529,27 @@ def setup_lucj_callbacks(ctx):
 
     def _engine_suffix(res):
         """Status-line tail naming the engine, and the refinement tally."""
-        if not isinstance(res, dict) or res.get('engine') != 'guided':
+        engine = res.get('engine') if isinstance(res, dict) else None
+        if engine == 'guided':
+            name = "guided"
+        elif engine == 'hybrid':
+            name = f"hybrid (guided ≤ k{res.get('guided_max_k')})"
+        else:
             return ""
         attempted = res.get('refine_attempted') or 0
         refined = res.get('refined_count') or 0
-        return (f" · engine: guided · refined {refined}/{attempted}"
-                if attempted else " · engine: guided")
+        return (f" · engine: {name} · refined {refined}/{attempted}"
+                if attempted else f" · engine: {name}")
 
     def _on_engine_change(_change=None):
-        """Guided-only params are hidden while Exhaustive is selected."""
-        if guided_params_box is None:
-            return
-        guided_params_box.layout.display = (
-            '' if _selected_engine() == 'guided' else 'none')
+        """Beam params show for Guided and Hybrid; the threshold for Hybrid."""
+        engine = _selected_engine()
+        if guided_params_box is not None:
+            guided_params_box.layout.display = (
+                '' if engine in ('guided', 'hybrid') else 'none')
+        if int_guided_max_k is not None:
+            int_guided_max_k.layout.display = (
+                '' if engine == 'hybrid' else 'none')
 
     if dd_search_engine is not None:
         dd_search_engine.observe(_on_engine_change, names='value')
@@ -2013,7 +2033,9 @@ def setup_lucj_callbacks(ctx):
                 min_bridges=min_bridges_list, top_n=kwargs['top_n'],
                 mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
                 diversity_threshold=kwargs['diversity_threshold'],
-                circuit_score_fn=_circuit_score, exclude_qubits=excl)
+                # THIS backend's calibration, as in the single-circuit scan.
+                circuit_score_fn=_scan_circuit_score(props),
+                exclude_qubits=excl)
             # Give scan_qpus a rankable 'strata' surface: the batch metric.
             metric, _ = _batch_metric(res)
             res['strata'] = {0: [{'product_score': metric}]}

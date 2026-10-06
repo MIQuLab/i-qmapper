@@ -328,6 +328,7 @@ class MapperUIBuilder:
             dd_search_engine=self.dd_search_engine,
             int_beam_width=self.int_beam_width,
             int_refine_top=self.int_refine_top,
+            int_guided_max_k=self.int_guided_max_k,
             guided_params_box=self.bench_guided_box,
             btn_lucj_run=self.btn_lucj_run,
             lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
@@ -1465,16 +1466,25 @@ class MapperUIBuilder:
         # Default stays Exhaustive (VF2) until iqmapper.evaluation says the
         # guided beam wins on real cached calibration — see the harness.
         self.dd_search_engine = Dropdown(
-            options=[('Exhaustive (VF2)', 'vf2'), ('Guided (beam)', 'guided')],
+            options=[('Exhaustive (VF2)', 'vf2'), ('Guided (beam)', 'guided'),
+                     ('Hybrid', 'hybrid')],
             value='vf2',
             description='Search engine:',
             layout=Layout(width='280px'),
             style={'description_width': '110px'},
-            tooltip='Exhaustive = VF2 (calibration-blind); Guided = '
-                    'calibration-led beam search · README: Search engine')
+            tooltip='Exhaustive = VF2; Guided = calibration-led beam; '
+                    'Hybrid = both, split by k · README: Search engine')
+        # Own Layout: display is toggled at runtime (Hybrid only).
+        self.int_guided_max_k = BoundedIntText(
+            value=1, min=0, max=50,
+            description='Guided up to k:',
+            layout=Layout(width='220px', display='none'),
+            style={'description_width': '110px'},
+            tooltip='ancilla counts up to this use Guided, above it '
+                    'Exhaustive · README: Search engine')
         _guided_layout = Layout(width=W.width, margin=W.margin,
                                 min_width=W.min_width)
-        _guided_layout.display = 'none'      # shown only for Guided
+        _guided_layout.display = 'none'      # shown for Guided and Hybrid
         self.bench_guided_box = VBox([], layout=_guided_layout)
         self.int_beam_width = BoundedIntText(
             value=200, min=10, max=5000, step=50,
@@ -1497,7 +1507,8 @@ class MapperUIBuilder:
         self.lucj_advanced_acc = Accordion(
             children=[VBox([self.lucj_search_cap, self.chk_deep_search,
                             self.chk_diverse_cap,
-                            self.dd_search_engine, self.bench_guided_box])],
+                            self.dd_search_engine, self.int_guided_max_k,
+                            self.bench_guided_box])],
             layout=W)
         self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
         self.lucj_advanced_acc.selected_index = None   # collapsed on open

@@ -277,3 +277,75 @@ def test_batch_selector_handoff_payload(monkeypatch):
     assert name == 'ibm_hi'
     assert isinstance(payload, list) and len(payload) == 2      # both circuits
     assert payload[0]['ancillas'] == [4] and payload[1]['ancillas'] == [5]
+
+
+# ── batch scan scores each backend on ITS OWN calibration ───────────────
+
+def _ladder_backend(name):
+    """Two disjoint width-8 ladder blocks (48 qubits), as in test_multi_sweep."""
+    import rustworkx
+    edges = []
+    for base in (0, 24):
+        top = [base + j for j in range(8)]
+        bot = [base + 8 + j for j in range(8)]
+        brg = [base + 16 + j for j in range(8)]
+        for j in range(7):
+            edges += [(top[j], top[j + 1]), (bot[j], bot[j + 1])]
+        for j in range(8):
+            edges += [(top[j], brg[j]), (brg[j], bot[j])]
+    graph = rustworkx.PyDiGraph()
+    for i in range(48):
+        graph.add_node(i)
+    for u, v in edges:
+        graph.add_edge(u, v, None)
+    return SimpleNamespace(name=name, coupling_map=SimpleNamespace(graph=graph),
+                           operation_names=['cz', 'sx', 'rz', 'x'])
+
+
+def test_batch_scan_scores_each_backend_with_its_own_props(monkeypatch):
+    """Same qubit indices, different gate errors: each backend's batch metric
+    must come from that backend's props, not from the active backend's."""
+    from iqmapper import qpu_scan as qs
+    from iqmapper.props_shim import CachedPropsShim
+    b, state = _build(monkeypatch)
+    backends = {n: _ladder_backend(n) for n in ('ibm_a', 'ibm_b')}
+    gate_err = {'ibm_a': 0.002, 'ibm_b': 0.03}
+    shims = {}
+
+    def _get_props(backend):
+        edges = list(backend.coupling_map.graph.edge_list())
+        shim = CachedPropsShim(
+            {'readout_error': np.array([0.01] * 48)},
+            {'cz_error': np.array([gate_err[backend.name]] * len(edges))},
+            edges, n_qubits=48, vintage='live')
+        shims[backend.name] = shim
+        return shim
+
+    monkeypatch.setattr("iqmapper.props_shim.make_scan_get_props",
+                        lambda state: _get_props)
+    monkeypatch.setattr(qs, 'list_scan_targets', lambda *a, **k: [
+        {'name': n, 'family': 'Heron', 'eligible': True, 'reason': None}
+        for n in backends])
+    state.active_service = SimpleNamespace(backend=lambda n: backends[n])
+    b.lucj_multi_norbs.value = '4, 4'
+    captured = {}
+    real_scan = qs.scan_qpus
+    monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: captured.setdefault(
+        'res', real_scan(*a, **k)))
+    b.btn_scan_batch.click()
+
+    rows = {r['name']: r for r in captured['res']['results']}
+    metrics = {}
+    for name, row in rows.items():
+        sweep = row['sweep']
+        assert sweep['failed_at'] is None and len(sweep['circuits']) == 2
+        expect = 1.0
+        for c in sweep['circuits']:
+            ch = c['chosen']
+            qubits = list(ch['alpha']) + list(ch['beta']) + list(ch['ancillas'])
+            own = shims[name].score_layout(qubits)['fidelity']
+            assert ch['lqs_circuit'] == own
+            expect *= own
+        assert sweep['total_lqs_circuit'] == expect
+        metrics[name] = sweep['total_lqs_circuit']
+    assert metrics['ibm_a'] > metrics['ibm_b']
