@@ -51,6 +51,7 @@ Design rules that hold across the codebase:
 | `paths.py` | Path-traversal-safe file resolution (`commonpath` containment, symlink-aware) for every read/write the user can influence. |
 | `html_safe.py` | The one `esc()` used by every HTML widget sink. |
 | `async_util.py` | `default_spawn_bg`: background threads with callbacks marshaled to the main loop; errors are contained and always reach the `on_error` handler. |
+| `log_setup.py` | Keeps package log records out of the notebook (a `NullHandler` on the `iqmapper` logger) and, when the UI starts, writes them to a rotating `iqmapper.log` in the user log directory, each distinct message once per session. |
 | `_upload.py` | Normalizes ipywidgets `FileUpload` payloads across widget versions into `(bytes, filename)`. |
 | `constants.py` | Device coordinate tables (Heron 156q, Nighthawk 120q), color mapping factories, palette persistence. |
 
@@ -69,6 +70,7 @@ which one ran.
 | `stability_filter.py` | Stability-aware sweep: excludes qubits that are volatile across cached history (and statistical outliers), then runs the exhaustive sweep, relaxing the filter when the circuit would no longer fit. |
 | `multi_sweep.py` | Sequential multi-circuit placement: each circuit greedily on the best region left, with a buffer around placed ones; replan from any circuit. |
 | `joint_plan.py` | Joint multi-circuit planner: a beam over placement plans with an injected single-circuit search, memoised searches and boundary-coupler accounting. Same result shape as `multi_sweep`, never worse than it. |
+| `fit_check.py` | Yes/no fit test for a LUCJ circuit on what is left of the chip (one induced subgraph-isomorphism check, same answer as "the sweep returns a layout"); the multi-circuit UI uses it to list only alternatives that leave room for the later circuits. |
 | `qpu_scan.py` | Multi-QPU scan: lists compatible backends and runs a sweep on each, isolating per-backend failures. |
 | `props_shim.py` | Cache-aware properties adapter for the scan: serves a backend's cached calibration arrays through the `readout_error` / `gate_error` / `score_layout` interface the engines read. |
 | `evaluation.py` | Offline engine comparison: replays VF2 and guided over cached calibration snapshots and tabulates per-stratum differences (CLI: `python -m iqmapper.evaluation`). |

@@ -85,7 +85,7 @@ def test_the_engine_dropdown_and_threshold_are_gone(monkeypatch):
 
 def test_the_checkboxes_own_their_layouts(monkeypatch):
     b = _build(monkeypatch)
-    toggled = (b.chk_guided_search, b.bench_guided_box, b.chk_joint_plan,
+    toggled = (b.chk_guided_search, b.bench_guided_box, b.chk_fast_multi,
                b.joint_params_box)
     shared = (b.txt_auto.layout, b.chk_diverse_cap.layout,
               b.chk_deep_search.layout, b.lucj_buffer_slider.layout)
@@ -125,23 +125,17 @@ def test_the_run_calls_the_combined_search(monkeypatch, guided):
 
 # ── status line ─────────────────────────────────────────────────────
 
-def test_status_names_the_strata_guided_won(monkeypatch):
+def test_status_is_one_short_line(monkeypatch):
     b = _build(monkeypatch)
     _stub_combined(monkeypatch, _result(
         {2: [_entry([4, 5], 0.7, 'guided')], 1: [_entry([4], 0.8, 'guided')]},
         guided_winners=[2, 1]))
     _run(b)
     status = b.lbl_lucj_status.value
-    assert '· best from guided at k=2,1' in status, status
-    assert 'engine:' not in status
-
-
-def test_status_is_silent_when_guided_won_nothing(monkeypatch):
-    b = _build(monkeypatch)
-    _stub_combined(monkeypatch, _result(
-        {1: [_entry([4], 0.8, 'both'), _entry([4], 0.7, 'guided', rank=2)]}))
-    _run(b)
-    assert 'guided' not in b.lbl_lucj_status.value
+    assert '✅ 2 layouts found · scored on live · ' in status, status
+    for gone in ('guided', 'embeddings', 'best per k', 'direct+derived',
+                 'capped', 'Sweep:'):
+        assert gone not in status, gone
 
 
 # ── labels ──────────────────────────────────────────────────────────

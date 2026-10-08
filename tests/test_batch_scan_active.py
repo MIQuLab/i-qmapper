@@ -55,6 +55,7 @@ def _wire(monkeypatch, b, state):
                             vintage='live',
                             score_layout=lambda q: {'fidelity': 0.5})))
     state.active_service = SimpleNamespace(backend=_backend)
+    b.chk_fast_multi.value = True          # local run on the stubbed planner
     b.lucj_multi_norbs.value = '4, 4'
     return log
 

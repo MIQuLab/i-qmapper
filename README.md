@@ -289,13 +289,25 @@ the reported value for that element with a notice, never a crash.
 
 The interface says what happened and what to do; the explanations live here.
 Tooltips that end with `· README: <name>` point at the matching entry below.
+Technical messages (fallbacks, cap statistics, missing calibration values) go
+to a log file, never under the notebook cell: `iqmapper.log` in the user log
+directory (`platformdirs.user_log_dir("iqmapper")`, e.g. `~/Library/Logs/iqmapper`
+on macOS), each distinct message once per session.
+
+### Search results
+
+A search ends with one line, e.g. `✅ 12 layouts found · scored on live · 20:41`:
+how many layouts the list holds and which calibration scored them. Each entry
+in the list carries its ancilla count, rank, LQS and source.
 
 ### Search cap
 
 The exhaustive engine enumerates candidate layouts and stops at this many. On
 a large chip there can be far more layouts than the cap, so it is normally
-reached at low ancilla counts. When it is, the notices bar says so — raise the cap for a
-more thorough (slower) search, or leave it and rely on diverse enumeration.
+reached at low ancilla counts. When it is, the log file records it, and with
+diverse enumeration off a ⚠️ line warns that the ranking may be
+non-exhaustive — raise the cap for a more thorough (slower) search, or leave it
+and rely on diverse enumeration.
 
 ### Diverse enumeration
 
@@ -321,40 +333,50 @@ For every ancilla count the two shortlists are merged, a layout both engines
 found is listed once, and the usual ranking (LQS) and region-diversity choice
 pick the final list. The best layout is therefore never worse than either
 engine alone. Each entry in the layout list ends with where it came from:
-`· E` exhaustive, `· G` guided, `· E+G` both. When guided alone found the best
-layout for some ancilla counts, the status line says so, e.g.
-`· best from guided at k=1,2`.
+`· E` exhaustive, `· G` guided, `· E+G` both.
 
 **Guided search** (in Advanced, on by default) runs the guided engine. Turn it
 off to search with the exhaustive engine alone, as 0.0.5 did. **Beam width**
 and **Refine top** tune the guided engine and show only while it is on.
 
 The multi-QPU scan and the stability filter still use the exhaustive engine
-only, and so does the multi-circuit planner unless **Optimize placement
-jointly** is on. The engine comparison (`python -m iqmapper.evaluation`) still
+only, and so does the multi-circuit planner with **Fast: one circuit at a
+time** on. The engine comparison (`python -m iqmapper.evaluation`) still
 offers the hybrid engine, guided up to a chosen ancilla count and exhaustive
 above it, to compare against.
 
 ### Multi-circuit planner
 
-By default circuits are placed one at a time (sequential), each on the best
-region left, with the exhaustive engine. It is fast but short-sighted: the
-first circuit can take a region that leaves the next one only a poor spot, or
-none at all.
+Several circuits are planned together. Placing them one at a time, each on the
+best region left, is short-sighted: the first circuit can take a region that
+leaves the next one only a poor spot, or none at all. The planner keeps
+several partial plans instead of one. After each circuit it tries
+**Candidates per circuit** layouts (3) on every plan it holds and keeps the
+best **Plans kept** (3) of them. It also builds the one-by-one plan and
+returns whichever is better, so it is never worse — only slower. It searches
+each circuit with the search described under *Search engine*.
 
-**Optimize placement jointly** keeps several partial plans instead of one.
-After each circuit it tries **Candidates per circuit** layouts on every plan it
-holds and keeps the best **Plans kept** of them. It also builds the sequential
-plan and returns whichever is better, so it is never worse — only slower. It
-searches each circuit with the search described under *Search engine* (both
-engines while **Guided search** is on). While it runs, the status shows
-`joint plan · up to N searches`, the worst case.
-
-When it finishes, `joint plan · +X% vs sequential · N searches` compares the
-two plans' totals (the product of each circuit's LQS) and counts the searches
-actually run. If the joint plan fits more circuits than sequential could, it
-says `places 3 vs 2 sequential` instead, since a total over more circuits is
+When it finishes, `✅ 2 circuits placed · +X% vs one-by-one` compares the two
+plans' totals (the product of each circuit's LQS); the gain is left out when
+there is none. If the joint plan fits more circuits than one-by-one could, it
+says `places 3 vs 2 one-by-one` instead, since a total over more circuits is
 not comparable.
+
+**Plans** lists the best complete plans, every circuit placed, e.g.
+`Plan 1 · total 48.2% · C1 79.2% + C2 61.0%`; picking one places all its
+circuits at once. Under it, each circuit's alternatives list only layouts
+after which every later circuit still fits; the others are counted in one
+line, e.g. `2 alternatives hidden: the other circuits would not fit`.
+
+**Fast: one circuit at a time** (in the Multi tab's Advanced, off by default)
+skips the joint planning and places circuits one by one with the exhaustive
+engine, as 0.0.5 did. **Plans kept**, **Candidates per circuit** and
+**Boundary penalty** show only while it is off.
+
+**Scan batch on all QPUs** places the batch one circuit at a time on every
+backend, since it runs once per QPU and speed matters there. Backends that fit
+the whole batch rank first, by batch total; one that fits only part of it
+reads `ibm_x — 1 of 2 circuits fit`, with no total, and cannot be opened.
 
 **Boundary penalty** matters only at **Buffer qubits: 0**. With a buffer of 1
 or more, two circuits can never touch. At 0 they can sit side by side, and a

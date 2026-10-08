@@ -80,6 +80,7 @@ def _build(monkeypatch):
     b = MapperUIBuilder(state)
     b.build()
     b.chk_guided_search.value = False    # stubbed exhaustive engine only
+    b.chk_fast_multi.value = True     # the stubbed engine is the sequential one
     return b
 
 
@@ -201,8 +202,8 @@ def test_multi_sweep_notice_captured(monkeypatch):
     lg = logging.getLogger(_QLOG)
 
     def warn_multi(*a, **k):
-        lg.warning("Requested 6 bridges does not fit; falling back")
-        lg.warning("Requested 6 bridges does not fit; falling back")
+        lg.warning("circuit 2 search truncated")
+        lg.warning("circuit 2 search truncated")
         return _multi_result()
     monkeypatch.setattr("iqmapper.multi_sweep.sweep_multi_circuits", warn_multi)
 
@@ -210,6 +211,6 @@ def test_multi_sweep_notice_captured(monkeypatch):
     b.btn_lucj_multi_sweep.click()
 
     notices = b.lbl_lucj_multi_notices.value
-    assert 'Requested 6 bridges does not fit; falling back ×2' in notices
+    assert 'circuit 2 search truncated ×2' in notices
     assert 'background:#fff3cd' in notices
     assert _capture_handlers() == []

@@ -198,7 +198,7 @@ def test_batch_scan_rows_sorted_and_failed_labeled(monkeypatch):
     # scan_qpus returns a ready-ranked batch result (ibm_hi first).
     monkeypatch.setattr(qs, 'scan_qpus', lambda *a, **k: {'results': [
         _batch_result_row('ibm_hi', 0.61, 2),
-        _batch_result_row('ibm_lo', 0.40, 2, failed_at=1)],
+        _batch_result_row('ibm_lo', 0.40, 1, failed_at=1)],
         'n_scanned': 2, 'n_failed': 0, 'n_skipped': 0})
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_scan_batch.click()
@@ -214,7 +214,8 @@ def test_batch_scan_rows_sorted_and_failed_labeled(monkeypatch):
     labels = [o[0] for o in dd.options]
     assert not any('<table' in lab for lab in labels)
     assert labels[0].startswith('ibm_hi') and 'ibm_lo' in labels[1]  # sorted
-    assert '61.0%' in labels[0] and '40.0%' in labels[1]
+    assert '61.0%' in labels[0]
+    assert labels[1] == 'ibm_lo — 1 of 2 circuits fit'           # no %
     # Selecting the failed batch: detail names the failure, open disabled + tip.
     dd.value = 1
     assert 'C2: does not fit' in det.value and '✗' not in det.value

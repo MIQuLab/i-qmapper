@@ -10,6 +10,8 @@ Three UI-only changes, none of which touch the sweep engines:
   * the legacy "Score layouts" checkbox is hidden in Auto/sweep mode rather
     than shown greyed out, since Auto is the default the user lands on.
 """
+import logging
+
 import numpy as np
 
 
@@ -305,7 +307,19 @@ def test_diverse_enumeration_reaches_the_sweep(monkeypatch):
     assert seen.get('diverse_cap') is False
 
 
-def test_the_cap_notice_is_rendered_on_the_status_line(monkeypatch):
+class _Collect(logging.Handler):
+    def __init__(self):
+        super().__init__(level=0)
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+
+def test_the_cap_notice_goes_to_the_log_not_the_ui(monkeypatch):
+    """The file handler sits on the package logger, so a handler there sees
+    what the log file gets (the sweep's notice capture stops propagation)."""
+    import logging
     b, _ = _build(monkeypatch)
     entry = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
              'ancillas': [4], 'bridge_slots': (0,), 'product_score': 0.9,
@@ -326,10 +340,19 @@ def test_the_cap_notice_is_rendered_on_the_status_line(monkeypatch):
             'reservoir_notices': [note]})
 
     b.lucj_ancilla_dd.value = -1
-    b.btn_lucj_run.click()
+    pkg = logging.getLogger('iqmapper')
+    collect = _Collect()
+    monkeypatch.setattr(pkg, 'level', logging.INFO)
+    pkg.addHandler(collect)
+    try:
+        b.btn_lucj_run.click()
+    finally:
+        pkg.removeHandler(collect)
     status = b.lbl_lucj_status.value
-    assert 'hybrid k=1: cap reached' in status, status
-    assert '34,812 near-duplicates' in status
+    assert 'cap reached' not in status and 'near-duplicates' not in status
+    assert 'cap reached' not in b.lbl_lucj_notices.value
+    assert status.endswith('✅ 1 layout found · ' + status.split(' · ', 1)[1])
+    assert any('hybrid k=1: cap reached' in m for m in collect.messages)
 
 
 # ── t9: one cap notice per stratum, not two ────────────────────────────────
@@ -355,8 +378,8 @@ def _capped_result(*, reservoir, notices):
 
 
 def test_reservoir_replaces_the_truncation_warning(monkeypatch):
-    """One notice for one stratum. The ℹ line already says the cap was
-    reached and how much was seen, so the ⚠️ banner would contradict it."""
+    """A stratum the reservoir covered gets no ⚠️ banner: its cap was
+    reached by design, and the cap line goes to the log file."""
     b, _ = _build(monkeypatch)
     note = ('hybrid k=3: cap reached — kept 2,000 diverse candidates, '
             'skipped 2,498 near-duplicates (of 4,498 seen)')
@@ -373,8 +396,7 @@ def test_reservoir_replaces_the_truncation_warning(monkeypatch):
     assert b.lbl_lucj_trunc.value == '', (
         f'the ⚠️ banner was not suppressed: {b.lbl_lucj_trunc.value}')
     status = b.lbl_lucj_status.value
-    assert 'hybrid k=3: cap reached' in status, status
-    assert 'of 4,498 seen' in status, status
+    assert 'cap reached' not in status, status
     assert 'non-exhaustive' not in status
 
 

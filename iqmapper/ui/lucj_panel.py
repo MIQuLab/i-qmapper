@@ -74,10 +74,23 @@ def _k_cap_phrase(norb, k_effective):
     return ""
 
 
+#: Message templates kept out of the notices panel. The behaviour behind them
+#: is expected and needs no action, so they go to the log file only.
+_LOG_ONLY_NOTICES = (
+    'Requested %d bridges does not fit on this backend',
+)
+
+
+def _log_only(record):
+    msg = record.msg if isinstance(record.msg, str) else ''
+    return any(msg.startswith(t) for t in _LOG_ONLY_NOTICES)
+
+
 class _ScanNoticeCapture(logging.Handler):
     """Captures WARNING+ records off the 'iqmapper' logger during a
-    scan, tagging each with the current backend context. emit() never raises
-    out — a logging hiccup must not break the scan."""
+    scan, tagging each with the current backend context. Records matching
+    `_LOG_ONLY_NOTICES` are skipped (the log file still gets them). emit()
+    never raises out — a logging hiccup must not break the scan."""
 
     def __init__(self, context_getter):
         super().__init__(level=logging.WARNING)
@@ -86,6 +99,8 @@ class _ScanNoticeCapture(logging.Handler):
 
     def emit(self, record):
         try:
+            if _log_only(record):
+                return
             self.records.append((self._context_getter(), record.getMessage()))
         except Exception:
             pass
@@ -205,7 +220,7 @@ def setup_lucj_callbacks(ctx):
     lucj_multi_norbs = ctx.lucj_multi_norbs
     lucj_multi_ancillas = ctx.lucj_multi_ancillas
     lucj_buffer_slider = ctx.lucj_buffer_slider
-    chk_joint_plan = getattr(ctx, 'chk_joint_plan', None)
+    chk_fast_multi = getattr(ctx, 'chk_fast_multi', None)
     int_plans_kept = getattr(ctx, 'int_plans_kept', None)
     int_cands_per_circuit = getattr(ctx, 'int_cands_per_circuit', None)
     ft_boundary_penalty = getattr(ctx, 'ft_boundary_penalty', None)
@@ -505,20 +520,10 @@ def setup_lucj_callbacks(ctx):
         return combined_sweep(norb, backend, props, use_guided=_guided_on(),
                               **kwargs, **_guided_params())
 
-    def _reservoir_suffix(res):
-        """The per-stratum cap notice, when a cap was actually reached."""
-        notes = (res or {}).get('reservoir_notices') or []
-        if not notes:
-            return ""
-        return "<br>" + "<br>".join(f"\u2139 {esc(n)}" for n in notes)
-
-    def _guided_suffix(res):
-        """' · best from guided at k=1,2' when guided alone found a stratum's
-        best layout; '' otherwise."""
-        ks = (res.get('guided_winners') if isinstance(res, dict) else None) or []
-        if not ks:
-            return ""
-        return " · best from guided at k=" + ",".join(str(k) for k in ks)
+    def _log_reservoir_notices(res):
+        """The per-stratum cap notices go to the log file, not the UI."""
+        for note in (res or {}).get('reservoir_notices') or []:
+            _log.info("%s", note)
 
     def _source_tag(entry):
         """' · G' (guided only), ' · E+G' (both engines) or ' · E'
@@ -537,30 +542,31 @@ def setup_lucj_callbacks(ctx):
         chk_guided_search.observe(_on_guided_toggle, names='value')
         _on_guided_toggle()
 
-    # ── Multi-circuit planner: Sequential (default) or Joint ─────────
+    # ── Multi-circuit planner: Joint (default) or Sequential (Fast) ──
     def _selected_planner():
-        """'joint' when "Optimize placement jointly" is checked, else
-        'sequential' (also when the widget is absent)."""
-        return 'joint' if getattr(chk_joint_plan, 'value', False) \
-            else 'sequential'
+        """'sequential' when "Fast: one circuit at a time" is checked, else
+        'joint' (also when the widget is absent)."""
+        return 'sequential' if getattr(chk_fast_multi, 'value', False) \
+            else 'joint'
 
     def _joint_params():
         return {
-            'beam_width': int(getattr(int_plans_kept, 'value', 4) or 4),
+            'beam_width': int(getattr(int_plans_kept, 'value', 3) or 3),
             'branch': int(getattr(int_cands_per_circuit, 'value', 3) or 3),
             'boundary_penalty': float(
                 getattr(ft_boundary_penalty, 'value', 0.0) or 0.0),
         }
 
-    def _run_multi(norbs, backend, props, *, sweep_kwargs, **seq_kwargs):
-        """Place several circuits with the selected planner.
+    def _run_multi(norbs, backend, props, *, sweep_kwargs, planner=None,
+                   **seq_kwargs):
+        """Place several circuits with `planner`, or the selected one.
 
         Sequential passes `seq_kwargs` to `multi_sweep.sweep_multi_circuits`
         untouched, so each call site keeps its exact call. Joint plans with
         `joint_plan.plan_multi_circuits`, searching each circuit through
         `_run_sweep` with `sweep_kwargs`, so it uses the combined search.
         """
-        if _selected_planner() != 'joint':
+        if (planner or _selected_planner()) != 'joint':
             from ..multi_sweep import sweep_multi_circuits
             return sweep_multi_circuits(norbs, backend, props, **seq_kwargs)
 
@@ -596,35 +602,37 @@ def setup_lucj_callbacks(ctx):
         return (f"<div style='font-size:13px;color:#555;margin:3px 0;'>"
                 f"⏳ joint plan · up to {n} searches</div>")
 
-    def _joint_status_html(result):
-        """Gain over sequential and search count; shared couplers if any."""
+    def _joint_gain_text(result):
+        """' · +X% vs one-by-one', ' · places 3 vs 2 one-by-one', or ''
+        (a sequential result, or no gain to report)."""
         if result.get('planner') != 'joint':
             return ""
         greedy, joint = result.get('greedy_total'), result.get('joint_total')
         placed = len(result.get('circuits') or [])
         greedy_placed = result.get('greedy_placed', placed)
         if placed > greedy_placed:
-            gain = f"places {placed} vs {greedy_placed} sequential"
-        elif greedy and joint is not None:
-            gain = f"+{(joint / greedy - 1.0) * 100.0:.1f}% vs sequential"
-        else:
-            gain = "no plan"
-        line = (f"<br>joint plan · {gain} · "
-                f"{result.get('n_searches', 0)} searches")
+            return f" · places {placed} vs {greedy_placed} one-by-one"
+        if greedy and joint is not None:
+            gain = (joint / greedy - 1.0) * 100.0
+            if round(gain, 1) > 0.0:
+                return f" · +{gain:.1f}% vs one-by-one"
+        return ""
+
+    def _shared_couplers_html(result):
         shared = result.get('boundary_couplers') or []
-        if shared:
-            line += ("<br>shared couplers: "
-                     + ", ".join(f"{u}–{v}" for u, v in shared))
-        return line
+        if not shared:
+            return ""
+        return ("<br>shared couplers: "
+                + ", ".join(f"{u}–{v}" for u, v in shared))
 
     def _on_planner_change(_change=None):
-        """Joint-only params show only while joint placement is checked."""
+        """Joint-only params show only while Fast is off."""
         if joint_params_box is not None:
             joint_params_box.layout.display = (
                 '' if _selected_planner() == 'joint' else 'none')
 
-    if chk_joint_plan is not None:
-        chk_joint_plan.observe(_on_planner_change, names='value')
+    if chk_fast_multi is not None:
+        chk_fast_multi.observe(_on_planner_change, names='value')
         _on_planner_change()
 
     # Best circuit-level LQS from the most recent LOCAL sweep — quoted as the
@@ -785,12 +793,10 @@ def setup_lucj_callbacks(ctx):
         else:
             lbl_lucj_trunc.value = ""
 
-        # One-line summary: per-stratum LQS gradient, NOT a single
-        # size-biased "best LQS" (product_score always favours fewer bridges).
+        # One short line: how many layouts the dropdown holds and when they
+        # were scored. The dropdown labels carry k, LQS and source.
+        _log_reservoir_notices(res)
         if flat:
-            cap = _k_cap_phrase(norb, res.get('k_max_effective'))
-            cap_txt = f" · {esc(cap)}" if cap else ""
-            mode_txt = f" · {esc(_sweep_mode_label(res))}"
             # Provenance stamp — mirrors the scan detail's 'live · HH:MM' so the
             # user can SEE this number and a scan row's number were taken at
             # DIFFERENT moments (calibration drift), not that one is wrong.
@@ -798,9 +804,8 @@ def setup_lucj_callbacks(ctx):
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
                 f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
-                f"margin:3px 0;'>✅ {_format_sweep_status(res)}{mode_txt}"
-                f"{cap_txt}{vin_txt}{_guided_suffix(res)}"
-                f"{_reservoir_suffix(res)}</div>")
+                f"margin:3px 0;'>✅ {len(flat)} layout"
+                f"{'s' if len(flat) != 1 else ''} found{vin_txt}</div>")
         else:
             lbl_lucj_status.value = (
                 f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
@@ -1829,19 +1834,33 @@ def setup_lucj_callbacks(ctx):
         _refresh()
         _get_export()
 
-    def _multi_summary_html(result):
-        parts = []
-        for c in result['circuits']:
-            ch = c['chosen']
-            k = len(ch['ancillas'])
-            pct, is_tmpl = _entry_lqs_pct(ch)
-            tmpl = ' (template)' if is_tmpl else ''
-            parts.append(f"C{c['circuit_idx'] + 1}: k={k} · {esc(pct)}{tmpl}")
-        if result.get('total_lqs_circuit') is not None:
-            parts.append(f"batch: {result['total_lqs_circuit'] * 100.0:.1f}%")
-        elif result.get('total_product') is not None:
-            parts.append(f"batch: {result['total_product'] * 100.0:.1f}% (template)")
-        return ' | '.join(parts)
+    #: Keys of a multi-circuit result that belong to one placement plan.
+    _PLAN_KEYS = ('circuits', 'total_product', 'total_lqs_circuit',
+                  'placed_qubits', 'buffer_qubits_used', 'boundary_couplers',
+                  'joint_total', 'failed_at')
+
+    def _multi_plans(result):
+        """Complete plans (every circuit placed), best first: the planner's
+        `plans` when the result carries them, else the result's own plan
+        when it is complete. Each item is a dict of `_PLAN_KEYS`."""
+        if result.get('plans'):
+            return [p for p in result['plans'] if p.get('circuits')
+                    and p.get('failed_at') is None]
+        if result.get('failed_at') is None and result.get('circuits'):
+            return [{k: result.get(k) for k in _PLAN_KEYS}]
+        return []
+
+    def _plan_label(n, plan):
+        """'Plan 1 · total 48.2% · C1 79.2% + C2 61.0%'."""
+        total, tmpl, parts = 1.0, False, []
+        for c in plan['circuits']:
+            pct, is_tmpl = _entry_lqs_pct(c['chosen'])
+            tmpl = tmpl or is_tmpl
+            lqs = c['chosen'].get('lqs_circuit')
+            total *= lqs if lqs is not None else c['chosen']['product_score']
+            parts.append(f"C{c['circuit_idx'] + 1} {pct}")
+        return (f"Plan {n} · total {total * 100.0:.1f}%"
+                f"{' (template)' if tmpl else ''} · " + " + ".join(parts))
 
     def _multi_failed_banner(result):
         i = result.get('failed_at')
@@ -1877,18 +1896,54 @@ def setup_lucj_callbacks(ctx):
                 -(lqs if lqs is not None else 0.0),
                 -(e.get('product_score') or 0.0))
 
+    def _on_plan_select(result, plans, j):
+        """Apply plan `j` of `result` to every circuit at once."""
+        if _multi_sweep['replan_in_flight']:
+            return
+        new_result = dict(result)
+        new_result.update(plans[j])
+        new_result['selected_plan'] = j
+        _multi_sweep['result'] = new_result
+        _apply_multi_sweep(new_result)
+        _render_multi_sweep_output(new_result)
+
+    def _plans_dropdown(result):
+        """The Plans menu over the complete plans; [] when there are none."""
+        plans = _multi_plans(result)
+        if not plans:
+            return []
+        selected = min(result.get('selected_plan', 0), len(plans) - 1)
+        dd = Dropdown(options=[(_plan_label(n, p), n - 1)
+                               for n, p in enumerate(plans, start=1)],
+                      value=selected, description='Plans:',
+                      layout=Layout(width=W.width, margin=W.margin,
+                                    min_width=W.min_width),
+                      style={'description_width': 'initial'})
+        dd.observe(lambda ch: ch['new'] is not None and ch['new'] != selected
+                   and _on_plan_select(result, plans, ch['new']),
+                   names='value')
+        _multi_sweep['dropdowns']['plans'] = dd
+        return [dd]
+
     def _build_multi_override_dropdowns(result):
+        from ..fit_check import LaterFit
         _multi_sweep['dropdowns'] = {}
-        widgets = []
+        widgets = _plans_dropdown(result)
+        fit = LaterFit(result)
         for c in result['circuits']:
             i = c['circuit_idx']
             # Flatten across strata, then rank by the displayed metric (best
             # first) — labels keep "k=… · #… · LQS …%" so no info is lost.
+            # An alternative after which a later circuit no longer fits is
+            # left out (the chosen layout always stays).
             entries = sorted(
                 (e for k in c['strata'] for e in c['strata'][k]),
                 key=_multi_override_sort_key)
-            flat, opts = [], []
+            flat, opts, hidden = [], [], 0
             for e in entries:
+                if e is not c['chosen'] and not fit.later_circuits_fit(i, e):
+                    hidden += 1
+                    continue
                 opts.append((_entry_label(e), len(flat)))
                 flat.append(e)
             if not opts:
@@ -1901,6 +1956,11 @@ def setup_lucj_callbacks(ctx):
             dd.observe(_make_multi_override_cb(i, flat), names='value')
             _multi_sweep['dropdowns'][i] = dd
             widgets.append(dd)
+            if hidden:
+                widgets.append(HTML(
+                    f"<div style='font-size:12px;color:#555;margin:0 0 4px;'>"
+                    f"{hidden} alternative{'s' if hidden != 1 else ''} "
+                    f"hidden: the other circuits would not fit</div>"))
             if any(m.get('truncated') for m in c.get('per_stratum', {}).values()):
                 widgets.append(HTML(
                     f"<div style='font-size:12px;color:#e67e22;margin:0 0 4px;'>"
@@ -1909,14 +1969,12 @@ def setup_lucj_callbacks(ctx):
         lucj_multi_detail_box.children = widgets
 
     def _render_multi_sweep_output(result):
-        summary = _multi_summary_html(result)
+        n = len(result['circuits'])
         lbl_lucj_multi.value = (
             f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;"
-            f"padding:8px 10px;border-radius:5px;border:1px solid #abebc6;"
-            f"margin:4px 0;line-height:1.7;'>🧺 <b>"
-            f"{len(result['circuits'])} circuit(s) placed</b> "
-            f"(buffer={lucj_buffer_slider.value})<br>{summary}"
-            f"{_joint_status_html(result)}</div>"
+            f"padding:4px 8px;border-radius:4px;border:1px solid #abebc6;"
+            f"margin:3px 0;'>✅ {n} circuit{'s' if n != 1 else ''} placed"
+            f"{_joint_gain_text(result)}{_shared_couplers_html(result)}</div>"
             + _multi_failed_banner(result))
         _build_multi_override_dropdowns(result)
 
@@ -2055,10 +2113,37 @@ def setup_lucj_callbacks(ctx):
                          f"· {pct}{tmpl}")
         fa = res.get('failed_at')
         if fa is not None:
+            # A partial batch has no batch total: it would be a product over
+            # fewer circuits than a complete one.
             parts.append(f"C{fa + 1}: does not fit")
+            return ' | '.join(parts)
         m, is_tmpl = _batch_metric(res)
         parts.append(f"batch: {m * 100.0:.1f}%{' (template)' if is_tmpl else ''}")
         return ' | '.join(parts)
+
+    def _batch_complete(res, n_circuits):
+        """Every circuit of the batch placed."""
+        res = res or {}
+        return (res.get('failed_at') is None
+                and len(res.get('circuits') or []) == n_circuits
+                and n_circuits > 0)
+
+    def _rank_batch_rows(rows, n_circuits):
+        """Complete batches first, by batch metric; then partial batches (more
+        circuits placed first); then backends that were not scanned; errors
+        last. A partial batch's metric is a product over fewer circuits, so
+        it is never compared with a complete one."""
+        def _key(r):
+            res = r.get('sweep')
+            if r.get('error'):
+                return (3, 0, 0.0)
+            if not res:
+                return (2, 0, 0.0)
+            metric, _ = _batch_metric(res)
+            if _batch_complete(res, n_circuits):
+                return (0, 0, -metric)
+            return (1, -len(res.get('circuits') or []), -metric)
+        return sorted(rows, key=_key)
 
     def _local_batch_reference(norbs):
         """The local multi-circuit result, if it was planned on the active
@@ -2071,23 +2156,20 @@ def setup_lucj_callbacks(ctx):
             return None
         if list(ctx.get('norbs') or []) != list(norbs):
             return None
+        if not _batch_complete(local, len(norbs)):
+            return None
         return local
 
-    def _with_reference_row(results, active_name, local):
-        """Scan rows without the active backend; with a local result, a
-        reference row for it at its rank among the ranked rows."""
+    def _with_reference_row(results, active_name, local, n_circuits):
+        """Scan rows without the active backend, ranked by `_rank_batch_rows`;
+        with a complete local result, a reference row for it at its rank."""
         rows = [r for r in results if r.get('name') != active_name]
-        if local is None or not active_name:
-            return rows
-        metric, _ = _batch_metric(local)
-        ref = {'name': active_name, 'family': None, 'sweep': local,
-               'best_lqs': metric, 'best_k': None, 'error': None,
-               'reference': True}
-        pos = next((i for i, r in enumerate(rows)
-                    if r.get('best_lqs') is None or r['best_lqs'] < metric),
-                   len(rows))
-        rows.insert(pos, ref)
-        return rows
+        if local is not None and active_name:
+            metric, _ = _batch_metric(local)
+            rows.append({'name': active_name, 'family': None, 'sweep': local,
+                         'best_lqs': metric, 'best_k': None, 'error': None,
+                         'reference': True})
+        return _rank_batch_rows(rows, n_circuits)
 
     def _render_batch_results(scan_result, active_name=None, norbs=()):
         # ONE QPU selector over the scan_qpus-ranked batches: pick a backend,
@@ -2095,8 +2177,10 @@ def setup_lucj_callbacks(ctx):
         # that does not fully fit is selectable but not openable. The active
         # backend is QPU 1: it appears only as a reference row built from the
         # local multi-circuit result, never openable.
+        n_circuits = len(norbs)
         local = _local_batch_reference(norbs)
-        rows = _with_reference_row(scan_result['results'], active_name, local)
+        rows = _with_reference_row(scan_result['results'], active_name,
+                                   local, n_circuits)
 
         def _label(r):
             name = esc(str(r['name']))
@@ -2104,7 +2188,13 @@ def setup_lucj_callbacks(ctx):
                 name += ' (this QPU)'
             if r.get('error'):
                 return f"{name} — ✗ error"
-            m, is_tmpl = _batch_metric(r.get('sweep') or {})
+            res = r.get('sweep')
+            if not res:
+                return f"{name} — skipped"
+            if not _batch_complete(res, n_circuits):
+                placed = len(res.get('circuits') or [])
+                return f"{name} — {placed} of {n_circuits} circuits fit"
+            m, is_tmpl = _batch_metric(res)
             return (f"{name} — batch {m * 100.0:.1f}%"
                     f"{' (template)' if is_tmpl else ''}")
 
@@ -2163,17 +2253,17 @@ def setup_lucj_callbacks(ctx):
         btn_scan_batch.disabled = True
         btn_scan_batch.description = '⏳ Scanning batch...'
         scan_batch_box.children = []
-        if _selected_planner() == 'joint':
-            lbl_lucj_multi.value = _joint_pending_html(len(norbs))
         kwargs = _sweep_kwargs_from_ui()
         buffer = lucj_buffer_slider.value
         active_name = getattr(state, 'active_backend_name', None)
 
         def _batch_sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
             excl = _batch_backend_exclusions(props, getattr(backend, 'name', None))
+            # One circuit at a time on every QPU: the scan runs a batch per
+            # backend, so it keeps the fast sequential plan.
             res = _run_multi(
                 norbs, backend, props, sweep_kwargs=kwargs,
-                buffer_qubits=buffer,
+                planner='sequential', buffer_qubits=buffer,
                 min_bridges=min_bridges_list, top_n=kwargs['top_n'],
                 mapping_cap=kwargs['mapping_cap'], hybrid=kwargs['hybrid'],
                 diversity_threshold=kwargs['diversity_threshold'],
@@ -2188,8 +2278,6 @@ def setup_lucj_callbacks(ctx):
         def _reset():
             btn_scan_batch.disabled = False
             btn_scan_batch.description = '🌐 Scan batch on all QPUs'
-            if _selected_planner() == 'joint':
-                lbl_lucj_multi.value = ""        # drop the pending line
 
         def _work():
             from .. import qpu_scan

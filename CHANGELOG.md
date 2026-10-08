@@ -42,9 +42,7 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   raise the circuit-level LQS. Every Auto search now runs it alongside the
   exhaustive search and keeps the best of both for each ancilla count, so the
   best layout is never worse than either engine alone. Each layout in the list
-  shows its source (`· E`, `· G`, `· E+G`), and the status line names the
-  ancilla counts where guided alone found the best one. One checkbox in
-  Advanced, "Guided search" (on by default), turns it off to search as 0.0.5
+  shows its source (`· E`, `· G`, `· E+G`). One checkbox in Advanced, "Guided search" (on by default), turns it off to search as 0.0.5
   did. The multi-QPU scan and the stability filter still use the exhaustive
   search.
 - Opt-in stability filter that excludes qubits volatile across the cached
@@ -60,13 +58,13 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   comparison harness, not offered in the UI): guided search for ancilla counts
   up to a threshold, where the exhaustive search hits its cap and only ranks a
   sample, and the exhaustive search above it.
-- Joint multi-circuit placement ("Optimize placement jointly", off by
-  default, which keeps the sequential placement): keeps several placement
-  plans at once instead of placing each circuit greedily, so the first circuit
-  no longer takes a region the next one needed. Never worse than sequential
-  placement, searches each circuit with the combined search, and reports
-  couplers shared by two circuits at buffer 0 (with an optional penalty to
-  avoid them).
+- Joint multi-circuit placement (the default; "Fast: one circuit at a time"
+  in the Multi tab's Advanced places them one by one as 0.0.5 did): keeps
+  several placement plans at once instead of placing each circuit greedily,
+  so the first circuit no longer takes a region the next one needed. Never
+  worse than one-by-one placement, searches each circuit with the combined
+  search, and reports couplers shared by two circuits at buffer 0 (with an
+  optional penalty to avoid them).
 - Engine comparison harness (`python -m iqmapper.evaluation`): replays the
   search engines over the cached calibrations, offline, and ranks with the
   app's real circuit-level LQS rebuilt for every calibration (`--scorer lqs`,
@@ -78,6 +76,21 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shorter UI messages: status lines, notices and tooltips say what happened
   in one short sentence, and each is explained in the README section
   "Understanding the messages".
+
+### Changed
+- Log messages no longer print under the notebook cell. They go to a
+  rotating log file in the user log directory, each distinct message once
+  per session; the bridge-count fallback and the search-cap statistics no
+  longer appear in the notices panel.
+- The Auto-LUCJ result line is one short line, `✅ 12 layouts found · scored
+  on live · 20:41`; the layout list already shows k, LQS and source.
+- Multi-circuit results open with a Plans menu of the best complete plans
+  (picking one places every circuit), and each circuit's alternatives list
+  only layouts that leave room for the circuits after it.
+- Multi-circuit placement is joint by default (3 plans kept, 3 candidates per
+  circuit); "Fast: one circuit at a time" replaces the "Optimize placement
+  jointly" checkbox. The batch scan keeps one-by-one placement on every QPU
+  and ranks backends that fit the whole batch first.
 
 ### Fixed
 - LQS counted every two-qubit gate twice on backends that list each coupler

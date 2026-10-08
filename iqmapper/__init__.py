@@ -10,8 +10,12 @@ Architecture:
     fires → builds a config dict → launch_mapper(config) creates SessionState
     and displays the main UI.
 """
-from .connection import _make_connection_ui
-from .mapper import launch_mapper
+from .log_setup import install_file_log, install_null_handler
+
+install_null_handler()     # records never print under a notebook cell
+
+from .connection import _make_connection_ui  # noqa: E402
+from .mapper import launch_mapper            # noqa: E402
 
 
 def run():
@@ -23,6 +27,7 @@ def run():
     # build re-entering build() must not clobber this with a worker/None value).
     from .async_util import init_main_loop
     init_main_loop()
+    install_file_log()
 
     def _on_connect(vendor, backend_name, backend, chip,
                     props, props_warning, ansatz,

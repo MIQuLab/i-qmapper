@@ -335,7 +335,7 @@ class MapperUIBuilder:
             dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
-            chk_joint_plan=self.chk_joint_plan,
+            chk_fast_multi=self.chk_fast_multi,
             int_plans_kept=self.int_plans_kept,
             int_cands_per_circuit=self.int_cands_per_circuit,
             ft_boundary_penalty=self.ft_boundary_penalty,
@@ -1602,17 +1602,18 @@ class MapperUIBuilder:
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
         # ── Multi-circuit planner ─────────────────────────────────
-        # Off (default) = Sequential, the greedy multi_sweep, unchanged. Each
-        # widget owns its Layout: the Joint-only box is toggled at runtime.
-        self.chk_joint_plan = Checkbox(
+        # Circuits are planned jointly by default; "Fast" places them one at a
+        # time (the greedy multi_sweep, unchanged). Each widget owns its
+        # Layout: the joint-only box is toggled at runtime.
+        self.chk_fast_multi = Checkbox(
             value=False,
-            description='Optimize placement jointly',
+            description='Fast: one circuit at a time',
             layout=Layout(width=W.width, margin=W.margin,
                           min_width=W.min_width),
-            tooltip='plan all circuits together instead of one at a time '
-                    '· README: Multi-circuit planner')
+            tooltip='place circuits one by one instead of planning them '
+                    'together · README: Multi-circuit planner')
         self.int_plans_kept = BoundedIntText(
-            value=4, min=1, max=50,
+            value=3, min=1, max=50,
             description='Plans kept:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
@@ -1635,7 +1636,13 @@ class MapperUIBuilder:
         self.joint_params_box = VBox(
             [self.int_plans_kept, self.int_cands_per_circuit,
              self.ft_boundary_penalty],
-            layout=Layout(display='none'))
+            layout=Layout())
+        self.multi_advanced_acc = Accordion(
+            children=[VBox([self.chk_fast_multi, self.joint_params_box])],
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width))
+        self.multi_advanced_acc.set_title(0, '⚙️ Advanced')
+        self.multi_advanced_acc.selected_index = None  # collapsed on open
         # Legacy multi-circuit button — no longer shown in the Multi subpanel
         # (the sweep is the single generate action). The widget + its handler
         # (_on_lucj_multi) and engine (get_multi_circuit_layouts) stay wired and
@@ -2094,8 +2101,7 @@ class MapperUIBuilder:
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
-            self.chk_joint_plan,
-            self.joint_params_box,
+            self.multi_advanced_acc,
             # Legacy btn_lucj_multi intentionally omitted — the sweep button is
             # the single generate action. Handler/engine remain wired + pinned.
             self.btn_lucj_multi_sweep,

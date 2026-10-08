@@ -87,6 +87,7 @@ def _build(monkeypatch, spawn=_sync_spawn):
     state.cal_history_dates = ["_seed_"]
     b = MapperUIBuilder(state)
     b.build()
+    b.chk_fast_multi.value = True     # the stubbed engine is the sequential one
     return b, state
 
 
@@ -99,7 +100,14 @@ def _patch_engine(monkeypatch, result):
 
 
 def _dropdowns(box):
-    return [c for c in box.children if isinstance(c, Dropdown)]
+    """The per-circuit alternatives dropdowns (the Plans menu excluded)."""
+    return [c for c in box.children if isinstance(c, Dropdown)
+            and c.description != 'Plans:']
+
+
+def _plans(box):
+    return next(c for c in box.children if isinstance(c, Dropdown)
+                and c.description == 'Plans:')
 
 
 # ── happy path — both applied, summary exact, dropdowns collapsed ────────
@@ -116,11 +124,12 @@ def test_multi_sweep_happy_path(monkeypatch):
     assert state.layouts_data[0]['alpha'] == ['0', '1']
     assert state.layouts_data[0]['ancilla'] == ['4']
     assert state.layouts_data[1]['ancilla'] == ['6']
-    # Summary format exact.
+    # Short status; the plan line carries the per-circuit numbers.
     v = b.lbl_lucj_multi.value
-    assert 'C1: k=1 · 61.2%' in v
-    assert 'C2: k=1 · 58.4%' in v
-    assert 'batch: 35.7%' in v                       # 0.612*0.584 = 0.3574
+    assert '✅ 2 circuits placed' in v and 'vs one-by-one' not in v
+    plans = _plans(b.lucj_multi_detail_box)
+    assert [label for label, _ in plans.options] == [
+        'Plan 1 · total 35.7% · C1 61.2% + C2 58.4%']   # 0.612*0.584
     # One collapsed dropdown per circuit, showing the chosen entry's label.
     dds = _dropdowns(b.lucj_multi_detail_box)
     assert len(dds) == 2
@@ -205,7 +214,7 @@ def test_multi_sweep_override(monkeypatch):
     # Re-applied: C0 now the alt (ancilla 5), C1 re-swept (ancilla 7).
     assert state.layouts_data[0]['ancilla'] == ['5']
     assert state.layouts_data[1]['ancilla'] == ['7']
-    assert 'C2: k=1 · 57.0%' in b.lbl_lucj_multi.value  # summary refreshed
+    assert 'C2 57.0%' in _plans(b.lucj_multi_detail_box).options[0][0]
 
 
 # ── failed_at — banner + partial application ────────────────────────────
@@ -220,6 +229,8 @@ def test_multi_sweep_failed_at(monkeypatch):
     assert "Circuit doesn't fit after C1..C1" in v
     assert state.layouts_data[0]['ancilla'] == ['4']  # C1 still applied
     assert len(_dropdowns(b.lucj_multi_detail_box)) == 1   # only the placed one
+    assert not any(getattr(c, 'description', '') == 'Plans:'   # no complete plan
+                   for c in b.lucj_multi_detail_box.children)
 
 
 # ── in-flight guard — a second override during replan → single call ─────

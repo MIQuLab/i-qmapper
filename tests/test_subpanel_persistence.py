@@ -76,6 +76,7 @@ def _build(monkeypatch):
     state.cal_history_dates = ["_seed_"]
     b = MapperUIBuilder(state)
     b.build()
+    b.chk_fast_multi.value = True     # the stubbed engine is the sequential one
     return b, state
 
 
@@ -97,7 +98,7 @@ def test_multi_generate_keeps_multi_subpanel(monkeypatch):
     # Still on Multi (the fresh Tab from the rebuild carried the index over).
     assert b._auto_lucj_tabs.selected_index == 1
     # Results rendered in place.
-    assert 'circuit(s) placed' in b.lbl_lucj_multi.value
+    assert 'circuits placed' in b.lbl_lucj_multi.value
     assert state.layouts_data[0]['ancilla'] == ['4']    # batch applied
     assert state.layouts_data[1]['ancilla'] == ['6']
 
@@ -200,7 +201,7 @@ def test_multi_generate_no_rebuild(monkeypatch):
     assert b._auto_lucj_tabs is tab_before
     assert b.content_box.children[0] is content_before
     assert b._auto_lucj_tabs.selected_index == 1          # still on Multi
-    assert 'circuit(s) placed' in b.lbl_lucj_multi.value  # results rendered
+    assert 'circuits placed' in b.lbl_lucj_multi.value  # results rendered
 
 
 # ── W3 t2: the targeted widgets ARE refreshed (no rebuild ≠ no update) ───────
@@ -216,7 +217,8 @@ def test_multi_generate_targeted_widgets_refreshed(monkeypatch):
 
     # Per-circuit override dropdowns reflect the 2-circuit result (in place).
     dds = [c for c in b.lucj_multi_detail_box.children if isinstance(c, Dropdown)]
-    assert len(dds) == 2
+    assert [d.description for d in dds] == [
+        'Plans:', 'C1 alternatives:', 'C2 alternatives:']
     # ancilla-tool options + manual per-circuit tabs re-seeded for the new count
     # (the targeted _build_dynamic_ui, done WITHOUT a content rebuild).
     anc_labels = [lbl for lbl, _ in b.ancilla_tool.options]
