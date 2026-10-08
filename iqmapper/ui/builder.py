@@ -2285,6 +2285,40 @@ class MapperUIBuilder:
             getattr(self, '_err_tabs', None), _err_tabs)
         return _err_tabs
 
+    #: Property dropdowns re-listed from the loaded calibration, with the
+    #: value each falls back to: (attribute, qubit or gate list, default).
+    _PROP_DROPDOWNS = (
+        ('dd_qubit_prop', 'qubit', 'readout_error'),
+        ('dd_rank_prop', 'qubit', 'readout_error'),
+        ('dd_trend_prop', 'qubit', 'readout_error'),
+        ('dd_stable_prop', 'qubit', 'readout_error'),
+        ('dd_gate_prop', 'gate', 'cz_error'),
+        ('dd_grank_prop', 'gate', 'cz_error'),
+        ('dd_gtrend_prop', 'gate', 'cz_error'),
+        ('dd_gstable_prop', 'gate', 'cz_error'),
+    )
+
+    def _sync_prop_dropdowns(self):
+        """List only the properties the loaded calibration has values for
+        (heatmap, rankings, trends, stable finder). Runs on every refresh,
+        so a new backend, snapshot or session is reflected at once; a
+        dropdown that already matches is left untouched."""
+        from .prop_options import available_options, sync_dropdown
+        lists = {
+            'qubit': available_options(
+                QUBIT_PROP_OPTIONS, getattr(self.state, 'qubit_props_data', None)),
+            'gate': available_options(
+                GATE_PROP_OPTIONS, getattr(self.state, 'gate_props_data', None)),
+        }
+        self._syncing_props = True
+        try:
+            for attr, kind, default in self._PROP_DROPDOWNS:
+                dd = getattr(self, attr, None)
+                if dd is not None:
+                    sync_dropdown(dd, lists[kind], default)
+        finally:
+            self._syncing_props = False
+
     def _refresh(self, *args):
         """Central refresh — plot + counters + LQS banner + warnings.
 
@@ -2305,6 +2339,9 @@ class MapperUIBuilder:
           7. props-warning banner (red, only when set)
           8. QPU 1 header label (inter-QPU mode only)
         """
+        if getattr(self, '_syncing_props', False):
+            return                     # a dropdown being re-listed below
+        self._sync_prop_dropdowns()
         plot_mod.refresh_plot(self.fig, self.state, self.widgets_ref)
         self._update_all_counters()
         self._update_undo_btns()

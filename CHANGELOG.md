@@ -108,6 +108,14 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   other circuits too, so a coupler between two circuits looked like a gate
   of one of them. An ancilla now colours only edges to qubits of its own
   circuit, on the map and in the PNG export.
+- Backends that report fewer calibration properties than Heron (Nighthawk
+  reports no RZZ or RX gates, Heron no MEASURE error) logged one "not found"
+  message per qubit or coupler on every load, and the property menus offered
+  properties the backend does not have, which painted the whole map black.
+  Only the properties the backend declares are fetched now; the menus list
+  only properties with values; a property with gaps logs one line ("t2: 1 of
+  156 qubits without a value"); a missing value reads "no data" instead of
+  "NAN" or "N/A".
 
 ## [0.0.5] — 2026-08
 

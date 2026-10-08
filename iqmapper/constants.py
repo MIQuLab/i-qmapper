@@ -209,20 +209,28 @@ def _fmt_sci(v, prec=3):
     return f"{mant}E{'+' if e >= 0 else '-'}{abs(e)}"
 
 
+#: Shown wherever a value is missing (NaN).
+NO_DATA = "no data"
+
+
 def fmt_e(val):
-    """Format error value in scientific notation."""
+    """Format error value in scientific notation; NaN → "no data"."""
     try:
-        return _fmt_sci(float(val))
+        v = float(val)
+        if np.isnan(v):
+            return NO_DATA
+        return _fmt_sci(v)
     except Exception:
         return "N/A"
 
 
 def fmt_us(val):
-    """Format microsecond values: 248.3 µs instead of 2.483E+2."""
+    """Format microsecond values: 248.3 µs instead of 2.483E+2; NaN →
+    "no data"."""
     try:
         v = float(val)
         if np.isnan(v):
-            return "N/A"
+            return NO_DATA
         if v >= 1000:
             return f"{v/1000:.1f} ms"
         if v >= 1:
@@ -233,11 +241,11 @@ def fmt_us(val):
 
 
 def fmt_ns(val):
-    """Format gate length in nanoseconds."""
+    """Format gate length in nanoseconds; NaN → "no data"."""
     try:
         v = float(val)
         if np.isnan(v):
-            return "N/A"
+            return NO_DATA
         return f"{v:.1f} ns"
     except Exception:
         return "N/A"
