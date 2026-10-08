@@ -10,7 +10,6 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from iqmapper.ui.lucj_panel import _format_sweep_status
 
 
 def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
@@ -243,17 +242,6 @@ def test_m1_score_checkbox_toggle(monkeypatch):
     assert b.lucj_chk_score.disabled is False
     b.lucj_ancilla_dd.value = -1
     assert b.lucj_chk_score.disabled is True
-
-
-# ── per-stratum status line format ─────────────────────────────────────
-
-def test_m2_status_line_format():
-    res = _sweep(0.40, 0.30)
-    res['k_max_effective'] = 2
-    res['min_bridges'] = 1
-    res['n_raw_embeddings'] = 214
-    line = _format_sweep_status(res)
-    assert line == "Sweep: k=2..1 · 214 embeddings · best per k: 2→30.0% · 1→40.0%"
 
 
 # ── circuit-LQS annotation (success → number, failure → template) ───────

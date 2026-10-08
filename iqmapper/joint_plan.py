@@ -147,7 +147,11 @@ def _final_key(plan, penalty):
 
 
 def _beam(ctx, prefix, beam_width, branch):
-    """Run the beam from a fixed prefix. Returns (best_plan, failed_at)."""
+    """Run the beam from a fixed prefix.
+
+    Returns (best_plan, failed_at, final_beam); `final_beam` holds the plans
+    alive after the last circuit that fitted.
+    """
     norbs = ctx['norbs']
     penalty = ctx['boundary_penalty']
     buffer_qubits = ctx['buffer_qubits']
@@ -185,7 +189,7 @@ def _beam(ctx, prefix, beam_width, branch):
         beam = sorted(children.values(),
                       key=lambda p: (-p.score(penalty), p.path))[:beam_width]
     best = min(beam, key=lambda p: _final_key(p, penalty))
-    return best, failed_at
+    return best, failed_at, beam
 
 
 def _search(ctx, i, excluded):
@@ -210,8 +214,8 @@ def _search(ctx, i, excluded):
     return res
 
 
-def _result(ctx, plan, failed_at, greedy_plan, plan_source, n_searches):
-    penalty = ctx['boundary_penalty']
+def _plan_fields(plan, penalty):
+    """The result keys that describe one placement plan."""
     chosen_list = [r['chosen'] for r in plan.records]
     total_product = None
     if chosen_list:
@@ -230,32 +234,71 @@ def _result(ctx, plan, failed_at, greedy_plan, plan_source, n_searches):
         'total_lqs_circuit': total_lqs,
         'placed_qubits': list(plan.placed),
         'buffer_qubits_used': list(plan.buffers),
+        'boundary_couplers': [tuple(e) for e in plan.boundary],
+        'joint_total': plan.score(penalty),
+    }
+
+
+def _complete_plans(ctx, plans):
+    """Up to `beam_width` distinct plans that place every circuit, best first
+    by the planner's own ranking. Each is a dict of the plan keys plus
+    `chosen` (one entry per circuit), `total` (the plan score) and
+    `failed_at` (None)."""
+    penalty = ctx['boundary_penalty']
+    n_circuits = len(ctx['norbs'])
+    distinct = {}
+    for plan in plans:
+        if len(plan.records) == n_circuits:
+            distinct.setdefault(plan.qkey(), plan)
+    ranked = sorted(distinct.values(), key=lambda p: _final_key(p, penalty))
+    out = []
+    for plan in ranked[:ctx['beam_width']]:
+        fields = _plan_fields(plan, penalty)
+        fields.update(chosen=[r['chosen'] for r in plan.records],
+                      total=plan.score(penalty), failed_at=None)
+        out.append(fields)
+    return out
+
+
+def _result(ctx, plan, failed_at, greedy_plan, plan_source, n_searches,
+            plans):
+    penalty = ctx['boundary_penalty']
+    fields = _plan_fields(plan, penalty)
+    return {
+        'circuits': fields['circuits'],
+        'total_product': fields['total_product'],
+        'total_lqs_circuit': fields['total_lqs_circuit'],
+        'placed_qubits': fields['placed_qubits'],
+        'buffer_qubits_used': fields['buffer_qubits_used'],
         'failed_at': failed_at,
         'planner': 'joint',
         'beam_width': ctx['beam_width'],
         'branch': ctx['branch'],
         'boundary_penalty': penalty,
-        'boundary_couplers': [tuple(e) for e in plan.boundary],
+        'boundary_couplers': fields['boundary_couplers'],
         'greedy_total': greedy_plan.score(penalty),
         'greedy_placed': len(greedy_plan.records),
-        'joint_total': plan.score(penalty),
+        'joint_total': fields['joint_total'],
         'plan_source': plan_source,
         'n_searches': n_searches,
+        'plans': plans,
         '_context': ctx,
     }
 
 
 def _run(ctx, prefix):
     calls_before = ctx['_calls'][0]
-    greedy, greedy_failed = _beam(ctx, prefix, 1, 1)
-    joint, joint_failed = _beam(ctx, prefix, ctx['beam_width'], ctx['branch'])
+    greedy, greedy_failed, greedy_beam = _beam(ctx, prefix, 1, 1)
+    joint, joint_failed, joint_beam = _beam(ctx, prefix, ctx['beam_width'],
+                                            ctx['branch'])
     penalty = ctx['boundary_penalty']
     if _final_key(greedy, penalty) < _final_key(joint, penalty):
         plan, failed_at, source = greedy, greedy_failed, 'greedy'
     else:
         plan, failed_at, source = joint, joint_failed, 'beam'
     return _result(ctx, plan, failed_at, greedy, source,
-                   ctx['_calls'][0] - calls_before)
+                   ctx['_calls'][0] - calls_before,
+                   _complete_plans(ctx, list(joint_beam) + list(greedy_beam)))
 
 
 def plan_multi_circuits(norbs, backend, props, *, search_fn=None,
@@ -287,8 +330,14 @@ def plan_multi_circuits(norbs, backend, props, *, search_fn=None,
     `joint_total` is the returned plan's), `greedy_placed` (circuits the
     greedy plan placed — when the joint plan places more, its score is a
     product of more factors and the two totals are not comparable),
-    `plan_source` ('beam' | 'greedy'), and `n_searches` (actual `search_fn`
-    calls after memoisation).
+    `plan_source` ('beam' | 'greedy'), `n_searches` (actual `search_fn`
+    calls after memoisation), and `plans`: up to `beam_width` distinct
+    plans that place every circuit, best first, the returned plan first
+    when it is complete. Each holds `chosen` (one entry per circuit),
+    `total` (plan score, penalty included), `circuits`, `total_product`,
+    `total_lqs_circuit`, `placed_qubits`, `buffer_qubits_used`,
+    `boundary_couplers`, `joint_total` and `failed_at` (None), so a caller
+    can swap any of them in for the returned plan.
     """
     if not (0.0 <= boundary_penalty < 1.0):
         raise ValueError(f"boundary_penalty={boundary_penalty} must be in "

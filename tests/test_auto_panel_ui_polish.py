@@ -262,10 +262,6 @@ def test_guided_results_render_through_the_existing_display(monkeypatch):
     b, _ = _build(monkeypatch)
     res = guided_sweep(4, make_backend(), FakeProps(), min_bridges=1, top_n=3)
 
-    from iqmapper.ui.lucj_panel import _format_sweep_status
-    line = _format_sweep_status(res)
-    assert line and 'Sweep:' in line
-
     from iqmapper.ui.lucj_panel import _format_best_per_k
     best = _format_best_per_k(res['strata'])
     assert best, 'best-per-k line empty for a guided result'

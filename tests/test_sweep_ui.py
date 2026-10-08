@@ -280,7 +280,7 @@ def test_min_bridges_validation_surfaces_as_status(builder, monkeypatch):
     assert b.btn_lucj_run.disabled is False
 
 
-# ── the deep-search checkbox wires hybrid= and the per-stratum mode label ────────
+# ── the deep-search checkbox wires hybrid= ───────────────────────────────
 
 def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
     calls = []
@@ -294,20 +294,6 @@ def test_deep_search_checkbox_wires_hybrid(builder, monkeypatch):
     b.chk_deep_search.value = True
     b.btn_lucj_run.click()
     assert calls[-1]['hybrid'] is True
-
-
-def test_sweep_mode_label():
-    from iqmapper.ui.lucj_panel import _sweep_mode_label
-    hy = {'k_max_effective': 3,
-          'per_stratum': {3: {'n_direct': 5, 'n_derived': 0},
-                          2: {'n_direct': 2, 'n_derived': 3},
-                          1: {'n_direct': 0, 'n_derived': 4}}}
-    assert _sweep_mode_label(hy) == 'direct+derived'      # k=2 got direct hits
-    dv = {'k_max_effective': 3,
-          'per_stratum': {3: {'n_direct': 5, 'n_derived': 0},
-                          2: {'n_direct': 0, 'n_derived': 3},
-                          1: {'n_direct': 0, 'n_derived': 4}}}
-    assert _sweep_mode_label(dv) == 'derived-only'
 
 
 # ── a region-diversity pick carries no "alt region" suffix ──────────────

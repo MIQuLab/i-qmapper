@@ -561,6 +561,23 @@ def refine_entry(engine, entry, k, circuit_score_fn, max_iter=DEFAULT_MAX_ITER):
     return current, changed
 
 
+def _layout_identity(entry):
+    """One layout, however its chains are walked: all qubits + ancillas."""
+    return (frozenset(entry['alpha']) | frozenset(entry['beta'])
+            | frozenset(entry['ancillas']), frozenset(entry['ancillas']))
+
+
+def _distinct_layouts(ranked):
+    """`ranked` without repeated layouts, the first (best-ranked) copy kept."""
+    seen, out = set(), []
+    for entry in ranked:
+        key = _layout_identity(entry)
+        if key not in seen:
+            seen.add(key)
+            out.append(entry)
+    return out
+
+
 # ── public API ──────────────────────────────────────────────────────
 
 def guided_sweep(norb, backend, props, *, min_bridges=None, top_n=3,
@@ -759,6 +776,11 @@ def guided_sweep(norb, backend, props, *, min_bridges=None, top_n=3,
                            else 0.0,
                            e['product_score']),
             reverse=True)
+        # A refined finalist can land on a layout another window entry
+        # already holds (same qubits and ancillas, chains walked in another
+        # order). Keep the higher-ranked copy so the freed slot goes to a
+        # different layout.
+        window = _distinct_layouts(window)
 
         if diversity_threshold is None:
             entries = window[:top_n]

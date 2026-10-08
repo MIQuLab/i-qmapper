@@ -44,26 +44,6 @@ def _format_best_per_k(strata):
     return ' · '.join(parts)
 
 
-def _sweep_mode_label(res):
-    """'direct+derived' when any lower stratum got a direct-VF2 hit,
-    else 'derived-only'."""
-    kmax = res.get('k_max_effective')
-    ps = res.get('per_stratum', {})
-    direct = any(v.get('n_direct', 0) > 0 for k, v in ps.items()
-                 if kmax is not None and k < kmax)
-    return 'direct+derived' if direct else 'derived-only'
-
-
-def _format_sweep_status(res):
-    """One-line sweep summary: 'Sweep: k=6..3 · 214 embeddings ·
-    best per k: ...'. All interpolations esc()'d."""
-    k_range = f"{res['k_max_effective']}..{res['min_bridges']}"
-    emb = f"{res['n_raw_embeddings']:,}"
-    per_k = _format_best_per_k(res.get('strata', {}))
-    return (f"Sweep: k={esc(k_range)} · {esc(emb)} embeddings · "
-            f"best per k: {esc(per_k)}")
-
-
 def _k_cap_phrase(norb, k_effective):
     """'k capped at E (requested R)' when the geometric request
     ceil(norb/4) exceeds what actually fit; '' otherwise. Pure metadata —
