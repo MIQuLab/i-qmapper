@@ -51,7 +51,9 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Multi-circuit sweep: places several circuits one after another; picking a
   different layout for one circuit re-plans the circuits after it.
 - Multi-QPU scan across the available backends, with one-click inter-QPU
-  handoff that reopens the chosen layout on the second QPU.
+  handoff that reopens the chosen layout on the second QPU. Backends whose
+  chip the map cannot open (anything but 156-qubit Heron and 120-qubit
+  Nighthawk) are listed last as "not supported", never searched or opened.
 - Epoch-consistent scoring: fidelity and ranking read a single pinned
   calibration epoch, so comparisons within a sweep stay commensurable.
 - Hybrid search engine (`engine_select.hybrid_sweep`, used by the engine

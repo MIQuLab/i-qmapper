@@ -1011,6 +1011,43 @@ def setup_lucj_callbacks(ctx):
                 f"margin:3px 0;'>🛡 filtered {esc(str(n_vol))} volatile"
                 f"{floor_txt} qubits (window {_window_txt()})</div>")
 
+    #: Detail line for a backend the map cannot open.
+    _UNSUPPORTED_DETAIL = ('not supported: this app has no map layout for '
+                           'this chip (supported: 156-qubit Heron, '
+                           '120-qubit Nighthawk)')
+
+    def _mark_unsupported(targets, get_backend):
+        """Fetch each eligible target's backend once and mark the ones the
+        map cannot open (no coordinate layout) as not eligible, so they are
+        never searched. Returns (memoised get_backend, unsupported names).
+        A backend that cannot be fetched is left to the scan, which reports
+        it as an error row."""
+        from ..constants import resolve_coords
+        fetched = {}
+
+        def _get(name):
+            if name not in fetched:
+                fetched[name] = get_backend(name)
+            return fetched[name]
+
+        unsupported = set()
+        for t in targets:
+            if not t.get('eligible'):
+                continue
+            try:
+                backend = _get(t['name'])
+            except Exception:
+                continue
+            if not getattr(backend, 'num_qubits', None):
+                continue           # nothing to judge the chip by; scan it
+            try:
+                resolve_coords(backend)
+            except NotImplementedError:
+                t['eligible'] = False
+                t['reason'] = 'not supported by this app'
+                unsupported.add(t['name'])
+        return _get, unsupported
+
     def _cached_history_for(backend_name):
         """Assemble a per-backend history dict from the DISK CACHE ONLY (no
         remote fetch). Empty when the backend has no cached snapshots."""
@@ -1166,6 +1203,7 @@ def setup_lucj_callbacks(ctx):
         _scan['order'].clear()
         _scan['current'] = None
         _scan['active'] = None
+        _scan['unsupported'] = set()
         btn_scan_qpus.disabled = False
         btn_scan_qpus.description = '🌐 Scan all QPUs'
     btn_scan_clear.on_click(lambda b: _clear_scan_results())
@@ -1209,6 +1247,8 @@ def setup_lucj_callbacks(ctx):
         r = str(reason or '')
         if r.startswith('current backend'):
             return 'current'
+        if r.startswith('not supported'):
+            return 'not supported'
         if r.startswith('different family'):
             lo, hi = r.find('('), r.rfind(')')
             return r[lo + 1:hi] if 0 <= lo < hi else 'other family'
@@ -1381,7 +1421,12 @@ def setup_lucj_callbacks(ctx):
         return " · ".join(segs)
 
     def _render_results(scan_result):
-        results = scan_result['results']
+        unsupported = _scan.get('unsupported') or set()
+        # Backends the map cannot open go to the bottom, after every other row.
+        results = ([r for r in scan_result['results']
+                    if r.get('name') not in unsupported]
+                   + [r for r in scan_result['results']
+                      if r.get('name') in unsupported])
         children = []
 
         # when a PAST date is active locally, the local backend was scored
@@ -1402,6 +1447,8 @@ def setup_lucj_callbacks(ctx):
         # / no-candidate rows are selectable but their open button is disabled.
         def _single_label(r):
             name = esc(str(r['name']))
+            if r.get('name') in unsupported:
+                return f"{name} — not supported"
             if r.get('error'):
                 return f"{name} — ✗ error"
             if r.get('best_lqs') is None:
@@ -1411,6 +1458,8 @@ def setup_lucj_callbacks(ctx):
         def _single_detail(r):
             box = ("<div style='font-size:13px;background:#f8f9fa;padding:4px 6px;"
                    "border-radius:3px;margin:2px 0;'>")
+            if r.get('name') in unsupported:
+                return box + f"{esc(_UNSUPPORTED_DETAIL)}</div>"
             if r.get('error'):
                 return box + f"✗ {esc(str(r['error']))}</div>"
             sweep = r.get('sweep') or {}
@@ -1431,9 +1480,13 @@ def setup_lucj_callbacks(ctx):
             results,
             label_fn=_single_label,
             detail_fn=_single_detail,
-            open_ok_fn=lambda r: not r.get('error') and r.get('best_lqs') is not None,
+            open_ok_fn=lambda r: (not r.get('error')
+                                  and r.get('name') not in unsupported
+                                  and r.get('best_lqs') is not None),
             payload_fn=lambda r: _best_scan_entry(r.get('sweep') or {}),
-            disabled_tip='no candidates to open on QPU 2')
+            disabled_tip=lambda r: ('not supported by this app'
+                                    if r.get('name') in unsupported
+                                    else 'no candidates to open on QPU 2'))
         children.extend(selector)
 
         scan_results_box.children = children
@@ -1544,11 +1597,14 @@ def setup_lucj_callbacks(ctx):
             # them leaking under the cell — the same context every sweep uses.
             with _capture_qpu_notices(
                     lambda: _scan.get('current') or 'general') as handler:
+                # A chip the map cannot open is listed, never searched.
+                get_b, unsupported = _mark_unsupported(eligible, get_backend)
+                _scan['unsupported'] = unsupported
                 # One scan path, one param source — forwards hybrid.
-                result = _scan_backends(eligible, norb, get_backend,
+                result = _scan_backends(eligible, norb, get_b,
                                         get_props, use_scan_filter)
                 # Circuit-level LQS per backend — one scale everywhere.
-                _annotate_scan_circuit_lqs(result, get_backend, get_props)
+                _annotate_scan_circuit_lqs(result, get_b, get_props)
                 return (result, list(handler.records))
         scan_spawn_bg(_work, on_done=_on_scan_done, on_error=_on_scan_error)
 
@@ -2108,13 +2164,16 @@ def setup_lucj_callbacks(ctx):
                 and len(res.get('circuits') or []) == n_circuits
                 and n_circuits > 0)
 
-    def _rank_batch_rows(rows, n_circuits):
+    def _rank_batch_rows(rows, n_circuits, unsupported=()):
         """Complete batches first, by batch metric; then partial batches (more
-        circuits placed first); then backends that were not scanned; errors
-        last. A partial batch's metric is a product over fewer circuits, so
-        it is never compared with a complete one."""
+        circuits placed first); then backends that were not scanned; then
+        errors; backends the map cannot open last. A partial batch's metric is
+        a product over fewer circuits, so it is never compared with a complete
+        one."""
         def _key(r):
             res = r.get('sweep')
+            if r.get('name') in unsupported:
+                return (4, 0, 0.0)
             if r.get('error'):
                 return (3, 0, 0.0)
             if not res:
@@ -2140,7 +2199,8 @@ def setup_lucj_callbacks(ctx):
             return None
         return local
 
-    def _with_reference_row(results, active_name, local, n_circuits):
+    def _with_reference_row(results, active_name, local, n_circuits,
+                            unsupported=()):
         """Scan rows without the active backend, ranked by `_rank_batch_rows`;
         with a complete local result, a reference row for it at its rank."""
         rows = [r for r in results if r.get('name') != active_name]
@@ -2149,9 +2209,10 @@ def setup_lucj_callbacks(ctx):
             rows.append({'name': active_name, 'family': None, 'sweep': local,
                          'best_lqs': metric, 'best_k': None, 'error': None,
                          'reference': True})
-        return _rank_batch_rows(rows, n_circuits)
+        return _rank_batch_rows(rows, n_circuits, unsupported)
 
-    def _render_batch_results(scan_result, active_name=None, norbs=()):
+    def _render_batch_results(scan_result, active_name=None, norbs=(),
+                              unsupported=()):
         # ONE QPU selector over the scan_qpus-ranked batches: pick a backend,
         # see its per-circuit detail, open the whole batch on QPU 2. A batch
         # that does not fully fit is selectable but not openable. The active
@@ -2160,12 +2221,14 @@ def setup_lucj_callbacks(ctx):
         n_circuits = len(norbs)
         local = _local_batch_reference(norbs)
         rows = _with_reference_row(scan_result['results'], active_name,
-                                   local, n_circuits)
+                                   local, n_circuits, unsupported)
 
         def _label(r):
             name = esc(str(r['name']))
             if r.get('reference'):
                 name += ' (this QPU)'
+            if r.get('name') in unsupported:
+                return f"{name} — not supported"
             if r.get('error'):
                 return f"{name} — ✗ error"
             res = r.get('sweep')
@@ -2181,6 +2244,8 @@ def setup_lucj_callbacks(ctx):
         def _detail(r):
             box = ("<div style='font-size:13px;background:#f8f9fa;padding:4px 6px;"
                    "border-radius:3px;margin:2px 0;'>")
+            if r.get('name') in unsupported:
+                return box + f"{esc(_UNSUPPORTED_DETAIL)}</div>"
             if r.get('error'):
                 return box + f"✗ {esc(str(r['error']))}</div>"
             return box + f"{esc(_batch_line_html(r.get('sweep') or {}))}</div>"
@@ -2198,6 +2263,8 @@ def setup_lucj_callbacks(ctx):
         def _tip(r):
             if r.get('reference'):
                 return 'already QPU 1'
+            if r.get('name') in unsupported:
+                return 'not supported by this app'
             return 'batch does not fully fit on this backend'
 
         children = _scan_selector(
@@ -2236,6 +2303,7 @@ def setup_lucj_callbacks(ctx):
         kwargs = _sweep_kwargs_from_ui()
         buffer = lucj_buffer_slider.value
         active_name = getattr(state, 'active_backend_name', None)
+        batch = {'unsupported': set()}
 
         def _batch_sweep_fn(norb, backend, props, *, min_bridges=None, top_n=3):
             excl = _batch_backend_exclusions(props, getattr(backend, 'name', None))
@@ -2276,7 +2344,10 @@ def setup_lucj_callbacks(ctx):
                 if t.get('name') == active_name:
                     t['eligible'] = False
                     t['reason'] = 'current backend — see local results above'
-            get_backend = state.active_service.backend
+            # A chip the map cannot open is listed, never searched.
+            get_backend, unsupported = _mark_unsupported(
+                targets, state.active_service.backend)
+            batch['unsupported'] = unsupported
             get_props = make_scan_get_props(state)
             return qpu_scan.scan_qpus(
                 targets, norbs[0], get_backend, get_props,
@@ -2285,7 +2356,8 @@ def setup_lucj_callbacks(ctx):
 
         def _done(result):
             _reset()
-            _render_batch_results(result, active_name, norbs)
+            _render_batch_results(result, active_name, norbs,
+                                  batch['unsupported'])
 
         def _err(exc):
             _reset()

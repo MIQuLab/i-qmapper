@@ -49,7 +49,7 @@ inspectable, and reproducible**.
   qubits *stay* good across a 7/14/30-day window.
 - 🎯 **Two operating modes** — a general-purpose mode for arbitrary circuits, and
   a dedicated mode for the **LUCJ ansatz** (quantum chemistry), with one-click
-  auto-placement on heavy-hex topologies.
+  auto-placement.
 - 🏆 **Layout scoring & ranking (LQS)** — an error-aware quality score to compare
   candidate layouts before spending QPU time.
 - 📦 **Import & export** — import layouts from JSON / `.npy` / QPY; export
@@ -66,6 +66,9 @@ inspectable, and reproducible**.
 ## Requirements
 
 - Python **3.10+**
+- An IBM backend with a **156-qubit Heron** (r2, r3) or a **120-qubit Nighthawk**
+  processor — the chips the map has a layout for. Other chips appear in the
+  multi-QPU scans as "not supported".
 - An [IBM Quantum](https://quantum.ibm.com) account with a saved
   `QiskitRuntimeService` credential (see
   [Set up your IBM Quantum account](#set-up-your-ibm-quantum-account))
@@ -527,7 +530,10 @@ For a guided tour of the modules and data flow, see
   quality.
 - The LQS score is a first-order heuristic for *relative* layout comparison, not
   an absolute fidelity prediction.
-- Heavy-hex auto-placement currently targets IBM Heron/Nighthawk-class devices.
+- The device map, and therefore connecting, covers 156-qubit Heron (r2, r3) and
+  120-qubit Nighthawk processors. Other chips (133-qubit Heron r1, 127-qubit
+  Eagle) are listed in the multi-QPU scans as "not supported" and never
+  searched.
 
 </details>
 
