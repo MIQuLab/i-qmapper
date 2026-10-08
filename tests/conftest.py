@@ -63,3 +63,16 @@ def make_slot():
 @pytest.fixture
 def make_state():
     return _make_state
+
+
+@pytest.fixture(autouse=True)
+def _file_log_in_tmp(tmp_path, monkeypatch):
+    """Keep the app's log file out of the user's log directory and detach it
+    after every test. A test that starts the UI (Refresh rebuilds through
+    `launch_mapper`) would otherwise write the real log and leave the handler
+    attached, with propagation off, for every test after it."""
+    from iqmapper import log_setup
+    monkeypatch.setattr(log_setup, 'default_log_dir',
+                        lambda: str(tmp_path / 'logs'))
+    yield
+    log_setup.remove_file_log()
