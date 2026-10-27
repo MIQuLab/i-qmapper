@@ -1,24 +1,22 @@
-# I-QMapper — Tutorial
+# Tutorial
 
-A step-by-step walkthrough from zero to an exported, error-aware layout.
-Prerequisites: [Installation](README.md#installation) and
-[account setup](README.md#set-up-your-ibm-quantum-account) from the README.
+A walkthrough from launch to an exported, calibration-aware layout. It assumes
+the package is installed and an IBM Quantum credential is saved locally (see
+[Installation](README.md#installation)).
 
-**Steps:**
-[1. Launch & connect](#1-launch--connect) ·
+Contents:
+[1. Launch and connect](#1-launch-and-connect) ·
 [2. Read the map](#2-read-the-map) ·
 [3. Place a layout](#3-place-a-layout) ·
-[4. Score & compare](#4-score--compare) ·
-[5. Travel in time](#5-travel-in-time) ·
-[6. Check stability](#6-check-stability) ·
-[7. Benchmark the live device](#7-benchmark-the-live-device-optional) ·
-[8. Import & export](#8-import--export) ·
-[9. Save your session](#9-save-your-session) ·
+[4. Score and compare](#4-score-and-compare) ·
+[5. Calibration history](#5-calibration-history) ·
+[6. Stability check](#6-stability-check) ·
+[7. Several circuits and several processors](#7-several-circuits-and-several-processors) ·
+[8. Benchmark the device](#8-benchmark-the-device) ·
+[9. Import, export and sessions](#9-import-export-and-sessions) ·
 [10. Where your data lives](#10-where-your-data-lives)
 
----
-
-## 1. Launch & connect
+## 1. Launch and connect
 
 In a notebook cell:
 
@@ -27,190 +25,177 @@ from iqmapper import run
 run()
 ```
 
-The sidebar opens. In order:
+The sidebar opens. In section **1. Hardware**:
 
-1. **Vendor** — pick *IBM Quantum* (the provider shipped today).
-2. **Account** — the dropdown lists every credential you saved with
-   `QiskitRuntimeService.save_account(..., name=...)`. This is how you switch
-   between, say, a premium instance and an open one without re-entering
-   anything.
-3. **Load account** — the tool connects through your local credential and
-   lists the backends your instance can access.
-4. **Backend** — pick a device, choose the **ansatz mode** (general-purpose
-   or LUCJ), and click **Connect & Launch**.
+1. **Vendor** — IBM Quantum (the provider shipped today).
+2. **Account** — every credential saved with `QiskitRuntimeService.save_account`
+   is listed; the default credential is used unless a named one is selected.
+3. **Load account** — connects through the credential and lists the backends
+   the instance can access.
+4. **Backend** — select a device and the ansatz mode (general-purpose or
+   LUCJ), then **Connect & Launch**.
 
-The device map appears, and a 14-day calibration history starts loading in the
-background — you'll see a ⏳ note in the Stability section until it finishes
-(everything else is usable immediately).
+The device map appears. A 14-day calibration history loads in the background;
+the Stability section shows a note until it is complete, and everything else is
+available immediately.
 
-![Connect: vendor, account, backend, ansatz](docs/img/sidebar-connect.png)
+<p align="center"><img src="docs/img/sidebar-connect.png" width="420" alt="Hardware section: vendor, account, backend and ansatz mode"></p>
 
 ## 2. Read the map
 
-The main view is the device topology with a live error heatmap:
+The main view is the device topology coloured by a calibration property.
 
-- **Property selector** — switch what the colors mean: readout error, CZ/two-
-  qubit gate error, T1/T2, gate length, and more. Qubit colors and edge colors
-  are set independently.
-- **Hover** any qubit or coupling to see its exact calibrated values.
-- **Colorbars** at the bottom show the scale, with the device **median**
-  marked — an instant sense of "is this qubit better or worse than typical".
-- Light = good, dark = high error (with the default palette; you can restyle
-  everything from the color picker).
+- **Property selectors** — one for qubits, one for couplers: readout error,
+  two-qubit gate error, T1, T2, gate length and the other properties the
+  backend reports. Only properties with values on the connected device are
+  listed.
+- **Hover** a qubit or coupler for its calibrated values. A missing value reads
+  "no data".
+- **Colour bars** show the scale with the device median marked.
+- With the default palette, light means low error and dark means high error;
+  the palette can be changed in **3. Colors**.
 
-![Hover a qubit to see its calibrated values](docs/img/heatmap-hover.png)
+<p align="center"><img src="docs/img/heatmap-hover.png" width="720" alt="Calibration map with a qubit's values shown on hover"></p>
 
 ## 3. Place a layout
 
-Two ways:
+- **By hand** — click qubits on the map to add them to, or remove them from,
+  the current circuit. In LUCJ mode each qubit takes a role (α chain, β chain
+  or ancilla bridge), shown in a distinct colour.
+- **Automatically (LUCJ mode)** — set the number of spatial orbitals and
+  select **Generate LUCJ Layout**. The search tries every ancilla count,
+  scores each candidate on the current calibration, places the best one and
+  lists the others in the **Layout** dropdown, ranked by LQS. Each entry ends
+  with its origin: `E` (exhaustive search), `G` (guided search) or `E+G` (both).
 
-- **By hand** — click qubits on the map to add/remove them from the current
-  circuit's layout. In LUCJ mode, qubits get roles (α system / β system /
-  ancilla bridges) with distinct colors.
-- **Auto-place (LUCJ mode)** — **🤖 Generate LUCJ Layout** searches every
-  ancilla count, scores each candidate on the current calibration data, and
-  places the best one; the **Layout** dropdown lists the others, ranked by
-  LQS.
+Several circuits can be placed at once, each in its own colour; undo and redo
+cover every placement action.
 
-Multiple circuits can coexist, each with its own color; undo/redo covers every
-placement action.
+<p align="center"><img src="docs/img/hero.png" width="720" alt="LUCJ layout placed automatically, with chain and ancilla roles"></p>
 
-![Auto-placed LUCJ layout with α/β/ancilla roles](docs/img/hero.png)
+## 4. Score and compare
 
-## 4. Score & compare
+- **Estimated Layout-Quality** (sidebar) gives the layout quality score (LQS) of
+  each placed circuit: a product of readout and two-qubit gate fidelities over
+  exactly the qubits and couplers the circuit uses, with the qubit and coupler
+  counts beside it. The definition is in the
+  [user guide](docs/user-guide.md#lqs).
+- **Rankings** (Error tab, Analysis) order qubits and couplers by error.
 
-- **LQS (Layout-Quality Score)** — the **Estimated Layout-Quality** box in the
-  sidebar gives an error-aware fidelity estimate for each placed circuit,
-  computed from the readout and two-qubit errors of exactly the qubits and
-  couplings you're using. Use it to compare candidate layouts *before*
-  spending QPU time.
-- **Rankings** — **🔍 Error → Analysis** ranks qubits and gates by error
-  (🏆 Qubit Ranking, 🔗 Gate Ranking).
+The score is intended for comparing layouts on the same processor; differences
+between layouts are meaningful, the absolute value is not a fidelity
+prediction.
 
-The score is a first-order, *relative* heuristic — treat differences between
-layouts as meaningful, not the absolute number.
+<p align="center"><img src="docs/img/app-view.png" width="720" alt="Layout editor with the Estimated Layout-Quality panel"></p>
 
-![Layout editor with LQS score](docs/img/app-view.png)
+## 5. Calibration history
 
-## 5. Travel in time
-
-The **Time** panel changes *which calibration snapshot* the whole map shows:
+The **Calibration** section selects which calibration the map shows:
 
 - **Live** — the current calibration (default).
-- **Snapshot** — a specific past date/time.
-- **Intraday** — scan one day and slide through its calibration updates.
-- **Multi-day** — fetch a date range and slide day by day.
+- **Snapshot** — a chosen past date and time.
+- **Intraday** — one day, with a slider over its calibration updates.
+- **Multi-day** — a date range, with a slider over the days.
 
-Turn on **delta mode** to color the map by *change* relative to a reference
-(e.g. "previous snapshot"): blue improved, red degraded. This is the fastest
-way to see what drifted overnight — and whether yesterday's chosen qubits are
-still the right ones today.
+**Delta** colours the map by the change relative to a reference calibration
+(the first of the sequence, or the previous one): blue improved, red degraded.
+It shows at a glance what has drifted since the layout was chosen.
 
-![Delta view: blue improved, red degraded](docs/img/delta-view.png)
+<p align="center"><img src="docs/img/delta-view.png" width="600" alt="Delta view: blue improved, red degraded"></p>
 
-## 6. Check stability
+## 6. Stability check
 
-In the sidebar card **⚠️ Stability check**, tick **⚠️ Enable Stability check**
-and pick a window
-(7 / 14 / 30 days). For the qubits and couplings of your placed layout, the
-tool analyses the cached history and flags which elements are *stable* and
-which are *volatile* — because the best qubit today is not always the best
-qubit tomorrow. If you selected 30 days but only 14 are fetched, the header
-tells you (fetch more from the Time panel's Multi-day mode).
+In the **Stability check** card, enable the check and select a window of 7, 14
+or 30 days. For the qubits and couplers of the placed layout, the cached
+history is analysed and each element is flagged as stable or volatile. If the
+selected window is longer than the fetched history, the header says so; more
+days can be fetched from the Multi-day mode of the Calibration section.
 
-![Stability check flags volatile qubits](docs/img/stability-report.png)
+The stability filter, in the Auto-LUCJ options, excludes volatile qubits from
+the automatic search.
 
-## 7. Benchmark the live device (optional)
+<p align="center"><img src="docs/img/stability-report.png" width="720" alt="Stability report over a 14-day window"></p>
 
-Everything so far has ranked layouts on the calibration IBM *reported* — good
-numbers, but up to a day old. Sidebar section **5. Benchmark** measures the
-hardware right now instead.
+## 7. Several circuits and several processors
 
-It needs one extra install (`pip install "i-qmapper[benchmark]"`); without it
-the section shows the install hint and stays disabled.
+With **4. Multi-Programming** enabled, the Auto-LUCJ panel gains a **Multi**
+tab:
 
-1. Pick **Targets** — what to measure:
-   - **Current layout(s)** — every qubit placed on the map, across all circuit
-     slots, however it got there. The default when something is placed.
-   - **Sweep candidates (top-K)** — the last sweep's best candidates. Offered
-     only once a sweep has run.
-   - **Whole QPU** — the entire device.
-   - **Custom** — type a qubit list, same format as the paste box.
-2. Pick a **Level**. Start with **1 Quick readout** — seconds, and its cost does
-   not grow with the number of qubits, so `Whole QPU` x Level 1 is a cheap way
-   to refresh the readout heatmap across the whole device. **2 Targeted** adds
-   two-qubit randomized benchmarking on the target edges (tens of seconds, and
-   this one does scale with edges). **3 Full chip** takes about four minutes.
-3. Read the summary line before clicking. It tells you how many qubits and
-   edges will be measured, the estimated QPU time, and the plan it detected.
-4. On the Open plan (or when the plan cannot be detected) Level 2 warns you and
-   Level 3 requires you to tick **I understand this uses QPU time**.
-5. Click **📡 Run benchmark**.
+- Enter the orbital counts of the circuits, e.g. `8, 8, 6`, and a **Buffer**
+  of idle qubits to keep between them, then **Generate Multi-Circuit**. The
+  circuits are planned together; the **Plans** dropdown lists the best
+  complete plans and places all circuits of the selected one.
+- **Scan batch on all QPUs** plans the same circuits on every accessible
+  backend with that backend's own calibration and ranks the results;
+  **Open on QPU 2** connects the selected backend as a second processor and
+  places the plan on it.
 
-After the run, a consistency line compares what was measured with what the
-backend reported. A ratio near ×1 means the two agree. A ratio far from ×1
-across many elements is an estimator mismatch rather than drift, and the values
-are applied in *relative mode* — rescaled to the reported median, so the
-outliers (a collapsed coupler reading 10× its neighbours) stay visible while the
-absolute level is not trusted. **Apply absolute values** overrides this. Use
-**Calibration check** to find out whether an offset comes from the estimator or
-from crosstalk.
+The single-circuit equivalent, **Scan all QPUs**, is in the **Single** tab.
+Details of the planner and the scans are in the
+[user guide](docs/user-guide.md#multi-circuit-planner).
 
-In inter-QPU mode a **QPU 1 | QPU 2** selector appears above Targets. Everything
-then applies to the selected device — including layouts handed over from a scan,
-which show up under **Current layout(s)** on QPU 2.
+<p align="center"><img src="docs/img/multi-circuit.png" width="720" alt="Two circuits placed jointly on one processor"></p>
 
-When it finishes, the calibration label changes to `measured HH:MM (L2, 38q/44e)`
-and the candidate dropdown re-ranks under the fresh numbers — a layout that
-looked best this morning may not be best now, which is the whole point. Only the
-elements actually measured are updated; the rest keep their reported values. If
-an individual fit fails, that element keeps its reported value and the notices
-bar says so.
+## 8. Benchmark the device
 
-Re-running the sweep within the hour? The section offers **Reuse** for the last
-measurement instead of spending the QPU time again.
+The sections above rank layouts on the calibration the provider reports,
+which can be up to a day old. Section **5. Benchmark** measures the hardware
+now. It requires the `benchmark` extra (`pip install "i-qmapper[benchmark]"`);
+without it the section shows the install hint and stays disabled.
 
-Nothing here is automatic: no benchmark runs on connect, on a timer, or during a
-multi-QPU scan.
+1. **Targets** — the current layouts (every circuit slot), the last search's
+   best candidates, the whole QPU, or a typed list of qubits.
+2. **Level** — 1 measures readout only (seconds; its cost does not grow with
+   the number of qubits), 2 adds two-qubit randomized benchmarking on the
+   target couplers, 3 measures the whole processor including coherence times
+   (about four minutes).
+3. The summary line states how many qubits and couplers will be measured, the
+   estimated QPU time and the detected plan. On the Open plan, Level 2 warns
+   and Level 3 requires an explicit acknowledgement.
+4. **Run benchmark**.
 
-## 8. Import & export
+When the run completes, the calibration label changes to the measured epoch,
+e.g. `measured 14:32 (L2, 38q/44e)`, and the map, the LQS and the candidate
+list use the measured values for the elements that were measured; all other
+elements keep their reported values. A consistency line compares the
+measurement with the reported calibration; a systematic offset is handled in
+relative mode, and **Calibration check** distinguishes an estimator offset from
+crosstalk. See [benchmark.md](docs/benchmark.md).
 
-From **📁 I/O → 📤 Export**:
+Nothing runs automatically: no benchmark starts on connect, on a timer or
+during a scan.
 
-- **Layout JSON** — export your layouts (including LUCJ role partitions) and
-  re-import them later or on another backend.
-- **Import** — accepts layout `.json`, `.npy` (a plain array of qubit
-  indices), and QPY circuits.
-- **PNG** — publication-ready snapshot of the current view, with legend and
-  colorbars (requires the `[png]` extra).
-- **Time-lapse** — after fetching history (intraday or multi-day), export an
-  animated GIF/MP4 of the calibration evolving (requires the `[timelapse]`
+<p align="center"><img src="docs/img/benchmark.png" width="420" alt="Benchmark section: targets, level, cost estimate and run"></p>
+
+## 9. Import, export and sessions
+
+From the **I/O** section:
+
+- **Layout JSON** — export the placed layouts, including LUCJ roles, and
+  re-import them later or on another backend. Import also accepts `.npy`
+  arrays of qubit indices and QPY circuits.
+- **PNG** — the current view with legend and colour bars (requires the `png`
   extra).
-- **Qiskit code** — generate ready-to-run code that applies your chosen
-  layout, so the decision you made here travels into your actual workflow.
+- **Time-lapse** — after fetching intraday or multi-day history, an animated
+  GIF or MP4 of the calibration over time (requires the `timelapse` extra).
+- **Qiskit code** — code that applies the chosen layout in a Qiskit workflow.
+- **Export Session / Load Session** — the whole state (layouts, colours, zoom,
+  backend context) in one file, to resume later or to share. Style presets can
+  be saved and reused independently of sessions.
 
-![Publication-ready PNG export with legend](docs/img/hero.png)
-
-## 9. Save your session
-
-**Session save/restore** captures everything — layouts, colors, zoom, the
-backend context — into a single file, so you can close the notebook and pick
-up exactly where you left off, or share a session file with a colleague.
-Style presets (palettes, color settings) can be saved and reused
-independently of sessions.
-
-> Any message in the interface that ends with `· README: <name>` has a
-> fuller explanation under **Understanding the messages** in the README.
+Messages in the interface that end with `· Guide: <entry>` refer to the entry of
+that name in the [user guide](docs/user-guide.md).
 
 ## 10. Where your data lives
 
-| What | Where |
+| Data | Location |
 |---|---|
 | Calibration cache | macOS `~/Library/Caches/iqmapper` · Linux `~/.cache/iqmapper` (or `$XDG_CACHE_HOME/iqmapper`) · Windows `%LOCALAPPDATA%\iqmapper\Cache` |
-| Cache override | Set `IQMAPPER_CACHE_DIR` before launching to relocate it |
-| Sessions & style presets | `.iqmapper_sessions/` inside the directory your notebook runs from |
-| IBM credentials | **Not stored by I-QMapper.** They live in your own `qiskit-ibm-runtime` account store (`~/.qiskit/qiskit-ibm.json`) |
+| Cache override | environment variable `IQMAPPER_CACHE_DIR`, set before launching |
+| Log file | `iqmapper.log` in the user log directory (e.g. `~/Library/Logs/iqmapper` on macOS) |
+| Sessions and style presets | `.iqmapper_sessions/` in the directory the notebook runs from |
+| IBM credentials | Not stored by I-QMapper; they live in the `qiskit-ibm-runtime` account store (`~/.qiskit/qiskit-ibm.json`) |
 
-The cache exists so that time travel, delta views, and stability analysis cost
-no repeated API calls. It is safe to delete at any time — the tool recreates
-it and refetches on demand.
+The cache is what makes history, delta views and the stability check free of
+repeated API calls. It can be deleted at any time; the tool recreates it on
+demand.
