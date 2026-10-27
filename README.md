@@ -13,8 +13,6 @@ where they are expected to run best. Every placement decision is visible and
 reproducible: the device, its calibration history and the candidate layouts are
 shown in one view, and each candidate is ranked by an explicit quality score.
 
-![LUCJ layout placed automatically on a 156-qubit IBM Heron processor](docs/img/hero.png)
-
 ## Installation
 
 ```bash
@@ -92,12 +90,6 @@ A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
 | `CHANGELOG.md` | Release history |
 
 A module-by-module description is in [CODE_OVERVIEW.md](CODE_OVERVIEW.md).
-
-## Related project
-
-| Project | Purpose |
-|---|---|
-| [ewf-geom-opt](https://github.com/MIQuLab/ewf-geom-opt) | Geometry optimisation with embedded wavefunction (EWF) energies, including quantum sampling of the fragment problems; I-QMapper selects the qubit layouts on which those circuits run |
 
 ## Supported processors
 
