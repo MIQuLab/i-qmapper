@@ -4,8 +4,6 @@ Interactive, calibration-aware qubit layout selection for IBM Quantum processors
 
 [![tests](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml/badge.svg)](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/i-qmapper.svg)](https://pypi.org/project/i-qmapper/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
 
 I-QMapper is a Jupyter application that displays a quantum processor's calibration
@@ -81,6 +79,26 @@ A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
 | **On-device benchmarking** (optional) | Re-measurement of readout, gate errors and coherence on the chosen qubits, fed back into the map and the ranking as a separate calibration epoch. Never automatic; cost shown before the run. |
 | **Import and export** | Layouts from JSON, `.npy` or QPY; export to PNG, GIF/MP4, JSON, Qiskit code and full session files. |
 
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `iqmapper/` | The application: connection and calibration cache, device map, layout search engines, scoring, benchmarking, session state |
+| `iqmapper/ui/` | The Jupyter interface (ipywidgets panels) |
+| `iqmapper/export/` | Layout quality score, layout import/export, code generation, PNG export |
+| `tests/` | Offline test suite; no IBM account required |
+| `docs/` | User guide, benchmarking and development documentation |
+| `TUTORIAL.md` | Step-by-step walkthrough |
+| `CHANGELOG.md` | Release history |
+
+A module-by-module description is in [CODE_OVERVIEW.md](CODE_OVERVIEW.md).
+
+## Related project
+
+| Project | Purpose |
+|---|---|
+| [ewf-geom-opt](https://github.com/MIQuLab/ewf-geom-opt) | Geometry optimisation with embedded wavefunction (EWF) energies, including quantum sampling of the fragment problems; I-QMapper selects the qubit layouts on which those circuits run |
+
 ## Supported processors
 
 The device map covers the 156-qubit IBM Heron (r2, r3) and the 120-qubit IBM
@@ -99,20 +117,19 @@ not supported and are not searched.
 
 If you use I-QMapper in your research, please cite:
 
-> M. Bazayeva and K. M. Merz Jr., *I-QMapper: Error-Aware Layout Optimization and
-> Device Diagnostics for NISQ Hardware*, [arXiv:2606.27508](https://arxiv.org/abs/2606.27508).
+> M. Bazayeva, K. M. Merz Jr., *I-QMapper: Error-Aware Layout Optimization and
+> Device Diagnostics for NISQ Hardware*, arXiv:2606.27508 (2026).
+> https://arxiv.org/abs/2606.27508
 
-A machine-readable citation is in [CITATION.cff](CITATION.cff).
+### Works used
 
-## License and acknowledgements
+1. M. Motta, K. J. Sung, K. B. Whaley, M. Head-Gordon, J. Shee, *Chem. Sci.*
+   **14**, 11213 (2023). The LUCJ ansatz.
+2. P. D. Nation, M. Treinish, *PRX Quantum* **4**, 010327 (2023). Cost function
+   followed by the layout quality score (mapomatic).
+3. K. J. Sung *et al.*, arXiv:2605.03123 (2026). The LUCJ layout scorer was
+   adapted from code now part of [ffsim](https://github.com/qiskit-community/ffsim).
 
-I-QMapper is released under the [Apache License 2.0](LICENSE); see also
-[NOTICE](NOTICE).
+## License
 
-The LUCJ layout scorer was adapted from IBM code now part of
-[ffsim](https://github.com/qiskit-community/ffsim) (Sung *et al.*,
-[arXiv:2605.03123](https://arxiv.org/abs/2605.03123)). The layout quality
-estimator follows the cost function of
-[mapomatic](https://github.com/qiskit-community/mapomatic) (Nation and Treinish,
-*PRX Quantum* **4**, 010327, 2023). The LUCJ ansatz is due to Motta *et al.*,
-*Chem. Sci.* **14**, 11213 (2023), [doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
+Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
