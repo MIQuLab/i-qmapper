@@ -58,6 +58,8 @@ def _k_cap_phrase(norb, k_effective):
 #: is expected and needs no action, so they go to the log file only.
 _LOG_ONLY_NOTICES = (
     'Requested %d bridges does not fit on this backend',
+    # data.extract_props, when a scanned backend's snapshot is cached.
+    '%s: %d of %d %s without a value',
 )
 
 

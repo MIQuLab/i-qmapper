@@ -86,6 +86,9 @@ class MapperUIBuilder:
         #   mutator contract — do not "fix" it.
         self._loading_device = False
         self._switching_backend = [False]
+        # Backend whose per-chip search defaults are applied; a reload of the
+        # same backend (date / hour change) keeps the user's choices.
+        self._defaults_backend = None
 
     def build(self, return_widgets=False):
         """Run the full UI construction pipeline.
@@ -2852,6 +2855,7 @@ class MapperUIBuilder:
                 prefetched_props=self.state.initial_props)
             self.state.x_coord, self.state.y_coord, self.state.edges_list = result[0], result[1], result[2]
             self.state.qubit_ids, self.state.readout_errors, self.state.gate_errors = result[3], result[4], result[5]
+            self._apply_backend_defaults()
 
             self.state.clear_all_layouts()
 
@@ -2904,6 +2908,21 @@ class MapperUIBuilder:
             self._refresh()
         finally:
             self._loading_device = False
+
+    def _apply_backend_defaults(self):
+        """Set the per-chip search defaults once per connected backend.
+
+        Diverse enumeration is ON for heavy-hex chips and OFF for the
+        square-lattice Nighthawk, where the exhaustive search finds so many
+        layouts that the sieve costs minutes for about 1% LQS. A manual
+        toggle holds until another backend is connected.
+        """
+        name = self.state.active_backend_name
+        if name == self._defaults_backend:
+            return
+        self._defaults_backend = name
+        chip = str(self.state.active_chip or '').lower()
+        self.chk_diverse_cap.value = not chip.startswith('nighthawk')
 
     def _update_view(self, change=None):
         """Switch the visible content panel based on ``self.nav_bar.value``.

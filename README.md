@@ -1,559 +1,118 @@
 # I-QMapper
 
-**Interactive, noise-aware qubit layout selection for IBM Quantum hardware — see your device, understand its errors, and place your circuit where it will actually run well.**
+Interactive, calibration-aware qubit layout selection for IBM Quantum processors.
 
 [![tests](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml/badge.svg)](https://github.com/MIQuLab/i-qmapper/actions/workflows/tests.yml)
+[![PyPI](https://img.shields.io/pypi/v/i-qmapper.svg)](https://pypi.org/project/i-qmapper/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-green.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-2606.27508-b31b1b.svg)](https://arxiv.org/abs/2606.27508)
 
-I-QMapper is presented in the paper *I-QMapper: Error-Aware Layout Optimization and
-Device Diagnostics for NISQ Hardware* (Bazayeva & Merz,
-[arXiv:2606.27508](https://arxiv.org/abs/2606.27508)). 
+I-QMapper is a Jupyter application that displays a quantum processor's calibration
+data on its physical topology, tracks how that data changes over time, and places
+circuits — in particular the LUCJ ansatz used in quantum chemistry — on the qubits
+where they are expected to run best. Every placement decision is visible and
+reproducible: the device, its calibration history and the candidate layouts are
+shown in one view, and each candidate is ranked by an explicit quality score.
 
-![I-QMapper — auto-placed LUCJ layout with role legend on an IBM Heron device](docs/img/hero.png)
-
-**Contents:**
-[Why](#why) ·
-[Features](#features) ·
-[Requirements](#requirements) ·
-[Installation](#installation) ·
-[Set up your IBM Quantum account](#set-up-your-ibm-quantum-account) ·
-[Quickstart](#quickstart) ·
-[Tutorial](TUTORIAL.md) ·
-[How it works](#how-it-works) ·
-[Extending to other vendors](#extending-to-other-vendors) ·
-[Project layout](#project-layout) ·
-[Limitations](#limitations--caveats) ·
-[License & Citing](#license-credits--citing)
-
----
-
-## Why
-
-On NISQ hardware, *where* you place a circuit matters as much as *what* you run:
-gate errors, readout errors, and coherence times vary across the chip and **drift
-over time**. Today you either eyeball calibration tables by hand or trust an
-automated layout pipeline you can't see into. I-QMapper closes that gap: an
-interactive Jupyter tool where the device, its calibration data, its history, and
-your layout live in one view — so every placement decision is **visible,
-inspectable, and reproducible**.
-
-## Features
-
-- 🗺️ **Live error heatmaps** on the real device topology — readout, CZ error,
-  coherence, and more, straight from current calibration data.
-- 🕰️ **Time travel** — intraday snapshots, multi-day history, and **delta views**
-  that show what drifted since yesterday (or since any reference you pick).
-- 📈 **Stability Check** — don't just pick the best qubits *today*; see which
-  qubits *stay* good across a 7/14/30-day window.
-- 🎯 **Two operating modes** — a general-purpose mode for arbitrary circuits, and
-  a dedicated mode for the **LUCJ ansatz** (quantum chemistry), with one-click
-  auto-placement.
-- 🏆 **Layout scoring & ranking (LQS)** — an error-aware quality score to compare
-  candidate layouts before spending QPU time.
-- 📦 **Import & export** — import layouts from JSON / `.npy` / QPY; export
-  publication-ready PNGs, time-lapse GIF/MP4 of calibration
-  history, full session save/restore, and generated Qiskit code for your chosen
-  layout.
-- 📡 **Real-time benchmarking (optional)** — re-measure your candidate qubits and
-  edges on the live device and re-rank against what the hardware is doing *now*,
-  not what it reported this morning. Opt-in, tiered and costed up front; see
-  [Real-time benchmarking](#real-time-benchmarking-optional).
-- 🔒 **Local-first** — your IBM Quantum credentials never leave your machine; the
-  tool talks to IBM through your own locally saved `QiskitRuntimeService` account.
-
-## Requirements
-
-- Python **3.10+**
-- An IBM backend with a **156-qubit Heron** (r2, r3) or a **120-qubit Nighthawk**
-  processor — the chips the map has a layout for. Other chips appear in the
-  multi-QPU scans as "not supported".
-- An [IBM Quantum](https://quantum.ibm.com) account with a saved
-  `QiskitRuntimeService` credential (see
-  [Set up your IBM Quantum account](#set-up-your-ibm-quantum-account))
-- JupyterLab or Jupyter Notebook
+![LUCJ layout placed automatically on a 156-qubit IBM Heron processor](docs/img/hero.png)
 
 ## Installation
-
-Install from [PyPI](https://pypi.org/project/i-qmapper/):
 
 ```bash
 pip install i-qmapper
 ```
 
-Optional extras, combinable (e.g. `"i-qmapper[png,timelapse]"`):
+| Extra | Adds | Install |
+|---|---|---|
+| `png` | PNG export of the map (kaleido) | `pip install "i-qmapper[png]"` |
+| `timelapse` | GIF/MP4 export of calibration history | `pip install "i-qmapper[timelapse]"` |
+| `benchmark` | On-device benchmarking (qiskit-experiments) | `pip install "i-qmapper[benchmark]"` |
 
-```bash
-pip install "i-qmapper[png]"         # publication PNG export (kaleido)
-pip install "i-qmapper[timelapse]"   # time-lapse GIF/MP4 export (imageio, imageio-ffmpeg)
-pip install "i-qmapper[benchmark]"   # real-time benchmarking (qiskit-experiments)
-```
+Extras can be combined, e.g. `"i-qmapper[png,benchmark]"`.
 
-### From source (development)
-
-```bash
-git clone https://github.com/MIQuLab/i-qmapper
-cd i-qmapper
-pip install -e ".[dev]"
-pytest -q
-```
-
-## Set up your IBM Quantum account
-
-I-QMapper uses the credentials you save locally with `qiskit-ibm-runtime` —
-it never asks for, stores, or transmits your token itself. One-time setup:
+Requirements: Python 3.10 or later, JupyterLab or Jupyter Notebook, and an
+[IBM Quantum](https://quantum.ibm.com) account whose credential is saved locally
+with `qiskit-ibm-runtime`:
 
 ```python
 from qiskit_ibm_runtime import QiskitRuntimeService
-
-QiskitRuntimeService.save_account(
-    channel='ibm_quantum_platform',
-    token='YOUR_TOKEN',
-    instance='YOUR_CRN',
-    set_as_default=True,    # make this your default credential
-    overwrite=True,
-)
+QiskitRuntimeService.save_account(channel="ibm_quantum_platform",
+                                  token="YOUR_TOKEN", instance="YOUR_CRN",
+                                  set_as_default=True, overwrite=True)
 ```
 
-Find your token and instance CRN on the
-[IBM Quantum Platform](https://quantum.ibm.com) dashboard.
+I-QMapper reads this credential through `qiskit-ibm-runtime`; it does not store or
+transmit the token itself. Several credentials can be saved under different
+`name=` values and selected from the application.
 
-**Multiple accounts / instances.** You can save one credential as your
-**default** and give the others a `name=` — for example a premium instance as
-the default, and another instance (e.g. a local QPU) you switch to on demand:
-
-```python
-# premium instance — saved as the default (used when no name is selected)
-QiskitRuntimeService.save_account(
-    channel='ibm_quantum_platform',
-    token='YOUR_TOKEN',
-    instance='PREMIUM_CRN',
-    set_as_default=True,
-    overwrite=True,
-)
-
-# another instance (e.g. a local QPU) — saved under a name, picked explicitly
-QiskitRuntimeService.save_account(
-    channel='ibm_quantum_platform',
-    token='YOUR_TOKEN',
-    instance='OTHER_CRN',
-    name='my_backend',
-    overwrite=True,
-)
-```
-
-In I-QMapper's **account selector**, the default credential is used unless
-you pick a named one — switch between them anytime without re-entering
-anything.
-
-## Quickstart
-
-In a notebook cell:
+## Quick start
 
 ```python
 from iqmapper import run
 run()
 ```
 
-This opens the sidebar UI. Pick **IBM Quantum**, choose your saved account, pick
-a backend, select the ansatz mode, and click **Connect & Launch**. From there
-you can place qubits by hand, auto-place a LUCJ layout, compare candidates by
-score, inspect calibration history, and export everything you see.
+1. In the sidebar, select the account and the backend, then **Connect & Launch**.
+2. The map shows the processor with the selected calibration property as a
+   colour scale; hover a qubit or coupler for its values.
+3. Choose the LUCJ mode and the number of spatial orbitals, then **Generate LUCJ
+   Layout**. The candidates are listed with their quality score (LQS) and drawn
+   on the map; the Estimated Layout-Quality panel gives the score of the
+   current layout.
+4. Use the calibration section to view earlier calibrations and the change
+   since a chosen reference, and the stability check to see which qubits have
+   remained reliable over the last 7, 14 or 30 days.
+5. Export the layout as JSON, Qiskit code, PNG, or save the whole session.
 
-**New here? Follow the step-by-step [Tutorial](TUTORIAL.md).**
+A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
 
-| ![Live error heatmap](docs/img/heatmap.png) | ![Delta view — calibration drift](docs/img/delta-view.png) |
-|:--:|:--:|
-| *Live error heatmap* | *Delta view: what drifted since the reference* |
-| ![Stability check](docs/img/stability-report.png) | ![The app](docs/img/app-view.png) |
-| *Stability check over a 14-day window* | *The full editor: layout, scoring, controls* |
+## Capabilities
 
-## How it works
-
-<details>
-<summary><b>Architecture in one paragraph</b> — click to expand</summary>
-<br>
-
-The Python kernel is the auth and data layer: calibration data is fetched through
-your locally saved IBM account, cached per-user on disk, and rendered with Plotly
-inside ipywidgets panels. Every analysis (scoring, stability, delta) runs on the
-cached snapshots — so browsing history and comparing layouts costs no QPU time
-and no extra API calls. For a module-by-module tour, see
-[CODE_OVERVIEW.md](CODE_OVERVIEW.md).
-
-**Where your data lives:**
-
-| What | Where |
+| | |
 |---|---|
-| Calibration cache | macOS `~/Library/Caches/iqmapper` · Linux `~/.cache/iqmapper` (or `$XDG_CACHE_HOME/iqmapper`) · Windows `%LOCALAPPDATA%\iqmapper\Cache` |
-| Cache override | Set the `IQMAPPER_CACHE_DIR` environment variable to relocate it |
-| Sessions & style presets | `.iqmapper_sessions/` inside the directory your notebook runs from |
+| **Calibration map** | Readout error, two-qubit gate error, T1, T2 and the other reported properties on the device topology, for the current calibration or any cached earlier one. |
+| **History and drift** | Intraday snapshots, multi-day history, and difference views against a chosen reference calibration. |
+| **Stability check** | Per-qubit reliability across a 7-, 14- or 30-day window, used to exclude qubits that score well today but drift. |
+| **Layout quality score (LQS)** | A product-form estimate built from readout and two-qubit gate errors of the qubits and couplers a circuit uses. Used to rank candidates before any QPU time is spent. |
+| **Automatic LUCJ placement** | An exhaustive subgraph search and a calibration-guided search run together; for every ancilla count the best candidates of both are kept. |
+| **Several circuits on one processor** | Joint placement of multiple circuits with a configurable buffer between them; complete plans are ranked by their combined score. |
+| **Several processors** | The same search on every accessible backend, ranked, with a one-step transfer of a layout to a second processor. |
+| **On-device benchmarking** (optional) | Re-measurement of readout, gate errors and coherence on the chosen qubits, fed back into the map and the ranking as a separate calibration epoch. Never automatic; cost shown before the run. |
+| **Import and export** | Layouts from JSON, `.npy` or QPY; export to PNG, GIF/MP4, JSON, Qiskit code and full session files. |
 
-The cache is safe to delete at any time — the tool recreates it and refetches
-on demand. Your IBM credentials are **not** stored by I-QMapper at all; they
-live in your own `qiskit-ibm-runtime` account store.
+## Supported processors
 
-</details>
+The device map covers the 156-qubit IBM Heron (r2, r3) and the 120-qubit IBM
+Nighthawk processors. Other backends are listed in the multi-processor scans as
+not supported and are not searched.
 
-## Real-time benchmarking (optional)
+## Documentation
 
-I-QMapper normally ranks layouts on the calibration IBM *reports*, which is
-refreshed about once a day. Qubits drift inside that window, so a layout chosen
-at 14:00 can sit on a qubit that degraded at 11:00. The Benchmark section
-re-measures the hardware and feeds the result back as a "measured"
-calibration epoch — the heatmap, LQS, candidate ranking and exports all read it
-exactly as they read the reported one.
+- [Tutorial](TUTORIAL.md) — from launch to an exported layout.
+- [User guide](https://github.com/MIQuLab/i-qmapper/blob/main/docs/user-guide.md) — settings, search options, messages, and the definition of the quality score.
+- [Benchmarking](https://github.com/MIQuLab/i-qmapper/blob/main/docs/benchmark.md) — levels, cost, and how measured values are reconciled with the reported calibration.
+- [Development](https://github.com/MIQuLab/i-qmapper/blob/main/docs/development.md) — architecture, data locations, tests, and adding a vendor.
+- [Changelog](CHANGELOG.md)
 
-It lives in the sidebar as **5. Benchmark** — beside Hardware rather than inside
-the Auto search, because benchmarking is a property of the backend: it serves
-hand-placed layouts as readily as swept ones, every circuit slot, the whole QPU,
-and the second panel in inter-QPU mode.
+## Citing
 
-Install the extra first:
+If you use I-QMapper in your research, please cite:
 
-```bash
-pip install "i-qmapper[benchmark]"
-```
+> M. Bazayeva and K. M. Merz Jr., *I-QMapper: Error-Aware Layout Optimization and
+> Device Diagnostics for NISQ Hardware*, [arXiv:2606.27508](https://arxiv.org/abs/2606.27508).
 
-Three levels, each measuring only what it needs to:
+A machine-readable citation is in [CITATION.cff](CITATION.cff).
 
-| Level | What it measures | Scope | Rough QPU cost |
-|-------|------------------|-------|----------------|
-| **1 Quick readout** | Readout assignment error | Candidate qubits | Seconds |
-| **2 Targeted** | Level 1 + two-qubit RB | Candidate qubits and edges | Tens of seconds |
-| **3 Full chip** | T1, T2 (Hahn), readout, 1Q RB, 2Q RB | Whole device | ~4 minutes |
+## License and acknowledgements
 
-Pick what to measure with **Targets**: the currently placed layout(s) across
-every circuit slot, the last sweep's top candidates, the whole QPU, or an
-explicit qubit list. Levels 1 and 2 are targeted, which is why they are cheap;
-Level 3 reproduces the full-chip suite from IBM's "Real-time benchmarking for
-qubit selection" tutorial.
+I-QMapper is released under the [Apache License 2.0](LICENSE); see also
+[NOTICE](NOTICE).
 
-Worth knowing: **Level 1 does not get more expensive as you measure more
-qubits** — readout is two circuits whatever the width — so `Whole QPU` x Level 1
-is the cheap way to refresh the readout heatmap across the device. Levels 2 and
-3 scale with the number of edges and are not cheap.
-
-In inter-QPU mode a **QPU 1 | QPU 2** selector appears; everything — targets,
-cost, run, the resulting epoch and its cache file — then applies to whichever
-device is selected.
-
-**It is never automatic.** Nothing benchmarks on connect, on a timer, or inside
-the multi-QPU scan. A run happens only when you click **Run benchmark**, and the
-estimated cost is on screen before you can click it.
-
-**Mind your plan.** The cost estimates are wall-clock QPU seconds, and on an
-Open-plan account a Level 3 run can consume a large part of a monthly
-allowance. I-QMapper detects your plan where it can and assumes the Open plan
-when it cannot, so Level 2 warns and Level 3 requires an explicit
-acknowledgement. The estimate itself is calibrated from a single published
-figure — treat it as the right order of magnitude, not a quote.
-
-### Trusting the numbers
-
-Randomized benchmarking and the provider's calibration are *different
-estimators* of the same quantity. A two-qubit Clifford contains roughly 1.5
-two-qubit gates and 8-10 single-qubit ones, so the RB analysis is given the
-measured single-qubit error rates and subtracts them; without that step the
-single-qubit error lands on the two-qubit gate and every edge reads a few times
-worse than reported.
-
-After every run I-QMapper compares the measured values with the reported ones
-per property and says what it found: "✅ Benchmark applied — measured values
-are in line with IBM's reported calibration.", or that some properties "differ
-by a constant factor (×1.3) and are shown on IBM's scale"; the figures are in
-the **Details** table. If a property's median is more than 2× away in either
-direction, that is a systematic offset rather than drift — a whole chip does not
-degrade uniformly overnight — and the epoch is applied in **relative mode**:
-each value is rescaled so the median matches the reported one, which removes the
-offset while preserving every per-element ratio. Tick **Apply absolute values**
-to use the raw numbers instead.
-
-This matters because the point of benchmarking is the **outliers**: a coupler
-that has collapsed since the last calibration shows up as 10× worse than its
-neighbours, and that signal survives rescaling intact. The absolute level is
-what you should not read too closely.
-
-**Calibration check** runs a handful of edges twice — once with the pairs
-driven in parallel, once one at a time — and prints both against the reported
-values. If both come back offset it is the estimator; if only the parallel run
-is offset it is crosstalk between simultaneously driven pairs.
-
-A run reports what it actually measured: `measured 156/156 qubits` when complete,
-`⚠ partial` when some elements failed to fit, and "⚠ Nothing usable was
-measured — IBM's reported calibration is still in use." when nothing came back. A rejected or failed job shows IBM's
-own error text and the job ids. Nothing is ever labelled "measured" unless it was.
-
-Measured values replace reported ones only for the elements actually measured;
-everything else keeps its reported value, and the calibration label tells you
-which epoch you are looking at. Any experiment or fit that fails falls back to
-the reported value for that element with a notice, never a crash.
-
-## Understanding the messages
-
-The interface says what happened and what to do; the explanations live here.
-Tooltips that end with `· README: <name>` point at the matching entry below.
-Technical messages (fallbacks, cap statistics, missing calibration values) go
-to a log file, never under the notebook cell: `iqmapper.log` in the user log
-directory (`platformdirs.user_log_dir("iqmapper")`, e.g. `~/Library/Logs/iqmapper`
-on macOS), each distinct message once per session.
-
-### Search results
-
-A search ends with one line, e.g. `✅ 12 layouts found · scored on live · 20:41`:
-how many layouts the list holds and which calibration scored them. Each entry
-in the list carries its ancilla count, rank, LQS and source.
-
-### Search cap
-
-The exhaustive engine enumerates candidate layouts and stops at this many. On
-a large chip there can be far more layouts than the cap, so it is normally
-reached at low ancilla counts. When it is, the log file records it, and with
-diverse enumeration off a ⚠️ line warns that the ranking may be
-non-exhaustive — raise the cap for a more thorough (slower) search, or leave it
-and rely on diverse enumeration.
-
-### Diverse enumeration
-
-With this on, the cap counts *distinct* candidates. During the search a layout
-that overlaps one already kept by more than 80% of its qubits, and does not
-score better, is discarded without using a slot; one that scores better takes
-its place. Without it the cap fills with near-copies of the first region the
-search finds, and much of a large chip is never looked at. With it, similar
-layouts don't use up the cap, so the sample spreads across the chip. It only
-makes a difference where the cap is actually reached.
-
-### Search engine
-
-One search, two engines, and you get the best of both. The **exhaustive**
-engine lists the layouts that fit the template and only then asks how good
-they are. That is thorough, but at low ancilla counts on a large chip so many
-layouts fit that it stops at the search cap and ranks only a sample. The
-**guided** engine grows each layout on the best-calibrated qubits and polishes
-the finalists. It is never capped, but it is a heuristic and can miss a layout
-the exhaustive engine would find.
-
-For every ancilla count the two shortlists are merged, a layout both engines
-found is listed once, and the usual ranking (LQS) and region-diversity choice
-pick the final list. The best layout is therefore never worse than either
-engine alone. Each entry in the layout list ends with where it came from:
-`· E` exhaustive, `· G` guided, `· E+G` both.
-
-**Guided search** (in Advanced, on by default) runs the guided engine. Turn it
-off to search with the exhaustive engine alone, as 0.0.5 did. **Beam width**
-and **Refine top** tune the guided engine and show only while it is on.
-
-The multi-QPU scan and the stability filter still use the exhaustive engine
-only, and so does the multi-circuit planner with **Fast: one circuit at a
-time** on. The engine comparison (`python -m iqmapper.evaluation`) still
-offers the hybrid engine, guided up to a chosen ancilla count and exhaustive
-above it, to compare against.
-
-### Multi-circuit planner
-
-Several circuits are planned together. Placing them one at a time, each on the
-best region left, is short-sighted: the first circuit can take a region that
-leaves the next one only a poor spot, or none at all. The planner keeps
-several partial plans instead of one. After each circuit it tries
-**Candidates per circuit** layouts (3) on every plan it holds and keeps the
-best **Plans kept** (3) of them. It also builds the one-by-one plan and
-returns whichever is better, so it is never worse — only slower. It searches
-each circuit with the search described under *Search engine*.
-
-When it finishes, `✅ 2 circuits placed · +X% vs one-by-one` compares the two
-plans' totals (the product of each circuit's LQS); the gain is left out when
-there is none. If the joint plan fits more circuits than one-by-one could, it
-says `places 3 vs 2 one-by-one` instead, since a total over more circuits is
-not comparable.
-
-**Plans** lists the best complete plans, every circuit placed, e.g.
-`Plan 1 · total 48.2% · C1 79.2% + C2 61.0%`; picking one places all its
-circuits at once. Under it, each circuit's alternatives list only layouts
-after which every later circuit still fits; the others are counted in one
-line, e.g. `2 alternatives hidden: the other circuits would not fit`.
-
-**Fast: one circuit at a time** (in the Multi tab's Advanced, off by default)
-skips the joint planning and places circuits one by one with the exhaustive
-engine, as 0.0.5 did. **Plans kept**, **Candidates per circuit** and
-**Boundary penalty** show only while it is off.
-
-**Scan batch on all QPUs** places the batch one circuit at a time on every
-backend, since it runs once per QPU and speed matters there. Backends that fit
-the whole batch rank first, by batch total; one that fits only part of it
-reads `ibm_x — 1 of 2 circuits fit`, with no total, and cannot be opened.
-
-**Boundary penalty** matters only at **Buffer qubits: 0**. With a buffer of 1
-or more, two circuits can never touch. At 0 they can sit side by side, and a
-coupler between them carries gates of one circuit next to idle qubits of the
-other: crosstalk the LQS does not model. `shared couplers: 47–48` lists such
-couplers. Each one multiplies the plan's score by `1 − penalty`, so a penalty
-of 0.5 makes the planner prefer a plan without them when one exists; 0 only
-reports them.
-
-### Prefer diverse regions
-
-The top half of each candidate list is always the best-scoring layouts. The
-second half is allowed to prefer layouts on other parts of the chip, so you
-get alternatives rather than five variations on one position. It never demotes
-a better layout.
-
-### Quality floor
-
-Qubits whose readout error is far above the device average are dropped from
-the search before it starts, measured in standard deviations above the mean.
-Set it to 0 to disable. This is about excluding obviously broken qubits, not
-fine-tuning.
-
-### Levels
-
-How much of the device a benchmark measures.
-
-- **1 — readout only.** Two circuits regardless of how many qubits you target,
-  so it costs the same for three qubits as for the whole chip. Seconds.
-- **2 — adds two-qubit gates** on the target edges, plus the single-qubit
-  measurements needed to interpret them. Tens of seconds.
-- **3 — whole chip**: coherence times, readout, single- and two-qubit gates.
-  About four minutes of quantum time.
-
-### Targets
-
-What a benchmark measures: the layouts currently placed on the map, the last
-sweep's best candidates, the whole device, or a list of qubits you type. Level
-1 on the whole device is the cheap way to refresh the readout colours, because
-its cost does not grow with the number of qubits.
-
-### Relative mode
-
-Benchmarking and the provider's calibration are different ways of measuring
-the same thing, and they do not always agree on the absolute scale. After each
-run the measured values are compared with IBM's. If a property's median is
-more than twice IBM's, or less than half, that is treated as a difference of
-method rather than a change in the device — a whole chip does not degrade
-uniformly overnight — and the values are rescaled so their median matches
-IBM's while the differences *between* qubits are kept exactly.
-
-That is what matters in practice: a coupler that has failed still shows up ten
-times worse than its neighbours. Tick **Apply absolute values** to use the raw
-measurements instead, for example when you are investigating the scale itself.
-
-### Calibration check
-
-Measures six edges twice in one session — first with all pairs driven together,
-then one pair at a time — and compares both against IBM's values.
-
-- **Both arms offset the same way** → estimator bias: the analysis is
-  attributing single-qubit error to the two-qubit gate.
-- **Only the parallel arm offset** → crosstalk: driving neighbouring pairs
-  simultaneously is inflating the error.
-- **Both close to IBM's values** → the measurements agree; nothing to correct.
-
-It does not change the calibration in use; it measures the instrument.
-
-### Delta references
-
-In delta view each calibration is compared against a reference. **First** uses
-the first calibration in the sequence, so you see cumulative drift from a
-starting point. **Previous** uses the one before it, so you see step-by-step
-change as you move the slider; at the first position there is nothing to
-compare against.
-
-### Offline mode
-
-A session restored without a backend connection. Layout editing, scoring
-against the saved calibration, and export all work. Anything that needs live
-data — delta view, calibration history, refreshing the error map — waits until
-you connect a backend from the Hardware section.
-
-### LQS
-
-Layout Quality Score: an estimate of how well a circuit would run on a given
-set of qubits. It is the product of (1 − readout error) over the qubits the
-circuit uses and (1 − two-qubit gate error) over every coupler joining two of
-those qubits, each coupler counted once whichever directions the backend
-lists. It is the same number the Estimated Layout-Quality box shows; each
-circuit's line there, for example `C1: …% (17q × 16g · …)`, gives the qubit
-count and that coupler count. Layouts found by the LUCJ search engines never
-contain a coupler the ansatz does not use, so for them the coupler count is
-the ansatz's two-qubit gate count: 2 × (norb − 1) along the two chains plus
-2 per ancilla (16 for norb = 8 with one ancilla). A `(template)` suffix means
-the full calculation was unavailable and a simpler heuristic was used
-instead.
-
-## Extending to other vendors
-
-<details>
-<summary><b>How the vendor dispatch works</b> — click to expand</summary>
-<br>
-
-Backend loading goes through an explicit dispatch table
-(`_VENDOR_LOADERS` in `iqmapper/connection.py`). Adding a provider means
-implementing one loader with the same signature and registering it — the UI,
-scoring, and visualization layers are vendor-agnostic. IBM Quantum is the
-provider shipped today.
-
-</details>
-
-## Project layout
-
-<details>
-<summary><b>Repository structure</b> — click to expand</summary>
-<br>
-
-```
-iqmapper/
-├── connection.py     # account loading, vendor dispatch, backend selection
-├── data.py           # calibration fetch + per-user cache
-├── plot.py           # device graph & heatmap rendering
-├── auto_lucj.py      # LUCJ auto-placement + layout error scoring
-├── ancilla_sweep.py, guided_search.py, engine_select.py, multi_sweep.py,
-│   joint_plan.py, qpu_scan.py …   # layout search engines and planners
-├── benchmark.py      # opt-in real-time benchmarking
-├── stability.py      # multi-day stability analysis
-├── state.py          # session state, undo/redo, (de)serialization
-├── export/           # scoring (LQS), layout I/O, codegen, PNG/analysis export
-└── ui/               # ipywidgets panels (builder, time, history, analysis, …)
-tests/                # offline, no QPU required — run with: python -m pytest -q
-```
-
-For a guided tour of the modules and data flow, see
-[CODE_OVERVIEW.md](CODE_OVERVIEW.md).
-
-</details>
-
-## Limitations & caveats
-
-<details>
-<summary><b>What this tool is not</b> — click to expand</summary>
-<br>
-
-- Calibration data is as fresh as IBM's calibration cycle; the tool shows you
-  *reported* device quality, which is a strong prior — not a guarantee — of run
-  quality.
-- The LQS score is a first-order heuristic for *relative* layout comparison, not
-  an absolute fidelity prediction.
-- The device map, and therefore connecting, covers 156-qubit Heron (r2, r3) and
-  120-qubit Nighthawk processors. Other chips (133-qubit Heron r1, 127-qubit
-  Eagle) are listed in the multi-QPU scans as "not supported" and never
-  searched.
-
-</details>
-
-## License, Credits & Citing
-
-I-QMapper is released under the [Apache License 2.0](LICENSE) (see also
-[NOTICE](NOTICE)).
-
-Parts of this project build on IBM open-source work: the auto-LUCJ layout scorer
-was adapted from IBM code now incorporated in
+The LUCJ layout scorer was adapted from IBM code now part of
 [ffsim](https://github.com/qiskit-community/ffsim) (Sung *et al.*,
-[arXiv:2605.03123](https://arxiv.org/abs/2605.03123)), and the layout-quality
-estimator implements a cost function in the style of
-[mapomatic](https://github.com/qiskit-community/mapomatic)
-(Nation & Treinish, *PRX Quantum* **4**, 010327, 2023). The LUCJ ansatz is due to
-Motta *et al.*, *Chem. Sci.* **14**, 11213–11227 (2023),
-[doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
-
-If you use I-QMapper in your research, please cite the I-QMapper paper
-([arXiv:2606.27508](https://arxiv.org/abs/2606.27508)) — see
-[CITATION.cff](CITATION.cff).
+[arXiv:2605.03123](https://arxiv.org/abs/2605.03123)). The layout quality
+estimator follows the cost function of
+[mapomatic](https://github.com/qiskit-community/mapomatic) (Nation and Treinish,
+*PRX Quantum* **4**, 010327, 2023). The LUCJ ansatz is due to Motta *et al.*,
+*Chem. Sci.* **14**, 11213 (2023), [doi:10.1039/D3SC02516K](https://doi.org/10.1039/D3SC02516K).
