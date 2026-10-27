@@ -148,7 +148,7 @@ def _fake_sweep_topn(*a, **k):
     }
 
 
-# ── A3: local sweep status carries a 'scored on live · HH:MM' vintage ───────
+# ── local sweep status carries a 'scored on live · HH:MM' vintage ───────────
 #    so a scan-vs-local number mismatch reads as calibration drift (the two
 #    numbers were taken at different moments), not a bug.
 

@@ -150,31 +150,19 @@ def test_scan_floor_per_backend(monkeypatch):
     assert not (seen['ibm_b'].get('exclude_qubits') or set())
 
 
-# ── legacy single/multi buttons untouched by the floor ───────────────
+# ── the single-count search is untouched by the floor ────────────────
 
-def test_legacy_paths_untouched(monkeypatch):
+def test_single_count_search_untouched(monkeypatch):
     b, state = _build(monkeypatch)
     single = []
     monkeypatch.setattr("iqmapper.auto_lucj.get_all_zigzag_layouts",
                         lambda **k: single.append(k) or ([{'rank': 1, 'score': 0.1,
                                                            'alpha': [0, 1], 'beta': [2, 3]}], 1))
-    multi = []
-    monkeypatch.setattr("iqmapper.auto_lucj.get_multi_circuit_layouts",
-                        lambda **k: multi.append(k) or [
-                            {'circuit_idx': 0, 'norb': 8, 'num_bridges': 2,
-                             'all_candidates': [{'layout': [0, 1, 2, 3],
-                                                 'alpha': [0, 1], 'beta': [2, 3],
-                                                 'score': 0.03, 'rank': 1,
-                                                 'layout_full': [0, 1, 2, 3, 4]}]}])
-    b.lucj_ancilla_dd.value = 2                    # legacy single (not sweep)
+    b.lucj_ancilla_dd.value = 2                    # exact count (not sweep)
     b.btn_lucj_run.click()
-    b.lucj_multi_norbs.value = '8'
-    b.btn_lucj_multi.click()                       # legacy multi
-    assert len(single) == 1                        # legacy engines called…
-    assert len(multi) == 1
-    # …and neither legacy engine accepts/forwards a floor exclude set.
+    assert len(single) == 1
+    # The single-count engine takes no floor exclude set.
     assert 'exclude_qubits' not in single[0]
-    assert 'exclude_qubits' not in multi[0]
 
 
 # ── batch scan ──────────────────────────────────────────────────────────
@@ -269,7 +257,7 @@ def test_batch_selector_handoff_payload(monkeypatch):
     b.lucj_multi_norbs.value = '8, 8'
     b.btn_scan_batch.click()
 
-    from ipywidgets import Dropdown, HBox
+    from ipywidgets import HBox
     kids = list(b.scan_batch_box.children)
     btn = next(c for w in kids for c in
                (w.children if isinstance(w, HBox) else [w]) if isinstance(c, Button))

@@ -14,7 +14,7 @@ from iqmapper.export.scoring import (
 from iqmapper.props_shim import CachedPropsShim
 
 
-# ── C1 pin — behaviour unchanged across the refactor-extract ────────────
+# ── pinned values on a fixed four-qubit chain ───────────────────────────
 
 def test_c1_pin_unchanged():
     qubit_ids = ['0', '1', '2', '3']

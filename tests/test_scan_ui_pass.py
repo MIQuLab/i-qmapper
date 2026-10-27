@@ -1,10 +1,6 @@
-"""SCAN UI PASS regressions: label==table metric (Y1), table behind a toggle
-(Y2), loud notices header (Y3).
-
-The label used to quote r['best_lqs'] (= max product_score) while the table and
-detail quoted max lqs_circuit — so the SAME backend could read 73.0% in the
-selector and 65.3% in the table. These tests pin all three to one number and
-pin the table-behind-a-toggle + loud-notices UI.
+"""Scan results: the selector label and the detail quote one metric (max
+lqs_circuit, never max product_score), no comparison table, loud notices
+header.
 """
 import re
 from types import SimpleNamespace
@@ -128,7 +124,7 @@ def _pct(s):
     return m.group(1) if m else None
 
 
-# ── t1 (Y1): selector label quotes max lqs_circuit (== the detail metric) ───
+# ── selector label quotes max lqs_circuit (== the detail metric) ────────────
 
 def test_label_quotes_lqs_circuit(monkeypatch):
     b = _build(monkeypatch)
@@ -155,7 +151,7 @@ def test_label_template_fallback(monkeypatch):
     assert _pct(label) == '73.0'
 
 
-# ── t2 (R2): detail line 2 carries cap + calib; omits absent segments ───────
+# ── detail line 2 carries cap + calib; omits absent segments ────────────────
 
 def test_detail_line2_cap_and_calib(monkeypatch):
     b = _build(monkeypatch)
@@ -180,7 +176,7 @@ def test_detail_line2_omits_absent_cap(monkeypatch):
     assert 'live · 09:00' in d                        # calib still present
 
 
-# ── t1 (R1): NO comparison table + NO toggle checkbox in the results tree ───
+# ── NO comparison table + NO toggle checkbox in the results tree ────────────
 
 def test_no_table_no_checkbox(monkeypatch):
     b = _build(monkeypatch)
@@ -199,7 +195,7 @@ def test_no_table_no_checkbox(monkeypatch):
     assert any(isinstance(w, Dropdown) for w in b.scan_results_box.children)
 
 
-# ── t3 (R3): selector + open still drives handoff (no table involved) ───────
+# ── selector + open still drives handoff (no table involved) ────────────────
 
 def test_selector_open_drives_handoff_no_table(monkeypatch):
     b = _build(monkeypatch)
@@ -224,7 +220,7 @@ def test_selector_open_drives_handoff_no_table(monkeypatch):
     assert cand['ancillas'] == [4, 5]
 
 
-# ── t4 (Y3): notices collapsed header carries the LOUD style + count ────────
+# ── notices collapsed header carries the LOUD style + count ─────────────────
 
 def test_notices_header_loud_with_count(monkeypatch):
     b = _build(monkeypatch)

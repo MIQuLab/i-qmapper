@@ -1,14 +1,11 @@
 """
 tests/test_paths.py — Unit tests for iqmapper.paths.safe_path().
 
-Closes the audit gap (AUDIT_REPORT § paths.py): tests/test_mapper.py
-historically contained a buggy reimplementation of safe_path using
-str.startswith — it tested the broken copy, not the real function.
 This module imports and exercises the REAL safe_path from
 iqmapper.paths, covering:
 
-  • the original guards (empty path, '..', '/', '~', escape via realpath)
-  • the new guards added in the audit pass: null byte rejection,
+  • the basic guards (empty path, '..', '/', '~', escape via realpath)
+  • null byte rejection,
     component-level '..' detection (so legitimate names like
     'my..file.json' are accepted), and the 255-byte component limit.
 
@@ -58,9 +55,8 @@ class TestAccept:
         assert out == os.path.realpath(str(_isolated_cwd / 'output' / 'layout.json'))
 
     def test_name_with_literal_dotdot_chars(self, _isolated_cwd):
-        # The legitimate case the audit fix targets: '..' as substring
-        # in a normal filename (e.g. produced by some date format) must
-        # NOT be rejected. The previous `'..' in p` guard blocked this.
+        # '..' as substring in a normal filename (e.g. produced by some
+        # date format) must NOT be rejected; only a '..' COMPONENT is.
         out = safe_path('my..file.json')
         assert out.endswith('my..file.json')
 
@@ -77,7 +73,7 @@ class TestAccept:
 
 
 # ═════════════════════════════════════════════════════════════════════
-# Rejection — the original guards from before the audit pass.
+# Rejection — the basic guards.
 # ═════════════════════════════════════════════════════════════════════
 
 class TestRejectOriginalGuards:
@@ -109,7 +105,7 @@ class TestRejectOriginalGuards:
 
 
 # ═════════════════════════════════════════════════════════════════════
-# Rejection — the NEW guards added during the audit pass.
+# Rejection — null bytes, '..' components, over-long components.
 # ═════════════════════════════════════════════════════════════════════
 
 class TestRejectNullByte:

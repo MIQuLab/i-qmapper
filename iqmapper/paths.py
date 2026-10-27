@@ -65,7 +65,7 @@ def safe_path(raw_path: str, default_ext: str = '') -> str:
         tools and is a known smuggling vector against C-level open().
       - Any '..' COMPONENT (separated by '/' or '\\\\') rejected. Plain
         names like 'my..file.json' that happen to contain the literal
-        characters are allowed (previously these were also rejected).
+        characters are allowed.
       - Absolute paths ('/...') rejected.
       - Home-expansion ('~...') rejected.
       - Path components longer than 255 bytes rejected — matches the

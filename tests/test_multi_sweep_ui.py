@@ -4,7 +4,6 @@ Offline: real MapperUIBuilder over a stubbed 8-qubit device; the engine
 (multi_sweep.sweep_multi_circuits / replan_from) is monkeypatched with canned
 dicts, and the background spawn is injected (sync or a manual queue).
 """
-from types import SimpleNamespace
 
 import numpy as np
 from ipywidgets import Dropdown
@@ -288,26 +287,3 @@ def test_multi_sweep_kwargs_parity(monkeypatch):
     assert mk['top_n'] == 7 and mk['mapping_cap'] == 5000
     assert mk['hybrid'] is False and mk['diversity_threshold'] is None
 
-
-# ── legacy Generate untouched — still calls the old engine ──────────────
-
-def test_legacy_multi_button_unchanged(monkeypatch):
-    b, state = _build(monkeypatch)
-    calls = []
-    monkeypatch.setattr("iqmapper.auto_lucj.get_multi_circuit_layouts",
-                        lambda **k: calls.append(k) or [
-                            {'circuit_idx': 0, 'norb': 8, 'num_bridges': 2,
-                             'all_candidates': [{'layout': [0, 1, 2, 3],
-                                                 'alpha': [0, 1], 'beta': [2, 3],
-                                                 'score': 0.03, 'rank': 1,
-                                                 'layout_full': [0, 1, 2, 3, 4]}]}])
-    ms_calls = []
-    import iqmapper.multi_sweep as ms
-    monkeypatch.setattr(ms, 'sweep_multi_circuits',
-                        lambda *a, **k: ms_calls.append(1) or _result()[0])
-
-    b.lucj_multi_norbs.value = '8'
-    b.btn_lucj_multi.click()                          # LEGACY button
-
-    assert len(calls) == 1                            # old engine called
-    assert ms_calls == []                             # sweep engine NOT called

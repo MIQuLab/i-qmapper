@@ -7,7 +7,6 @@ are injected synchronously.
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 
 def _fake_device_data(state, vendor, chip, date, prefetched_props=None):

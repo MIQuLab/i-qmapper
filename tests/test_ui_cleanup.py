@@ -3,7 +3,6 @@ C3 staged banner, C4 labels)."""
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 
 
 def _fake_device_data(state, vendor, chip, date, prefetched_props=None):
@@ -142,7 +141,6 @@ class _Stub:
 
 
 def _inter_ctx():
-    from ipywidgets import VBox
     state = SimpleNamespace(
         available_backends=[], active_backend_name='ibm_here',
         active_service=SimpleNamespace(

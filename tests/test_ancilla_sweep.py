@@ -171,7 +171,7 @@ def test_kminus1_variant_present(backend, props):
         "the top layout's own k-1 subtraction variant is absent")
 
 
-# ── F2c: bridge_slots are the first-k' standard slots — no holes, ever ──────
+# ── bridge_slots are the first-k' standard slots — no holes, ever ───────────
 
 def test_bridge_slots_are_prefix(backend, props):
     """The regression born from the scattered-ancilla bug: EVERY entry in
@@ -186,7 +186,7 @@ def test_bridge_slots_are_prefix(backend, props):
             assert len(e['bridge_slots']) == k_prime == k
 
 
-# ── F2d: a derived k' entry == its parent embedding's first-k' bridges ──────
+# ── a derived k' entry == its parent embedding's first-k' bridges ───────────
 
 def test_prefix_legacy_equivalence(backend, props):
     """A DERIVED k' candidate must be indistinguishable from the original

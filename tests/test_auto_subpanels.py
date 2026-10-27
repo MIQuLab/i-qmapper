@@ -1,7 +1,6 @@
 """Auto-tab Single/Multi subpanels, candidate-detail declutter, and the
 export-is-auto-current pin.
 """
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -56,7 +55,7 @@ def _build(monkeypatch):
     return b, state
 
 
-# ── t1: subpanels follow the Multi-Programming enable ───────────────────────
+# ── subpanels follow the Multi-Programming enable ───────────────────────────
 
 def test_subpanels_follow_multi_programming(monkeypatch):
     b, state = _build(monkeypatch)
@@ -76,7 +75,7 @@ def test_subpanels_follow_multi_programming(monkeypatch):
     assert b.btn_lucj_multi_sweep in b._auto_multi_panel.children
 
 
-# ── R3 t1: exactly TWO buttons in the Multi subpanel — no legacy node ────────
+# ── exactly TWO buttons in the Multi subpanel — no legacy node ───────────────
 
 def test_multi_subpanel_has_two_buttons_no_legacy(monkeypatch):
     b, state = _build(monkeypatch)
@@ -86,7 +85,7 @@ def test_multi_subpanel_has_two_buttons_no_legacy(monkeypatch):
     buttons = [w for w in b._auto_multi_panel.children if isinstance(w, Button)]
     assert len(buttons) == 2                                 # generate + batch
     assert set(buttons) == {b.btn_lucj_multi_sweep, b.btn_scan_batch}
-    assert b.btn_lucj_multi not in b._auto_multi_panel.children   # legacy gone
+    assert not hasattr(b, 'btn_lucj_multi')                  # no second button
     # The sweep button is the single generate action — no "(sweep)" qualifier.
     assert b.btn_lucj_multi_sweep.description == '🧺 Generate Multi-Circuit'
     # The ancilla field speaks one (sweep) language.
@@ -94,18 +93,7 @@ def test_multi_subpanel_has_two_buttons_no_legacy(monkeypatch):
     assert 'Legacy' not in (b.lucj_multi_ancillas.tooltip or '')
 
 
-# ── R3 t2: the legacy handler + engine stay defined (source pin) ────────────
-
-def test_legacy_handler_and_engine_still_defined():
-    panel = Path('iqmapper/ui/lucj_panel.py').read_text()
-    assert 'def _on_lucj_multi(' in panel                    # handler retained
-    assert 'get_multi_circuit_layouts' in panel              # engine path retained
-    # And the widget object is still wired (clickable) for the pinned tests.
-    from iqmapper.ui.builder import MapperUIBuilder
-    assert hasattr(MapperUIBuilder, '_build_auto_lucj_view')
-
-
-# ── t3: candidate detail shows counts, never qubit index lists ──────────────
+# ── candidate detail shows counts, never qubit index lists ──────────────────
 
 def test_detail_panel_counts_not_qubit_lists(monkeypatch):
     b, state = _build(monkeypatch)
@@ -121,7 +109,7 @@ def test_detail_panel_counts_not_qubit_lists(monkeypatch):
     assert '0, 1' not in v and 'ancillas:' not in v          # no id lists
 
 
-# ── t5: an applied batch (C1..Cn) is auto-reflected in the export ──────────
+# ── an applied batch (C1..Cn) is auto-reflected in the export ──────────────
 
 def test_export_reads_applied_batch():
     from iqmapper.export.codegen import get_qiskit_layout_code

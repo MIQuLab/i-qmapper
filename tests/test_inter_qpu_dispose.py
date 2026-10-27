@@ -2,20 +2,20 @@
 
 `_connect_qpu2_paint` installs a disposer (`_dispose2[0]`) that unobserves the
 whole secondary widget tree so it can be garbage collected. The toggle-OFF
-branch invokes it correctly, but a RECONNECT (QPU-2 already connected, user
-picks a different backend) used to overwrite `_dispose2[0]` with the new
-disposer WITHOUT invoking the previous one — so the prior UI + FigureWidget
-stayed alive in ipywidgets' handler lists and memory grew on every reconnect.
+branch invokes it, and so must a RECONNECT (QPU-2 already connected, user
+picks a different backend) before it overwrites `_dispose2[0]` with the new
+disposer — otherwise the prior UI + FigureWidget stay alive in ipywidgets'
+handler lists and memory grows on every reconnect.
 
-Observing the fix
------------------
+How disposal is observed
+------------------------
 `_walk_unobserve_all` is a closure defined inside `setup_inter_qpu`, not a
 module-level function, so it cannot be monkeypatched directly. Instead the
 fake `build_mapper_ui` returns a tree built from `_RecWidget` nodes that record
 their own `unobserve_all()` calls. That is the boundary the disposer actually
 acts on, so the assertions below exercise the real disposer end to end rather
 than a stand-in: "tree N was disposed" is read off the very objects handed to
-the connect that built them, which pins the identity the spec asks for.
+the connect that built them, which pins each tree's identity.
 """
 from types import SimpleNamespace
 

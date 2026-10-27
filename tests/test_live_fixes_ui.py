@@ -6,9 +6,7 @@ Headless, offline; engines are stubbed with canned results except where the
 fit check needs a real coupling graph.
 """
 import logging
-from types import SimpleNamespace
 
-import numpy as np
 from ipywidgets import Dropdown, HTML
 
 from test_fit_check import ladder
@@ -17,7 +15,7 @@ from test_multi_sweep_ui import (_build as _build_multi, _circuit, _dropdowns,
 from test_search_ui import _build as _build_auto
 
 
-# ── A2: two technical notices stay out of the UI ────────────────────
+# ── two technical notices stay out of the UI ────────────────────────
 
 def test_bridge_fallback_and_cap_line_never_reach_the_ui(monkeypatch):
     b = _build_auto(monkeypatch)
@@ -54,7 +52,7 @@ def test_bridge_fallback_and_cap_line_never_reach_the_ui(monkeypatch):
     assert f'✅ {n} layout found · scored on live' in b.lbl_lucj_status.value
 
 
-# ── A4: complete batches rank first; partial ones carry no % ────────
+# ── complete batches rank first; partial ones carry no % ────────────
 
 def _row(name, total, placed, n=2):
     circuits = [{'circuit_idx': j, 'norb': 8,
@@ -93,7 +91,7 @@ def test_a_complete_batch_outranks_a_partial_one(monkeypatch):
                       'ibm_bad — ✗ error']
 
 
-# ── A5: compatible alternatives only; the Plans menu ────────────────
+# ── compatible alternatives only; the Plans menu ────────────────────
 
 def _blocking_result():
     """norbs [2, 3] on an 8-wide ladder, buffer 1. C1 on the left leaves room
@@ -162,7 +160,7 @@ def test_selecting_a_plan_applies_every_circuit(monkeypatch):
     assert 'LQS 70.0%' in c1.options[0][0] and 'LQS 40.0%' in c2.options[0][0]
 
 
-# ── A6: joint by default, B=3 and M=3 ───────────────────────────────
+# ── joint by default, B=3 and M=3 ───────────────────────────────────
 
 def test_the_default_run_plans_jointly_with_light_params(monkeypatch):
     import iqmapper.joint_plan as jp
@@ -188,7 +186,7 @@ def test_fast_is_off_by_default_and_owns_its_layout(monkeypatch):
     assert b.multi_advanced_acc.layout is not b.txt_auto.layout
 
 
-# ── A7: the "(this QPU)" row needs a complete local result ──────────
+# ── the "(this QPU)" row needs a complete local result ──────────────
 
 def test_a_partial_local_result_gives_no_reference_row(monkeypatch):
     from test_batch_scan_active import ACTIVE, _selector, _texts, _wire

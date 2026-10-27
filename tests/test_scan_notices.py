@@ -117,7 +117,6 @@ def test_k_not_capped_no_note(monkeypatch):
 def test_notices_capture_and_dedup(monkeypatch):
     b = _build(monkeypatch)
     _patch_targets(monkeypatch)
-    import iqmapper.qpu_scan as qs
     lg = logging.getLogger('iqmapper')
 
     def sweep_warns(norb, backend, props, **kw):

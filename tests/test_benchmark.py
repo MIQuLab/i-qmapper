@@ -456,7 +456,7 @@ def test_make_runtime_runner_raises_the_documented_install_hint():
         bench.make_runtime_runner(object())
 
 
-# ── v2: target-selection modes ──────────────────────────────────────
+# ── target-selection modes ──────────────────────────────────────────
 
 def test_current_layouts_mode_unions_every_circuit_slot():
     """Hand-placed or auto-placed, C1..Cn all count — and no duplicate edges."""
@@ -510,7 +510,7 @@ def test_sweep_mode_is_offered_only_once_a_sweep_has_run():
     assert bench.TARGET_SWEEP not in bench.available_target_modes(state, [])
     assert bench.TARGET_SWEEP in bench.available_target_modes(
         state, [_entry([0, 1], [2], [3])])
-    # Order is the one the spec lists.
+    # Order is the documented one.
     assert bench.available_target_modes(state, [_entry([0], [1], [])]) == [
         bench.TARGET_CURRENT, bench.TARGET_SWEEP, bench.TARGET_WHOLE,
         bench.TARGET_CUSTOM]
@@ -525,7 +525,7 @@ def test_default_mode_prefers_a_placed_layout():
         bench.TARGET_SWEEP
 
 
-# ── v2: Level 1 does not scale with qubit count ─────────────────────
+# ── Level 1 does not scale with qubit count ─────────────────────────
 
 def test_level1_cost_is_flat_in_qubit_count():
     """LocalReadoutError is two circuits whatever the width.
@@ -560,7 +560,7 @@ def test_level2_cost_scales_with_layer_count_not_edge_count():
     assert few.circuits >= one_edge.circuits
 
 
-# ── v3 Part A: the plan is composite, and it fits in a job ──────────
+# ── the plan is composite, and it fits in a job ────────────────────
 
 def test_level1_is_two_circuits_at_any_width():
     """LocalReadoutError prepares all targets at once: 2 circuits, always."""
@@ -590,8 +590,8 @@ def test_level2_is_bounded_by_layers_not_edges():
 def test_full_chip_level3_is_about_134_circuits():
     """The number that decides whether the job is accepted at all.
 
-    The pre-v3 plan emitted one spec per qubit and per edge: ~43,400 circuits
-    on this device, which IBM rejected outright (error 1520).
+    One spec per qubit and per edge would be ~43,400 circuits on this device,
+    which IBM rejects outright (error 1520).
     """
     graph = rustworkx.generators.heavy_hex_graph(9)
     coupling = [tuple(e) for e in graph.edge_list()]
@@ -650,7 +650,7 @@ def test_summary_line_states_circuits_shots_and_jobs():
     assert 'estimate' in cost.text
 
 
-# ── v3 Part C: an empty epoch is a failure ─────────────────────────
+# ── an empty epoch is a failure ────────────────────────────────────
 
 def test_epoch_reports_emptiness_partiality_and_completeness():
     qp, gp = _reported()
@@ -678,7 +678,7 @@ def test_epoch_reports_emptiness_partiality_and_completeness():
     assert partial.measured_count == (1, 0)
 
 
-# ── v3 Part B: a failed job is an error, not an empty parse ────────
+# ── a failed job is an error, not an empty parse ───────────────────
 
 def test_check_chunk_status_raises_on_an_errored_job():
     class _Errored:
@@ -710,7 +710,7 @@ def test_check_chunk_status_passes_a_healthy_job():
     assert bench._check_chunk_status(_Done(), 0) == ['ok1']
 
 
-# ── v3 Part E: the analysis-result shape adapter ───────────────────
+# ── the analysis-result shape adapter ──────────────────────────────
 
 def test_result_adapter_handles_the_list_shape():
     items = [_Res(name='T1', value=1.0, qubits=[3])]
@@ -775,7 +775,7 @@ def test_components_to_qubits_parses_both_forms():
         SimpleNamespace(device_components=[]), fallback=(9,)) == [9]
 
 
-# ── v3 Part D: persistence and diagnosis ───────────────────────────
+# ── persistence and diagnosis ──────────────────────────────────────
 
 def test_job_record_is_written_at_submission(tmp_path, monkeypatch):
     monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
@@ -867,11 +867,11 @@ def test_diagnose_raw_on_a_missing_file():
     assert 'Could not read' in bench.diagnose_raw('/nonexistent/path.json')
 
 
-# ── v3.1: the 20 Sept live-run symptoms, reproduced offline ────────
+# ── live-run result shapes, reproduced offline ─────────────────────
 #
-# Each of these fails against the pre-v3.1 parser with the exact error the
-# live run produced. The shapes are taken from the real raw dump
-# (measured_20260920T123808_raw.json), not from what we assumed.
+# The shapes are taken from a real raw dump of a live run, not from what
+# the documentation suggests; each one breaks a parser that assumes
+# otherwise.
 
 class _Mitigator:
     """LocalReadoutMitigator: assignment_matrix is a METHOD, not an attribute.
@@ -976,7 +976,7 @@ def test_one_qubit_rb_counts_qubits_not_gate_results():
     assert note, epoch.notices
     assert '8 qubit' in note, f'counted gate results, not qubits: {note!r}'
     assert '24' not in note
-    # The per-qubit EPGs are kept for the 2Q analysis (Part B).
+    # The per-qubit EPGs are kept for the 2Q analysis.
     assert epoch.extra.get('epg_1q'), 'per-qubit 1Q EPGs must be retained'
     assert set(epoch.extra['epg_1q']) == set(range(8))
 
@@ -997,7 +997,7 @@ def test_notices_are_summarised_not_a_list_of_indices():
     assert len(joined) < 400, f'notice too verbose ({len(joined)} chars)'
 
 
-# ── v3.1 Part B: 1Q EPG subtraction wiring ─────────────────────────
+# ── 1Q EPG subtraction wiring ──────────────────────────────────────
 
 def test_level2_now_includes_one_qubit_rb():
     """The 2Q analysis cannot subtract what was never measured."""
@@ -1032,12 +1032,10 @@ class _Analysis:
 
 
 def test_epg_1_qubit_receives_result_objects_not_floats():
-    """Live failure: 'float' object has no attribute 'device_components'.
-
-    `rb_analysis._exclude_1q_error` reads `.device_components` off every
+    """`rb_analysis._exclude_1q_error` reads `.device_components` off every
     element of `epg_1_qubit`, so the 1Q RB ANALYSIS RESULTS must be forwarded,
-    not their values. Passing floats made every 2Q callback raise, and phase 2
-    of the 20 Sept 13:08 run produced no EPG_cz at all.
+    not their values. Floats make every 2Q callback raise ('float' object has
+    no attribute 'device_components'), and phase 2 then yields no EPG_cz.
     """
     analysis = _Analysis()
     experiment = SimpleNamespace(analysis=analysis)
@@ -1098,7 +1096,7 @@ def test_a_rejected_option_is_a_notice_not_a_crash():
     assert any('rejected epg_1_qubit' in n for n in notices), notices
 
 
-# ── v3.1: analysis-callback failures must surface ──────────────────
+# ── analysis-callback failures must surface ────────────────────────
 
 def test_analysis_errors_are_collected_from_a_done_experiment():
     """A DONE job whose every callback raised must not look successful."""
@@ -1137,7 +1135,7 @@ def test_summarise_analysis_errors_is_empty_when_clean():
     assert bench.summarise_analysis_errors([]) is None
 
 
-# ── v3.1 Part C: consistency and relative mode ─────────────────────
+# ── consistency and relative mode ──────────────────────────────────
 
 def _epoch_with(measured_gate, reported_gate, mask):
     qp = {'readout_error': np.full(4, 0.01)}
@@ -1212,10 +1210,8 @@ def test_relative_label_says_so():
 
 
 def test_job_ids_are_recovered_per_phase_from_a_raw_dump():
-    """The 20 Sept 13:08 run left no _jobs.json, but the raw dump has the ids.
-
-    `_run_phased` did not call the job-id callback until v3.1, so the record
-    was never written — the dump is what makes that run recoverable.
+    """A run that left no _jobs.json is recoverable from its raw dump, which
+    carries the job ids of each phase.
     """
     dump = {'experiments': [
         {'job_ids': ['phase1-job'], 'children': [{'job_ids': ['phase1-job']}]},
@@ -1295,7 +1291,7 @@ def test_phased_runner_records_job_ids():
     assert all('j-abc' in r[1] for r in recorded)
 
 
-# ── v3.1: the reanalysis container must look like run()'s ──────────
+# ── the reanalysis container must look like run()'s ────────────────
 
 def test_container_is_built_through_initialize_experiment_data():
     """Live failure: 'Unable to extract component child experiment data'.
@@ -1424,7 +1420,7 @@ def test_the_public_constructor_is_the_fallback(monkeypatch):
     assert any('private API moved' in n for n in notices), notices
 
 
-# ── v3.3: the Calibration header must name a measured epoch ────────
+# ── the Calibration header must name a measured epoch ──────────────
 
 def test_describe_current_view_names_the_measured_epoch():
     """A measured epoch replaces the arrays without changing time_mode, so
@@ -1546,7 +1542,7 @@ def test_reanalysis_dumps_do_not_shadow_submissions(tmp_path, monkeypatch):
     assert record['_stamp'] == '20260920T130000'
 
 
-# ── v3.5: implausible fits must never reach the 2Q analysis ────────
+# ── implausible fits must never reach the 2Q analysis ──────────────
 
 def test_an_implausible_1q_epg_is_not_forwarded_and_is_named():
     """Live crash: a failed 1Q fit returned EPG 0.71, which made
@@ -1615,7 +1611,7 @@ def test_extra_epg_1q_only_records_plausible_values():
         epoch.notices
 
 
-# ── v3.5: bounds on the other measured kinds ───────────────────────
+# ── bounds on the other measured kinds ─────────────────────────────
 
 def test_an_implausible_readout_error_falls_back_with_a_notice():
     qp, gp = _reported()

@@ -67,9 +67,10 @@ Two ways:
 - **By hand** — click qubits on the map to add/remove them from the current
   circuit's layout. In LUCJ mode, qubits get roles (α system / β system /
   ancilla bridges) with distinct colors.
-- **Auto-place (LUCJ mode)** — one click runs the zig-zag placer, which scans
-  the heavy-hex topology for the lowest-error chain using the current
-  calibration data, and places the whole ansatz for you.
+- **Auto-place (LUCJ mode)** — **🤖 Generate LUCJ Layout** searches every
+  ancilla count, scores each candidate on the current calibration data, and
+  places the best one; the **Layout** dropdown lists the others, ranked by
+  LQS.
 
 Multiple circuits can coexist, each with its own color; undo/redo covers every
 placement action.
@@ -78,13 +79,13 @@ placement action.
 
 ## 4. Score & compare
 
-Open the **Analysis** panel:
-
-- **LQS (Layout-Quality Score)** — an error-aware fidelity estimate for each
-  placed circuit, computed from the readout and two-qubit errors of exactly
-  the qubits and couplings you're using. Use it to compare candidate layouts
-  *before* spending QPU time.
-- **Rankings** — see alternative placements ordered by score.
+- **LQS (Layout-Quality Score)** — the **Estimated Layout-Quality** box in the
+  sidebar gives an error-aware fidelity estimate for each placed circuit,
+  computed from the readout and two-qubit errors of exactly the qubits and
+  couplings you're using. Use it to compare candidate layouts *before*
+  spending QPU time.
+- **Rankings** — **🔍 Error → Analysis** ranks qubits and gates by error
+  (🏆 Qubit Ranking, 🔗 Gate Ranking).
 
 The score is a first-order, *relative* heuristic — treat differences between
 layouts as meaningful, not the absolute number.
@@ -96,7 +97,7 @@ layouts as meaningful, not the absolute number.
 The **Time** panel changes *which calibration snapshot* the whole map shows:
 
 - **Live** — the current calibration (default).
-- **Point** — a specific past date/time.
+- **Snapshot** — a specific past date/time.
 - **Intraday** — scan one day and slide through its calibration updates.
 - **Multi-day** — fetch a date range and slide day by day.
 
@@ -109,7 +110,8 @@ still the right ones today.
 
 ## 6. Check stability
 
-In the **Analysis** panel, enable **Stability Check** and pick a window
+In the sidebar card **⚠️ Stability check**, tick **⚠️ Enable Stability check**
+and pick a window
 (7 / 14 / 30 days). For the qubits and couplings of your placed layout, the
 tool analyses the cached history and flags which elements are *stable* and
 which are *volatile* — because the best qubit today is not always the best
@@ -173,7 +175,7 @@ multi-QPU scan.
 
 ## 8. Import & export
 
-From the **Export** tab:
+From **📁 I/O → 📤 Export**:
 
 - **Layout JSON** — export your layouts (including LUCJ role partitions) and
   re-import them later or on another backend.

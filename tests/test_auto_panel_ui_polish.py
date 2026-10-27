@@ -67,7 +67,7 @@ def _empty_sweep():
             'per_stratum': {}, 'mapping_cap': None}
 
 
-# ── t1: the expert knobs are collapsed out of the primary flow ──────────────
+# ── the expert knobs are collapsed out of the primary flow ──────────────────
 
 def test_search_cap_and_deep_search_live_in_advanced_accordion(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -94,7 +94,7 @@ def test_search_cap_and_deep_search_live_in_advanced_accordion(monkeypatch):
     assert b.chk_deep_search.value is True
 
 
-# ── t2: diversity ships ON and still reaches the engine both ways ───────────
+# ── diversity ships ON and still reaches the engine both ways ───────────────
 
 def test_diverse_default_on(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -117,7 +117,7 @@ def test_diverse_default_on(monkeypatch):
         f"unticking diversity did not disable it: {seen.get('diversity_threshold')!r}")
 
 
-# ── t3: the score checkbox belongs to legacy mode only ──────────────────────
+# ── the score checkbox belongs to legacy mode only ──────────────────────────
 
 def test_score_checkbox_hidden_in_auto_visible_in_legacy(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -142,7 +142,7 @@ def test_score_checkbox_hidden_in_auto_visible_in_legacy(monkeypatch):
         "the checkbox must stay in the tree, only hidden")
 
 
-# ── t4: the hidden checkbox must not drag other widgets down with it ────────
+# ── the hidden checkbox must not drag other widgets down with it ────────────
 
 def test_score_checkbox_owns_its_layout(monkeypatch):
     """Regression: `W` is ONE shared Layout instance handed to ~86 widgets, so
@@ -175,7 +175,7 @@ def test_score_checkbox_owns_its_layout(monkeypatch):
            (b.chk_lucj_diverse.layout.width, b.chk_lucj_diverse.layout.margin)
 
 
-# ── t5: benchmark lives in the sidebar, not the Auto tab ───────────────────
+# ── benchmark lives in the sidebar, not the Auto tab ───────────────────────
 
 def _sidebar_accordion(b):
     """The numbered settings accordion from the assembled sidebar."""
@@ -233,7 +233,7 @@ def test_benchmark_widgets_do_not_share_a_mutated_layout(monkeypatch):
     assert b.tb_bench_qpu.layout.display == 'none'
 
 
-# ── t7: the search (engine widgets: see test_search_ui.py) ─────────────────
+# ── the search (engine widgets: see test_search_ui.py) ─────────────────────
 
 def test_exhaustive_still_routes_to_the_frozen_sweep(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -267,7 +267,7 @@ def test_guided_results_render_through_the_existing_display(monkeypatch):
     assert best, 'best-per-k line empty for a guided result'
 
 
-# ── t8: diverse enumeration ────────────────────────────────────────────────
+# ── diverse enumeration ────────────────────────────────────────────────────
 
 def test_diverse_enumeration_checkbox_defaults_on(monkeypatch):
     b, _ = _build(monkeypatch)
@@ -351,7 +351,7 @@ def test_the_cap_notice_goes_to_the_log_not_the_ui(monkeypatch):
     assert any('hybrid k=1: cap reached' in m for m in collect.messages)
 
 
-# ── t9: one cap notice per stratum, not two ────────────────────────────────
+# ── one cap notice per stratum, not two ────────────────────────────────────
 
 _CAP_ENTRY = {'layout': [0, 1, 2, 3], 'alpha': [0, 1], 'beta': [2, 3],
               'ancillas': [4], 'bridge_slots': (0,), 'product_score': 0.9,

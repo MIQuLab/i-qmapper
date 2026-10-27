@@ -5,7 +5,6 @@ shortcut. Headless: the network-touching connect deps are stubbed.
 import threading
 from types import SimpleNamespace
 
-import pytest
 
 
 # ── a label that records every value it is assigned (to watch transitions) ──
@@ -326,7 +325,7 @@ def test_first_connect_paints_candidate_real_build(monkeypatch):
     assert colors[7] == '#ffffff'                                  # untouched
 
 
-# ── D3: the base device map is present on ALL THREE paint entry points ──────
+# ── the base device map is present on ALL THREE paint entry points ──────────
 
 def test_same_backend_repaint_keeps_base_map(monkeypatch):
     b, cap = _primary_with_stubs(monkeypatch)
@@ -364,7 +363,7 @@ def test_batch_handoff_keeps_base_map_real_build(monkeypatch):
     assert cap['s2'].layouts_data[1]['ancilla'] == ['5']
 
 
-# ── L4: paint runs ON THE MAIN THREAD (never a worker) ──────────────────────
+# ── paint runs ON THE MAIN THREAD (never a worker) ──────────────────────────
 #    plotly FigureWidget mutations from a worker thread are silently dropped by
 #    the comm channel → empty map live. The scan handoff hook fires on the main
 #    thread, so the auto-connect does the build + apply + refresh SYNCHRONOUSLY

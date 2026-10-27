@@ -7,7 +7,6 @@ monkeypatched with canned dicts (real VF2 has its own tests).
 """
 from types import SimpleNamespace
 
-import pytest
 
 from iqmapper.qpu_scan import list_scan_targets, scan_qpus
 

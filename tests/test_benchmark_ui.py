@@ -447,7 +447,7 @@ def test_qpu2_connect_never_invokes_the_benchmark_engine(monkeypatch):
     assert handles_cell[0]().backend_name == 'ibm_k'
 
 
-# ── v2: the QPU selector ────────────────────────────────────────────
+# ── the QPU selector ────────────────────────────────────────────────
 
 def _qpu2_handles(n_q=6):
     """A stand-in for ui.inter_qpu's read-only QPU-2 accessor."""
@@ -533,7 +533,7 @@ def test_qpu2_targets_come_from_the_secondary_layout(monkeypatch, tmp_path):
     assert targets.qubits == [0, 1, 2], 'must read QPU 2 layouts_data'
 
 
-# ── v2: whole-QPU messaging ─────────────────────────────────────────
+# ── whole-QPU messaging ─────────────────────────────────────────────
 
 def test_whole_qpu_level1_is_advertised_as_the_cheap_refresh(monkeypatch,
                                                               tmp_path):
@@ -558,7 +558,7 @@ def test_whole_qpu_level3_always_demands_the_acknowledgement(monkeypatch,
     assert ctx.btn_bench_run.disabled is False
 
 
-# ── v2.1: the quantum stack is imported on the MAIN thread ──────────
+# ── the quantum stack is imported on the MAIN thread ────────────────
 
 def test_runtime_is_preloaded_on_the_main_thread_before_the_worker(
         monkeypatch, tmp_path):
@@ -722,14 +722,15 @@ def _runtime_fakes():
         T1=_Exp, T2Hahn=_Exp)
 
 
-# ── v3: no false success ────────────────────────────────────────────
+# ── no false success ────────────────────────────────────────────────
 
 def test_empty_epoch_is_not_applied_and_not_called_measured(monkeypatch,
                                                              tmp_path):
-    """The exact 18 Sept failure: the run produced nothing and said ✅.
+    """A run that produced nothing must not say ✅.
 
-    IBM rejected the job, the parser found no analysis results, and the panel
-    applied an epoch identical to the reported one labelled 'measured'.
+    When IBM rejects the job and the parser finds no analysis results, the
+    panel must not apply an epoch identical to the reported one labelled
+    'measured'.
     """
     monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
     _have_qe(monkeypatch)
@@ -807,7 +808,7 @@ def test_complete_measurement_reports_real_coverage(monkeypatch, tmp_path):
     assert '4/4 qubits' in status, status
 
 
-# ── v3: a failed job says so ────────────────────────────────────────
+# ── a failed job says so ────────────────────────────────────────────
 
 def test_job_failure_surfaces_ibms_message_and_job_ids(monkeypatch, tmp_path):
     monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
@@ -835,7 +836,7 @@ def test_job_failure_surfaces_ibms_message_and_job_ids(monkeypatch, tmp_path):
     assert ctx.btn_bench_run.disabled is False
 
 
-# ── v3: submittability gating ───────────────────────────────────────
+# ── submittability gating ───────────────────────────────────────────
 
 def test_run_is_disabled_when_the_plan_cannot_fit_a_job(monkeypatch,
                                                          tmp_path):
@@ -859,7 +860,7 @@ def test_summary_states_circuits_shots_and_jobs(monkeypatch, tmp_path):
     assert 'circuits' in summary and 'shots' in summary and 'job' in summary
 
 
-# ── v3.1: consistency check and relative mode in the panel ─────────
+# ── consistency check and relative mode in the panel ───────────────
 
 def _offset_runner(factor):
     """A runner whose readout comes back `factor` times the reported value."""
@@ -879,7 +880,7 @@ def _offset_runner(factor):
 
 
 def test_a_systematic_offset_triggers_relative_mode(monkeypatch, tmp_path):
-    """The 20 Sept signature: everything uniformly worse than reported."""
+    """Everything uniformly worse than reported."""
     monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
     _have_qe(monkeypatch)
     state = _state()
@@ -941,9 +942,9 @@ def test_analysis_callback_failures_are_reported_as_partial(monkeypatch,
                                                              tmp_path):
     """A DONE job whose fits all raised must not read as a clean success.
 
-    On 20 Sept 13:08 both phases reported DONE, `errors()` was None, and the
-    panel showed six bland "no results returned" notices with no hint that
-    every two-qubit callback had thrown.
+    Both phases report DONE and `errors()` is None; the panel must say that
+    every two-qubit callback threw, not show bland "no results returned"
+    notices.
     """
     monkeypatch.setattr('iqmapper.data._CACHE_DIR', str(tmp_path))
     _have_qe(monkeypatch)
@@ -976,7 +977,7 @@ def test_analysis_callback_failures_are_reported_as_partial(monkeypatch,
     assert 'analysis failed' in ctx.lbl_lucj_notices.value
 
 
-# ── v3.2: reanalysis must replay the ORIGINAL plan ─────────────────
+# ── reanalysis must replay the ORIGINAL plan ───────────────────────
 
 def _record_for(plan, when=1_700_000_000.0, jobs=None):
     """The _jobs.json payload a submission of `plan` would have written."""
@@ -1124,7 +1125,7 @@ def test_plan_from_record_round_trips():
         assert a.params.get('pairs') == b.params.get('pairs')
 
 
-# ── v3.3: the reanalysis must stay phase-aware and self-check ──────
+# ── the reanalysis must stay phase-aware and self-check ────────────
 
 def test_reanalysis_passes_job_ids_grouped_by_phase(monkeypatch, tmp_path):
     """Flattening the phases lost the 1Q subtraction silently.
@@ -1205,7 +1206,7 @@ def test_reanalysis_runs_the_consistency_check_and_relative_mode(monkeypatch,
     assert 'relative' in state.calibration_data_label
 
 
-# ── v3.4: the UI path must equal the direct path ───────────────────
+# ── the UI path must equal the direct path ─────────────────────────
 
 class _SpyAnalysis:
     """Records what the 2Q analysis was given."""
@@ -1367,7 +1368,7 @@ def test_ui_reanalysis_matches_direct_reanalysis(monkeypatch, tmp_path):
         ui_epoch.notices
 
 
-# ── v3.6: the calibration check, wired ─────────────────────────────
+# ── the calibration check, wired ───────────────────────────────────
 
 def _calcheck_state(n_q=16):
     state = _state(n_q)
@@ -1582,7 +1583,7 @@ def _build_real_ui(monkeypatch):
     return builder, st
 
 
-# ── v3.7: the result copy a user can actually read ─────────────────
+# ── the result copy a user can actually read ───────────────────────
 
 def _run_with_factors(monkeypatch, tmp_path, factors, n_q=8):
     """Drive a run whose measured/reported ratio is `factors` per property."""
@@ -1618,7 +1619,7 @@ def test_copy_all_in_band(monkeypatch, tmp_path):
 
 
 def test_copy_names_in_band_and_rescaled_properties():
-    """The exact parameterised sentence, on the real 20 Sept shape."""
+    """The exact parameterised sentence, on a real live-run shape."""
     from iqmapper.ui.benchmark_panel import setup_benchmark_panel
     ctx = _ctx()
     api = setup_benchmark_panel(ctx)

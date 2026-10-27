@@ -21,7 +21,6 @@ import glob
 import re
 
 import numpy as np
-import pytest
 
 TAG = re.compile(r'<[^>]+>')
 

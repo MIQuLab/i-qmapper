@@ -74,7 +74,7 @@ def _build(monkeypatch, *, snapshot, ancilla=0):
     return b, state, captured
 
 
-# ── t1: the search receives the snapshot arrays, not the live sentinel ──────
+# ── the search receives the snapshot arrays, not the live sentinel ──────────
 
 def test_search_uses_snapshot_not_live(monkeypatch):
     b, state, captured = _build(monkeypatch, snapshot=True)
@@ -89,7 +89,7 @@ def test_search_uses_snapshot_not_live(monkeypatch):
     assert pr.gate_error('cz', (3, 2)) == _SNAP_CZ[2]
 
 
-# ── t2: search and C1 read the SAME values (epoch consistency) ──────────────
+# ── search and C1 read the SAME values (epoch consistency) ──────────────────
 
 def test_search_and_c1_share_epoch(monkeypatch):
     b, state, captured = _build(monkeypatch, snapshot=True)
@@ -106,7 +106,7 @@ def test_search_and_c1_share_epoch(monkeypatch):
     assert pr.t2(2) * 1e6 == pytest.approx(_SNAP_T2[2])
 
 
-# ── t3: live mode unchanged — the sentinel flows ────────────────────────────
+# ── live mode unchanged — the sentinel flows ────────────────────────────────
 
 def test_live_mode_passes_initial_props(monkeypatch):
     b, state, captured = _build(monkeypatch, snapshot=False)   # time_mode='live'
@@ -116,7 +116,7 @@ def test_live_mode_passes_initial_props(monkeypatch):
     assert pr.readout_error(3) == 0.99                          # the sentinel
 
 
-# ── t4: the "scored on" note renders only for a non-live snapshot ───────────
+# ── the "scored on" note renders only for a non-live snapshot ───────────────
 
 def test_status_note_only_for_snapshot(monkeypatch):
     b, state, captured = _build(monkeypatch, snapshot=True)
@@ -128,7 +128,7 @@ def test_status_note_only_for_snapshot(monkeypatch):
     assert 'scored on' not in b2.lbl_lucj_status.value
 
 
-# ── t5: the Auto sweep path also pre-ranks on the snapshot, not live ─────────
+# ── the Auto sweep path also pre-ranks on the snapshot, not live ─────────────
 
 def test_sweep_uses_snapshot_not_live(monkeypatch):
     """Auto (-1) routes to the stratified sweep. It must pre-rank on the loaded

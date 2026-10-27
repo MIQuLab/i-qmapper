@@ -226,8 +226,8 @@ def setup_benchmark_panel(ctx):
                     f"{esc(gate.warning)}</span>") if gate.warning else ''
 
             # A plan that cannot be split under IBM's per-job shot limit must
-            # not be submittable: sending it costs a round trip and, before
-            # v3, ended in a false success. Computed BEFORE the summary is
+            # not be submittable: sending it only costs a round trip.
+            # Computed BEFORE the summary is
             # written so the reason is visible, not just a greyed button.
             ok, reason = bench.plan_is_submittable(plan, plan.shots)
             if not ok:
@@ -514,9 +514,8 @@ def setup_benchmark_panel(ctx):
 
         An epoch that measured NOTHING is a failure, not a successful no-op.
         Applying one overwrites the reported calibration with an identical
-        copy and labels it "measured" — which is exactly what happened after
-        IBM rejected the 18 Sept submission, and is the single outcome this
-        feature must never produce.
+        copy and labels it "measured" — the single outcome this feature must
+        never produce.
         """
         state, refresh_fn = active_target()
         _check_consistency(state, epoch)
@@ -628,11 +627,9 @@ def setup_benchmark_panel(ctx):
     def _result_sentence(epoch, stats, rescaled):
         """One plain sentence. No jargon, no warning glyph, no method talk.
 
-        The panel used to print the engine's own vocabulary — "estimator
-        mismatch suspected; measured values applied in RELATIVE mode" — which
-        describes the implementation rather than what the user now has. This
-        says what happened to their numbers and why, and leaves the figures
-        to the Details table.
+        Says what happened to the user's numbers and why, in plain words
+        rather than the engine's vocabulary, and leaves the figures to the
+        Details table.
         """
         in_band = [k for k in stats if k not in rescaled]   # stats order
         parts = ['\u2705 Benchmark applied']
@@ -882,9 +879,9 @@ def setup_benchmark_panel(ctx):
         def _record_jobs(chunk_index, job_ids, status):
             """Persist ids the moment they exist, not at the end.
 
-            The 18 Sept run left no record of what had been submitted because
-            it never completed. With this, an interrupted or rejected run can
-            still be diagnosed and — via reanalyze_from_jobs — recovered.
+            A run that never completes would otherwise leave no record of what
+            was submitted. With this, an interrupted or rejected run can still
+            be diagnosed and — via reanalyze_from_jobs — recovered.
             """
             job_ids_seen[str(chunk_index)] = list(job_ids)
             if backend_name:
@@ -910,7 +907,7 @@ def setup_benchmark_panel(ctx):
                             else (payload, []))
             # The raw dump is saved BEFORE anything can go wrong in folding,
             # and regardless of whether the epoch turns out usable: it is the
-            # diagnostic artefact that did not exist on 18 Sept.
+            # diagnostic artefact for a run that goes wrong.
             if backend_name and expdata:
                 try:
                     bench.save_raw_results(backend_name, started_at, expdata)
@@ -918,11 +915,9 @@ def setup_benchmark_panel(ctx):
                     _log.debug('raw dump failed', exc_info=True)
             try:
                 # `when=started_at` deliberately: the epoch, its _jobs.json and
-                # its _raw.json must share one timestamp. On 20 Sept they did
-                # not — the dumps were named by submission time (12:38:08) and
-                # the epoch by completion time (12:50:10), so the three
-                # artifacts of a single run looked like unrelated files and the
-                # raw dump appeared to be missing.
+                # its _raw.json must share one timestamp. Naming the dumps by
+                # submission time and the epoch by completion time would make
+                # the three artifacts of one run look like unrelated files.
                 epoch = bench.results_to_epoch(raw, plan, reported_q,
                                                reported_g, edges,
                                                when=started_at)
@@ -1080,8 +1075,7 @@ def setup_benchmark_panel(ctx):
                 btn_bench_reanalyze.disabled = False
             _log.exception('reanalysis failed')
             # Persist whatever exists even on the failure path: a reanalysis
-            # that leaves nothing behind cannot be diagnosed, which is
-            # exactly how the 20 Sept attempt became a dead end.
+            # that leaves nothing behind cannot be diagnosed.
             _persist_attempt(name, attempt_at, expdata,
                              [f'reanalysis failed: {exc}'])
             lbl_bench_status.value = _err(exc)
@@ -1090,8 +1084,7 @@ def setup_benchmark_panel(ctx):
         if btn_bench_reanalyze is not None:
             btn_bench_reanalyze.disabled = False
         # Raw dump and notices FIRST, unconditionally — an empty epoch is
-        # precisely the case where the artefacts are needed, and the old code
-        # returned before writing them.
+        # precisely the case where the artefacts are needed.
         _persist_attempt(name, attempt_at, expdata, epoch.notices)
         if _install_epoch(epoch,
                           source=f'Reanalysis of L{plan.level} run (no QPU)') \
@@ -1101,10 +1094,8 @@ def setup_benchmark_panel(ctx):
     def _persist_attempt(backend_name, when, expdata, notices):
         """Write the raw dump and the notices for ANY attempt.
 
-        Including one that produced nothing. The 20 Sept reanalysis wrote no
-        file at all because the empty-epoch branch returned before the dump,
-        so there was no way to tell whether it had failed on the composite
-        metadata or on something else.
+        Including one that produced nothing: without its files there is no way
+        to tell why an attempt came back empty.
         """
         if not backend_name:
             return

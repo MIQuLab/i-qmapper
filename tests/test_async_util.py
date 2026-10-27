@@ -43,7 +43,7 @@ def _join(thread):
     assert not thread.is_alive(), "worker thread did not finish"
 
 
-# ── M3 t1: THE live-shaped regression — worker → captured main loop ─────────
+# ── THE live-shaped regression — worker → captured main loop ────────────────
 
 def test_marshal_schedules_onto_captured_loop_from_worker(monkeypatch,
                                                           _capture_isolation):
@@ -95,7 +95,7 @@ def test_marshal_schedules_onto_captured_loop_from_worker(monkeypatch,
         loop.close()
 
 
-# ── M3 t3: caller already on the captured main thread → inline fast path ────
+# ── caller already on the captured main thread → inline fast path ───────────
 
 def test_marshal_inline_on_main_thread(monkeypatch, _capture_isolation):
     # A captured loop that MUST NOT be used from the main-thread caller.
@@ -112,7 +112,7 @@ def test_marshal_inline_on_main_thread(monkeypatch, _capture_isolation):
     assert ran == [threading.current_thread().ident]   # inline, on this thread
 
 
-# ── M3 t2: headless (no captured loop) → inline, zero warnings ──────────────
+# ── headless (no captured loop) → inline, zero warnings ─────────────────────
 
 def test_init_main_loop_headless_no_loop_no_warning(monkeypatch,
                                                     _capture_isolation):
@@ -173,7 +173,7 @@ def test_init_main_loop_captures_running_loop(_capture_isolation):
     assert loop is not None and kind == 'asyncio'
 
 
-# ── N3: capture sources — the live ipykernel case + tornado last resort ─────
+# ── capture sources — the live ipykernel case + tornado last resort ─────────
 
 def _policy_set_loop():
     import asyncio
@@ -186,7 +186,7 @@ def test_capture_via_set_loop_when_not_in_coroutine(monkeypatch,
     """THE live fix: get_running_loop() fails on the main thread (capture runs
     in a widget callback — launch_mapper on Connect — not a coroutine), but the
     thread OWNS a running loop set via set_event_loop. Capture must pick it up
-    from the policy thread-local (previously it gave up → None → worker inline)."""
+    from the policy thread-local rather than give up (None → worker inline)."""
     import asyncio
     loop = asyncio.new_event_loop()
     started = threading.Event()
@@ -245,7 +245,7 @@ def test_capture_via_tornado_last_resort(monkeypatch, _capture_isolation):
         asyncio.set_event_loop(prev)
 
 
-# ── N4: WIRING pin — the real UI build captures, then a worker schedules ────
+# ── WIRING pin — the real UI build captures, then a worker schedules ────────
 
 def _build_ui(monkeypatch):
     import numpy as np
@@ -314,7 +314,7 @@ def test_build_captures_loop_then_worker_schedules(monkeypatch, _capture_isolati
     asyncio.run(_main())
 
 
-# ── P3: capture-once + main-only — a worker must NEVER overwrite the capture ─
+# ── capture-once + main-only — a worker must NEVER overwrite the capture ─────
 
 def test_worker_capture_does_not_overwrite_good_capture(monkeypatch,
                                                         _capture_isolation):
@@ -400,7 +400,7 @@ def test_secondary_build_on_worker_still_marshals_to_main(monkeypatch,
         loop.close()
 
 
-# ── t4: default_spawn_bg deferred-scheduler behaviour (exc binding etc.) ────
+# ── default_spawn_bg deferred-scheduler behaviour (exc binding etc.) ────────
 
 def test_on_error_receives_exception_with_deferred_scheduler(monkeypatch,
                                                              _capture_isolation):

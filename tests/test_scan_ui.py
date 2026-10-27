@@ -301,7 +301,6 @@ def test_scan_fetch_failure_error_row(monkeypatch):
 # ── stability filter still reads the cache for HISTORY ────────────────
 
 def test_stability_history_reads_cache(monkeypatch):
-    from iqmapper.state import SessionState
     b = _build(monkeypatch, marshal=lambda cb: cb())
     # Enable the filter (needs local history available) + the scan sub-filter.
     b.state.cal_history_dates = ['2026-07-01']
@@ -381,9 +380,7 @@ def test_active_backend_skipped_with_reference(monkeypatch):
 
     b.btn_scan_qpus.click()
     assert 'stub' not in swept                       # active never swept
-    # (The removed comparison table used to render a greyed '📍 <active>'
-    # reference row; that row is gone with the table. The skip behaviour — the
-    # active backend is never re-swept — is what still matters and is pinned.)
+    # The active backend is never re-swept and is not listed as a row.
     assert 'stub' not in [lbl.split(' —')[0] for lbl in _labels(b)]  # not a row
 
 

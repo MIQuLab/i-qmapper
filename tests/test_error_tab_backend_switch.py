@@ -2,14 +2,13 @@
 
 The header text comes from time_panel.describe_current_view(state) but only
 re-renders when the panel's own observers fire — a backend switch never touches
-them. The builder now KEEPS the time-panel API handle and the switch wiring
+them. The builder keeps the time-panel API handle and the switch wiring
 calls api.rebuild() (best-effort, never breaking a switch) so the header
 re-renders for the new backend.
 """
 import types
 from types import SimpleNamespace
 
-import pytest
 
 
 # ── stubs shared by the switch-wiring tests ─────────────────────────────────

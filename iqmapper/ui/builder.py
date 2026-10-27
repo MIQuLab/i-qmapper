@@ -341,7 +341,6 @@ class MapperUIBuilder:
             ft_boundary_penalty=self.ft_boundary_penalty,
             joint_params_box=self.joint_params_box,
             lucj_multi_ancillas=self.lucj_multi_ancillas,
-            btn_lucj_multi=self.btn_lucj_multi,
             btn_lucj_multi_sweep=self.btn_lucj_multi_sweep,
             btn_scan_batch=self.btn_scan_batch,
             scan_batch_box=self.scan_batch_box,
@@ -352,10 +351,6 @@ class MapperUIBuilder:
             set_num_circuits=self._set_num_circuits_silent,
             lucj_all_layouts=self._lucj_all_layouts,
             rescore_cell=self._bench_rescore,
-            lucj_multi_results=self._lucj_multi_results,
-            lucj_multi_norbs_list=self._lucj_multi_norbs,
-            lucj_multi_ancillas_list=self._lucj_multi_ancillas,
-            lucj_multi_dropdowns=self._lucj_multi_dropdowns,
             refresh=self._refresh, get_export=self._get_export, update_view=lambda: self._update_view(),
             chk_line_only=self.chk_line_only,
             # Multi-QPU scan.
@@ -1260,21 +1255,17 @@ class MapperUIBuilder:
         (rank by error), btn_lucj_run, lbl_lucj_status.
 
         Inspect Layouts: dd_lucj_layout (ranked selector, disabled until
-        populated — also drives cascading re-optimization for
-        multi-circuit) + lbl_lucj_detail.
+        populated) + lbl_lucj_detail.
 
         Multi-Circuit: lucj_multi_norbs (Text '8, 8' default),
-        lucj_buffer_slider (0..5 buffer qubits), btn_lucj_multi,
+        lucj_buffer_slider (0..5 buffer qubits), btn_lucj_multi_sweep,
         lbl_lucj_multi, lucj_multi_detail_box (VBox populated per
         packed circuit).
 
-        Mutable backing stores on ``self.*`` (mutated by
+        Mutable backing store on ``self.*`` (mutated by
         ``setup_lucj_callbacks`` via ``.append()`` / ``.clear()`` —
         identity must remain stable across the builder's lifetime):
-        ``_lucj_all_layouts``, ``_lucj_multi_results``,
-        ``_lucj_multi_norbs`` (for cascading re-optimization on dropdown
-        change), ``_lucj_multi_dropdowns``
-        (``circuit_idx → (dropdown, label, candidates)``).
+        ``_lucj_all_layouts``.
 
         Click handlers + cascading observer in
         ``setup_lucj_callbacks``. ``_load_device_graph`` resets the
@@ -1578,10 +1569,6 @@ class MapperUIBuilder:
 
         # Mutable container for all computed single-circuit layouts.
         self._lucj_all_layouts = []
-        self._lucj_multi_results = []
-        self._lucj_multi_norbs = []
-        self._lucj_multi_ancillas = []
-        self._lucj_multi_dropdowns = {}
 
         # ── Multi-Circuit (intra-QPU multi-programming) cluster ──
         self.lucj_multi_norbs = Text(
@@ -1643,15 +1630,8 @@ class MapperUIBuilder:
                           min_width=W.min_width))
         self.multi_advanced_acc.set_title(0, '⚙️ Advanced')
         self.multi_advanced_acc.selected_index = None  # collapsed on open
-        # Legacy multi-circuit button — no longer shown in the Multi subpanel
-        # (the sweep is the single generate action). The widget + its handler
-        # (_on_lucj_multi) and engine (get_multi_circuit_layouts) stay wired and
-        # test-pinned; it is simply omitted from the layout below.
-        self.btn_lucj_multi = Button(
-            description='🤖 Generate Multi-Circuit',
-            button_style='success', layout=W)
-        # Sweep-based multi-circuit (the ONLY multi generate action in the UI):
-        # greedy auto-best per circuit with a per-circuit override dropdown.
+        # The multi-circuit generate action: best placement per circuit with
+        # a per-circuit override dropdown.
         self.btn_lucj_multi_sweep = Button(
             description='🧺 Generate Multi-Circuit',
             button_style='info', layout=W)
@@ -1667,7 +1647,7 @@ class MapperUIBuilder:
         # bar); empty when nothing was emitted.
         self.lbl_lucj_multi_notices = HTML("")
         # Populated dynamically with per-circuit dropdowns when the
-        # user clicks btn_lucj_multi.
+        # user clicks btn_lucj_multi_sweep.
         self.lucj_multi_detail_box = VBox()
 
     # Roles offered by the legend panel — must match plot._LEGEND_ROLE_ORDER.
@@ -1747,8 +1727,7 @@ class MapperUIBuilder:
         rows = [self.legend_rows[r] for r in self._LEGEND_ROLES]
         controls = VBox([self.chk_legend_enabled, *rows])
         # Collapse into an Accordion so the controls don't clutter the
-        # sidebar by default. Accordion provides its own header so the
-        # inline "🏷️ Legend" HTML title is no longer needed.
+        # sidebar by default. The Accordion header is the section title.
         accordion = Accordion(children=[controls])
         accordion.set_title(0, '🏷️ Legend')
         accordion.selected_index = None   # collapsed on open
@@ -2102,8 +2081,6 @@ class MapperUIBuilder:
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
             self.multi_advanced_acc,
-            # Legacy btn_lucj_multi intentionally omitted — the sweep button is
-            # the single generate action. Handler/engine remain wired + pinned.
             self.btn_lucj_multi_sweep,
             self.btn_scan_batch,
             self.lbl_lucj_multi,
@@ -2349,8 +2326,8 @@ class MapperUIBuilder:
         try:
             self._ext_fns["update_fidelity"]()
         except Exception:
-            # Was a silent debug log — bumped to WARNING because it used
-            # to hide real bugs in estimate_circuit_fidelity.
+            # Logged with the traceback: a failure here is a real bug in
+            # estimate_circuit_fidelity.
             _log.exception("update_fidelity failed during _refresh")
         if self.state.calibration_data_label:
             self.lbl_calibration_date.value = (
@@ -2648,7 +2625,7 @@ class MapperUIBuilder:
         """
         try:
             self.state.push_undo()
-            # parse_auto_text now returns (count, autodetect_stats). The stats
+            # parse_auto_text returns (count, autodetect_stats). The stats
             # let us tell the user whether alpha/beta were topologically
             # auto-detected or fell back to midpoint split.
             count, stats = export_mod.parse_auto_text(
@@ -2887,9 +2864,6 @@ class MapperUIBuilder:
             self.lbl_lucj_status.value = ""
             self.lbl_lucj_notices.value = ""
             self.lbl_lucj_detail.value = ""
-            self._lucj_multi_results.clear()
-            self._lucj_multi_norbs.clear()
-            self._lucj_multi_dropdowns.clear()
             self.lbl_lucj_multi.value = ""
             self.lbl_lucj_multi_notices.value = ""
             self.lucj_multi_detail_box.children = ()
@@ -2991,7 +2965,7 @@ class MapperUIBuilder:
         # dd_mode changes arrive with a non-nav owner, and _toggle_intra_qpu
         # / bootstrap call with change=None — all of those still rebuild so
         # the manual view is correct the next time it opens. A bare nav to
-        # auto/export/error used to reallocate every per-circuit tab VBox for
+        # auto/export/error would reallocate every per-circuit tab VBox for
         # a view that doesn't display them (flicker + wasted work); skip it.
         _nav_only = change is not None and getattr(change, 'owner', None) is self.nav_bar
         if mode == 'manual' or not _nav_only:
@@ -3092,13 +3066,13 @@ class MapperUIBuilder:
 
     def _set_num_circuits_silent(self, n):
         """Set ``num_circuits`` WITHOUT the full ``_update_view`` rebuild its
-        observer would fire — used when a multi-circuit sweep/legacy apply
+        observer would fire — used when a multi-circuit generate or apply
         changes the count as a RESULT of its own action.
 
         The visible Multi subpanel is already updated in place (its summary and
         per-circuit override dropdowns are persistent widgets refreshed by the
         caller), so rebuilding ``content_box`` would only repaint an identical
-        panel — the flicker X2b targets. A count change genuinely needs just the
+        panel and make it flicker. A count change genuinely needs just the
         OFF-SCREEN refresh: the per-circuit manual UI + the ancilla-tool
         options — exactly what ``_build_dynamic_ui`` does (it never touches
         ``content_box``). The nav options don't depend on ``num_circuits`` (only
@@ -3526,8 +3500,8 @@ class MapperUIBuilder:
 
         def on_click(b):
             # Set current_fill BEFORE the picker value — the picker's
-            # observer guard then sees new == current_fill and no-ops,
-            # avoiding the old double-rebuild. Borders flip in place.
+            # observer guard then sees new == current_fill and no-ops, so
+            # nothing is rebuilt twice. Borders flip in place.
             self.state.layouts_data[idx]['current_fill'] = color
             self.state.layouts_data[idx]['cp_fill_advanced'].value = color
             self._sync_manual_swatch_borders(idx)

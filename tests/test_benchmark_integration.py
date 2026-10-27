@@ -18,7 +18,6 @@ absent, so the default suite stays runnable on a bare install:
 
     python -m pytest -m integration -q
 """
-import os
 
 import numpy as np
 import pytest
@@ -131,10 +130,8 @@ def _run_through_production_runner(monkeypatch, local_api, backend, plan,
 
 def test_l1_plan_on_fake_backend_yields_measurements(monkeypatch, fake_backend,
                                                      local_api):
-    """The check that would have caught the live failure.
-
-    Before v3 this could not even be written: the runner had no seam for a
-    local sampler, and the plan it built for a real device was unsubmittable.
+    """The whole run against a local sampler, on a plan built for a real
+    device.
     """
     targets = bench.Targets([0, 1, 2], [])
     coupling = _coupling_of(fake_backend)
@@ -261,7 +258,7 @@ def test_t1_delays_are_within_the_backend_limits(fake_backend):
         f'device limit {max_delay}s')
 
 
-# ── 6. Part F: reanalysis reproduces the direct run ─────────────────
+# ── reanalysis reproduces the direct run ────────────────────────────
 
 def _jobs_of(expdata_list):
     """The job OBJECTS a run produced, for reanalysis to consume."""
@@ -280,14 +277,13 @@ def _jobs_of(expdata_list):
 def test_reanalysis_from_jobs_reproduces_the_direct_run(monkeypatch,
                                                          fake_backend,
                                                          local_api):
-    """Part F, faithfully: rebuild from the JOBS, not from the run's data.
+    """Rebuild from the JOBS, not from the run's data.
 
-    The live failure was `AnalysisError: Unable to extract component child
-    experiment data` — reanalysis built a bare `ExperimentData` and added
-    jobs to it, so the composite children and component metadata that
-    `BaseExperiment.run()` allocates before submission were never created.
-    Reanalysing from the original `expdata` would have hidden that, because
-    that container already had them. This test therefore goes through
+    A bare `ExperimentData` with jobs added to it lacks the composite
+    children and component metadata that `BaseExperiment.run()` allocates
+    before submission (`AnalysisError: Unable to extract component child
+    experiment data`). Reanalysing from the original `expdata` would hide
+    that, because that container already has them. This test therefore goes through
     `reanalyze_from_jobs` with job objects and nothing else.
 
     Analysis is client-side, so this costs no execution: the same counts are

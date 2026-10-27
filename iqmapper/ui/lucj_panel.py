@@ -174,7 +174,6 @@ def setup_lucj_callbacks(ctx):
 
     # Unpack context for readability
     state = ctx.state
-    out = ctx.out
     W = ctx.W
 
     lucj_norb_slider = ctx.lucj_norb_slider
@@ -205,7 +204,6 @@ def setup_lucj_callbacks(ctx):
     int_cands_per_circuit = getattr(ctx, 'int_cands_per_circuit', None)
     ft_boundary_penalty = getattr(ctx, 'ft_boundary_penalty', None)
     joint_params_box = getattr(ctx, 'joint_params_box', None)
-    btn_lucj_multi = ctx.btn_lucj_multi
     btn_lucj_multi_sweep = ctx.btn_lucj_multi_sweep
     btn_scan_batch = ctx.btn_scan_batch
     scan_batch_box = ctx.scan_batch_box
@@ -217,10 +215,6 @@ def setup_lucj_callbacks(ctx):
     intra_qpu_mode = ctx.intra_qpu_mode
 
     _lucj_all_layouts = ctx.lucj_all_layouts
-    _lucj_multi_results = ctx.lucj_multi_results
-    _lucj_multi_norbs_list = ctx.lucj_multi_norbs_list
-    _lucj_multi_ancillas_list = ctx.lucj_multi_ancillas_list
-    _lucj_multi_dropdowns = ctx.lucj_multi_dropdowns
 
     def _refresh():
         ctx.refresh()
@@ -253,7 +247,7 @@ def setup_lucj_callbacks(ctx):
             d['styles'][q] = {'fill': beta_fill,
                               'line': _line, 'width': _width, 'text_color': _text}
         # Sweep entries carry per-circuit ancillas; paint them as the ancilla
-        # role. Legacy candidates have no 'ancillas' key → nothing changes.
+        # role.
         anc_fill = 'none' if line_only else hex_to_rgba(d['defaults']['fill_anc'], 1.0)
         d['ancilla'] = [str(q) for q in candidate.get('ancillas', [])
                         if str(q) in state.qubit_ids]
@@ -374,10 +368,9 @@ def setup_lucj_callbacks(ctx):
     # The LQS shown here is the circuit-level score — the same number
     # the Estimated Layout-Quality box reports. '(template)' flags the
     # internal heuristic used only when circuit scoring is unavailable.
-    with contextlib.suppress(Exception):
-        dd_lucj_layout.tooltip = (
-            'LQS = circuit-level fidelity; "(template)" = fallback '
-            'heuristic \u00b7 README: LQS')
+    dd_lucj_layout.tooltip = (
+        'LQS = circuit-level fidelity; "(template)" = fallback '
+        'heuristic \u00b7 README: LQS')
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
 
     # ── Dropdown re-seed helper (observer-safe) ──────────────────
@@ -389,8 +382,7 @@ def setup_lucj_callbacks(ctx):
         _lucj_all_layouts.extend(entries)
         # Suppress observer firing while re-seeding: otherwise setting
         # value=0 fires _on_lucj_layout_select → apply, then we apply again
-        # below — double push_undo + redundant refresh. Same unobserve →
-        # set → observe dance as _reoptimize_downstream.
+        # below — double push_undo + redundant refresh.
         dd_lucj_layout.unobserve(_on_lucj_layout_select, names='value')
         dd_lucj_layout.options = dd_opts
         dd_lucj_layout.value = 0 if dd_opts else None
@@ -672,9 +664,8 @@ def setup_lucj_callbacks(ctx):
                 f"✅ <b>{len(all_layouts)}</b> layouts found (norb={norb}, "
                 f"ancillas={num_ab}). Best: err={sc}{ancilla_note}{_epoch_suffix()}</div>")
 
-    # ── Stratified ancilla sweep (new default) ───────────────────
+    # ── Stratified ancilla sweep (the default) ───────────────────
     def _generate_sweep(norb):
-        from ..ancilla_sweep import sweep_ancilla_layouts
 
         # exact same params the scan uses (min_bridges / top_n / hybrid).
         kwargs = _sweep_kwargs_from_ui()
@@ -788,9 +779,9 @@ def setup_lucj_callbacks(ctx):
                 f"{'s' if len(flat) != 1 else ''} found{vin_txt}</div>")
         else:
             lbl_lucj_status.value = (
-                f"<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
-                f"padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
-                f"margin:3px 0;'>⚠️ Sweep produced no candidates.</div>")
+                "<div style='font-size:14px;color:#e67e22;background:#fef9e7;"
+                "padding:4px 8px;border-radius:4px;border:1px solid #fdebd0;"
+                "margin:3px 0;'>⚠️ Sweep produced no candidates.</div>")
 
     # ── Single circuit LUCJ generate ─────────────────────────────
     def _on_lucj_generate(b):
@@ -1110,7 +1101,9 @@ def setup_lucj_callbacks(ctx):
                 continue
             try:
                 props = get_props(get_backend(r['name']))
-            except Exception:
+            except Exception as exc:
+                _log.warning("circuit scores unavailable for %s: properties "
+                             "could not be loaded: %s", r['name'], exc)
                 continue
             # Surface the calibration provenance the shim used.
             r['vintage'] = getattr(props, 'vintage', None)
@@ -1342,9 +1335,7 @@ def setup_lucj_callbacks(ctx):
         (annotation failed). Falls back to the product heuristic — flagged
         '(template)' — only when NOTHING was circuit-scored. Returns
         (value, is_template) so the comparison-table cell, the selector label
-        and the detail line all quote the SAME number (previously the label
-        quoted best_lqs = max product_score, diverging from the lqs_circuit
-        table/detail)."""
+        and the detail line all quote the SAME number."""
         sweep = r.get('sweep') or {}
         lqs_vals = [e['lqs_circuit']
                     for entries in sweep.get('strata', {}).values()
@@ -1403,8 +1394,7 @@ def setup_lucj_callbacks(ctx):
                               layout=Layout(align_items='center'))]
 
     def _scan_detail_line2(r):
-        """Second detail line — the per-backend data the removed comparison
-        table used to carry: stability badge · k-cap phrase · calibration
+        """Second detail line — per-backend data: stability badge · k-cap phrase · calibration
         vintage. Segments that don't apply are omitted; '' when none apply.
         All dynamic values are esc()'d inside the reused helpers / here."""
         segs = []
@@ -1523,7 +1513,7 @@ def setup_lucj_callbacks(ctx):
             f"</summary>"
             f"<div style='padding:4px 8px;font-size:12px;color:#666;'>"
             + "<br>".join(parts) + "</div>"
-            f"</details>")
+            "</details>")
 
     def _append_notices(notices):
         # Collapsible loud notices under the scan results. Hidden when empty.
@@ -1609,199 +1599,6 @@ def setup_lucj_callbacks(ctx):
         scan_spawn_bg(_work, on_done=_on_scan_done, on_error=_on_scan_error)
 
     btn_scan_qpus.on_click(_on_scan_click)
-
-    # ── Multi-circuit LUCJ generate ──────────────────────────────
-    def _on_lucj_multi(b):
-        if state.active_backend is None:
-            lbl_lucj_multi.value = (
-                "<span style='font-size:14px;color:#e74c3c;'>❌ No backend connected.</span>")
-            return
-        if hasattr(state.active_backend, 'coords'):
-            lbl_lucj_multi.value = (
-                "<span style='font-size:14px;color:#e74c3c;'>❌ Auto-LUCJ "
-                "requires a connected IBM backend.</span>")
-            return
-
-        raw = lucj_multi_norbs.value.strip()
-        if not raw:
-            lbl_lucj_multi.value = (
-                "<span style='font-size:14px;color:#e74c3c;'>❌ Enter norb values (e.g. 8, 8)</span>")
-            return
-        try:
-            norb_list = [int(x.strip()) for x in raw.split(',') if x.strip()]
-        except ValueError:
-            lbl_lucj_multi.value = (
-                "<span style='font-size:14px;color:#e74c3c;'>❌ Invalid norb values</span>")
-            return
-        if len(norb_list) < 1:
-            return
-
-        # Per-circuit ancilla counts (parallel to norb). Blank → fall back
-        # to the single Ancilla dropdown for every circuit (legacy).
-        anc_raw = lucj_multi_ancillas.value.strip()
-        ancilla_list = None
-        if anc_raw:
-            try:
-                ancilla_list = [int(x.strip()) for x in anc_raw.split(',') if x.strip()]
-            except ValueError:
-                lbl_lucj_multi.value = (
-                    "<span style='font-size:14px;color:#e74c3c;'>❌ Invalid ancilla values "
-                    "(use integers, e.g. 2, 2; -1 = auto)</span>")
-                return
-            if len(ancilla_list) != len(norb_list):
-                lbl_lucj_multi.value = (
-                    f"<span style='font-size:14px;color:#e74c3c;'>❌ "
-                    f"{len(ancilla_list)} ancilla values but "
-                    f"{len(norb_list)} circuits — match them or leave "
-                    f"ancilla blank.</span>")
-                return
-
-        btn_lucj_multi.disabled = True
-        btn_lucj_multi.description = '⏳ Generating...'
-        lbl_lucj_multi.value = ""
-
-        try:
-            from ..auto_lucj import get_multi_circuit_layouts
-
-            requested_ancillas = lucj_ancilla_dd.value
-            results = get_multi_circuit_layouts(
-                norb_list=norb_list,
-                backend=state.active_backend,
-                score=lucj_chk_score.value,
-                buffer_qubits=lucj_buffer_slider.value,
-                props=_local_scoring_props(),   # loaded snapshot, not live
-                requested_bridges=requested_ancillas,
-                requested_bridges_list=ancilla_list,
-            )
-
-            if not intra_qpu_mode.value and len(norb_list) > 1:
-                intra_qpu_mode.value = True     # OFF→ON reveal: legitimate rebuild
-            # Same treatment as the sweep path: targeted count refresh, no
-            # visible Auto-view rebuild (results render in place below).
-            set_num_circuits(len(norb_list))
-
-            state.push_undo()
-            for res in results:
-                best = res['all_candidates'][0]
-                _apply_multi_candidate(res['circuit_idx'], best)
-
-            _refresh()
-            _get_export()
-
-            # Store for re-optimization
-            _lucj_multi_results.clear()
-            _lucj_multi_results.extend(results)
-            _lucj_multi_norbs_list.clear()
-            _lucj_multi_norbs_list.extend(norb_list)
-            _lucj_multi_ancillas_list.clear()
-            _lucj_multi_ancillas_list.extend(ancilla_list if ancilla_list is not None else [])
-            _lucj_multi_dropdowns.clear()
-
-            # Build per-circuit dropdowns
-            detail_widgets = []
-            for res in results:
-                cidx = res['circuit_idx']
-                cands = res['all_candidates']
-
-                detail_widgets.append(HTML(
-                    f"<div style='font-size:14px;font-weight:bold;color:#2C3E50;margin:6px 0 2px 0;'>"
-                    f"C{cidx+1} — norb={res['norb']}, "
-                    f"{len(cands)} layouts, ancillas={res['num_bridges']}</div>"))
-
-                dd_opts = []
-                for c in cands:
-                    sc = f"err={c['score']:.4f}" if c['score'] is not None else "?"
-                    dd_opts.append((f"#{c['rank']} ({sc}) α:[{c['alpha'][0]}..{c['alpha'][-1]}]",
-                                    c['rank'] - 1))
-
-                dd_circ = Dropdown(options=dd_opts, value=0,
-                                  description=f'C{cidx+1}:', layout=W,
-                                  style={'description_width': '35px'})
-                lbl_circ = HTML("")
-
-                def _show_detail(entry, lbl):
-                    lbl.value = (
-                        f"<div style='font-size:14px;background:#f8f9fa;padding:4px 6px;"
-                        f"border-radius:3px;border:1px solid #dee2e6;margin:2px 0;'>"
-                        f"α={len(entry['alpha'])} β={len(entry['beta'])}</div>")
-
-                _show_detail(cands[0], lbl_circ)
-
-                _lucj_multi_dropdowns[cidx] = {
-                    'dropdown': dd_circ, 'label': lbl_circ,
-                    'candidates': cands,
-                }
-
-                def _make_on_change(ci, candidates, label):
-                    def _on_change(change):
-                        idx = change['new']
-                        if idx is None or idx >= len(candidates):
-                            return
-                        entry = candidates[idx]
-                        state.push_undo()
-                        _apply_multi_candidate(ci, entry)
-                        _refresh()
-                        _get_export()
-                        _show_detail(entry, label)
-                        if ci < len(_lucj_multi_norbs_list) - 1:
-                            _reoptimize_downstream(ci)
-                    return _on_change
-
-                dd_circ.observe(_make_on_change(cidx, cands, lbl_circ), names='value')
-                detail_widgets.extend([dd_circ, lbl_circ])
-
-            lucj_multi_detail_box.children = detail_widgets
-
-            summary_lines = []
-            for res in results:
-                cands = res['all_candidates']
-                sc = f"err={cands[0]['score']:.4f}" if cands[0]['score'] is not None else "unscored"
-                summary_lines.append(
-                    f"<b>C{res['circuit_idx']+1}</b> norb={res['norb']}: "
-                    f"{len(cands)} candidates, best {sc}")
-
-            # Per-circuit clamp note: with mixed norb_list each circuit
-            # may hit its own ceil(norb/4) cap. Same rationale as the
-            # single-circuit ancilla_note above — auto_lucj's stderr
-            # warning is invisible in Jupyter.
-            ancilla_notes = []
-            if requested_ancillas is not None and requested_ancillas >= 0:
-                ancilla_notes = [
-                    (f"C{res['circuit_idx']+1} (norb={res['norb']}): "
-                     f"requested {requested_ancillas}, got "
-                     f"{res['num_bridges']} (max one bridge every 4 orbitals)")
-                    for res in results
-                    if res['num_bridges'] != requested_ancillas
-                ]
-            ancilla_warning = ""
-            if ancilla_notes:
-                ancilla_warning = (
-                    "<br>⚠️ <b>Ancilla request clamped:</b><br>"
-                    + "<br>".join(f"&nbsp;&nbsp;• {n}" for n in ancilla_notes)
-                )
-
-            lbl_lucj_multi.value = (
-                f"<div style='font-size:14px;color:#1e8449;background:#eafaf1;padding:8px 10px;"
-                f"border-radius:5px;border:1px solid #abebc6;margin:4px 0;line-height:1.7;'>"
-                f"✅ <b>{len(results)} circuits placed!</b> "
-                f"(buffer={lucj_buffer_slider.value})<br>"
-                f"{'<br>'.join(summary_lines)}"
-                f"{ancilla_warning}<br>"
-                f"<span style='font-size:14px;color:#555;'>Use dropdowns below to switch layouts per circuit.</span></div>")
-
-            # No ctx.update_view(): the count refresh is targeted (above) and
-            # the detail widgets / summary render into persistent widgets.
-
-        except Exception as e:
-            lbl_lucj_multi.value = (
-                f"<div style='font-size:14px;color:#e74c3c;background:#fdedec;padding:6px 10px;"
-                f"border-radius:5px;border:1px solid #f5b7b1;margin:4px 0;'>"
-                f"❌ <b>Error:</b> {esc(str(e))}</div>")
-        finally:
-            btn_lucj_multi.disabled = False
-            btn_lucj_multi.description = '🤖 Generate Multi-Circuit'
-
-    btn_lucj_multi.on_click(_on_lucj_multi)
 
     # ── Multi-Circuit SWEEP (auto-best per circuit + override) ──────
     _multi_sweep = {'result': None, 'replan_in_flight': False, 'dropdowns': {}}
@@ -2369,92 +2166,3 @@ def setup_lucj_callbacks(ctx):
 
     btn_scan_batch.on_click(_on_scan_batch)
 
-    # ── Re-optimization ─────────────────────────────────────
-    def _reoptimize_downstream(changed_idx):
-        try:
-            from ..auto_lucj import reoptimize_after_change
-
-            locked = {}
-            for ci in range(changed_idx + 1):
-                info = _lucj_multi_dropdowns.get(ci)
-                if info is None:
-                    continue
-                dd = info['dropdown']
-                cands = info['candidates']
-                sel_idx = dd.value
-                if sel_idx is not None and sel_idx < len(cands):
-                    full = cands[sel_idx].get('layout_full', cands[sel_idx]['layout'])
-                    locked[ci] = set(full)
-
-            new_results = reoptimize_after_change(
-                backend=state.active_backend,
-                norb_list=_lucj_multi_norbs_list,
-                locked_qubits=locked,
-                changed_idx=changed_idx,
-                buffer_qubits=lucj_buffer_slider.value,
-                score=lucj_chk_score.value,
-                props=_local_scoring_props(),   # loaded snapshot, not live
-                requested_bridges=lucj_ancilla_dd.value,
-                requested_bridges_list=(list(_lucj_multi_ancillas_list)
-                                        if _lucj_multi_ancillas_list else None),
-            )
-
-            for res in new_results:
-                cidx = res['circuit_idx']
-                cands = res['all_candidates']
-                info = _lucj_multi_dropdowns.get(cidx)
-                if info is None:
-                    continue
-
-                dd = info['dropdown']
-                lbl = info['label']
-                dd.unobserve_all()
-
-                dd_opts = []
-                for c in cands:
-                    sc = f"err={c['score']:.4f}" if c['score'] is not None else "?"
-                    dd_opts.append((f"#{c['rank']} ({sc}) α:[{c['alpha'][0]}..{c['alpha'][-1]}]",
-                                    c['rank'] - 1))
-                dd.options = dd_opts
-                dd.value = 0
-                info['candidates'] = cands
-
-                _apply_multi_candidate(cidx, cands[0])
-                lbl.value = (
-                    f"<div style='font-size:14px;background:#f8f9fa;padding:4px 6px;"
-                    f"border-radius:3px;border:1px solid #dee2e6;margin:2px 0;'>"
-                    f"α: {', '.join(str(q) for q in cands[0]['alpha'])}<br>"
-                    f"β: {', '.join(str(q) for q in cands[0]['beta'])}<br>"
-                    f"<span style='color:#e67e22;'>♻️ re-optimized ({len(cands)} candidates)</span></div>")
-
-                def _make_reopt_cb(ci, candidates, label):
-                    def _cb(change):
-                        idx = change['new']
-                        if idx is None or idx >= len(candidates):
-                            return
-                        entry = candidates[idx]
-                        state.push_undo()
-                        _apply_multi_candidate(ci, entry)
-                        _refresh()
-                        _get_export()
-                        label.value = (
-                            f"<div style='font-size:14px;background:#f8f9fa;padding:4px 6px;"
-                            f"border-radius:3px;border:1px solid #dee2e6;margin:2px 0;'>"
-                            f"α={len(entry['alpha'])} β={len(entry['beta'])}</div>")
-                        if ci < len(_lucj_multi_norbs_list) - 1:
-                            _reoptimize_downstream(ci)
-                    return _cb
-                dd.observe(_make_reopt_cb(cidx, cands, lbl), names='value')
-
-            _refresh()
-            _get_export()
-            lbl_lucj_multi.value = lbl_lucj_multi.value.replace(
-                '</div>',
-                f'<br><span style="color:#e67e22;">♻️ Re-optimized C{changed_idx+2}+ after C{changed_idx+1} change</span></div>',
-                1,
-            )
-
-        except Exception as e:
-            _log.exception("LUCJ re-optimization failed")
-            with out:
-                print(f"⚠️ Re-optimization failed: {e!s}")

@@ -4,7 +4,6 @@ state it paints, and (b) refuses to empty a populated trace when the state has
 no qubit_ids — logging loudly instead.
 """
 import logging
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -51,7 +50,7 @@ def test_refresh_preserves_nodes_when_qubit_ids_empty(monkeypatch, caplog):
     qt = _qubit_trace(b.fig)
     assert len(qt.x) == 8 and len(qt.marker.color) == 8      # nodes present
 
-    # Emptying qubit_ids while edges remain used to wipe the node colour/text
+    # Emptying qubit_ids while edges remain would wipe the node colour/text
     # (positions kept) → invisible nodes, edges drawn. The guard must refuse.
     b.state.qubit_ids = []
     with caplog.at_level(logging.WARNING, logger='iqmapper.plot'):

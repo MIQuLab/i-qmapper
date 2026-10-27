@@ -46,7 +46,7 @@ def _targets_html(b):
     return b.scan_results_box.children[0].value
 
 
-# ── t1: mixed fixture → exact compact line ──────────────────────────────────
+# ── mixed fixture → exact compact line ──────────────────────────────────────
 
 def test_targets_line_compact_mixed(monkeypatch):
     b, state = _build(monkeypatch, active='ibm_boston')
@@ -92,7 +92,7 @@ def test_short_reasons_mapped(monkeypatch):
     assert 'ibm_other (Flamingo)' in html
 
 
-# ── t2: no eligible targets → 'none' form ──────────────────────────────────
+# ── no eligible targets → 'none' form ──────────────────────────────────────
 
 def test_targets_line_none(monkeypatch):
     b, state = _build(monkeypatch, active='none')
@@ -109,7 +109,7 @@ def test_targets_line_none(monkeypatch):
     assert 'skipped:' not in html                     # 'none' form omits the word
 
 
-# ── t3: esc() on a hostile backend name ─────────────────────────────────────
+# ── esc() on a hostile backend name ─────────────────────────────────────────
 
 def test_targets_line_escapes_name(monkeypatch):
     b, state = _build(monkeypatch, active='none')

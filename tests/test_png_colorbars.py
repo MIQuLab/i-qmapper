@@ -4,7 +4,6 @@ export figure (plot.build_static_figure has no colorbar code).
 Offline: never calls write_image (kaleido/chrome unavailable); uses plain
 plotly figures and stubs the render/write path.
 """
-import types
 from types import SimpleNamespace
 
 import pytest

@@ -200,8 +200,8 @@ live in your own `qiskit-ibm-runtime` account store.
 
 I-QMapper normally ranks layouts on the calibration IBM *reports*, which is
 refreshed about once a day. Qubits drift inside that window, so a layout chosen
-at 14:00 can sit on a qubit that degraded at 11:00. The Benchmark section in the
-**Auto** tab re-measures the hardware and feeds the result back as a "measured"
+at 14:00 can sit on a qubit that degraded at 11:00. The Benchmark section
+re-measures the hardware and feeds the result back as a "measured"
 calibration epoch — the heatmap, LQS, candidate ranking and exports all read it
 exactly as they read the reported one.
 
@@ -260,8 +260,10 @@ single-qubit error lands on the two-qubit gate and every edge reads a few times
 worse than reported.
 
 After every run I-QMapper compares the measured values with the reported ones
-per property and shows the result (`cz_error: ×1.1 median vs reported · 3 of
-351 >2× worse`). If a property's median is more than 2× away in either
+per property and says what it found: "✅ Benchmark applied — measured values
+are in line with IBM's reported calibration.", or that some properties "differ
+by a constant factor (×1.3) and are shown on IBM's scale"; the figures are in
+the **Details** table. If a property's median is more than 2× away in either
 direction, that is a systematic offset rather than drift — a whole chip does not
 degrade uniformly overnight — and the epoch is applied in **relative mode**:
 each value is rescaled so the median matches the reported one, which removes the
@@ -279,8 +281,8 @@ values. If both come back offset it is the estimator; if only the parallel run
 is offset it is crosstalk between simultaneously driven pairs.
 
 A run reports what it actually measured: `measured 156/156 qubits` when complete,
-`⚠ partial` when some elements failed to fit, and `⚠ no usable measurements —
-reported epoch kept` when nothing came back. A rejected or failed job shows IBM's
+`⚠ partial` when some elements failed to fit, and "⚠ Nothing usable was
+measured — IBM's reported calibration is still in use." when nothing came back. A rejected or failed job shows IBM's
 own error text and the job ids. Nothing is ever labelled "measured" unless it was.
 
 Measured values replace reported ones only for the elements actually measured;

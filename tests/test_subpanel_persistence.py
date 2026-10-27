@@ -1,11 +1,10 @@
 """SUBPANEL SELECTION MUST SURVIVE REBUILDS.
 
 Every structural refresh rebuilds a nav view from scratch, minting a fresh Tab
-whose selected_index defaults to 0. Firing Generate Multi-Circuit from the Multi
-subpanel used to bounce the user back to Single mid-operation. These tests pin
-that the Auto / I/O / Error subtabs keep their selection across rebuilds.
+whose selected_index defaults to 0. Generate Multi-Circuit must not bounce the
+user from the Multi subpanel back to Single mid-operation. These tests pin that
+the Auto / I/O / Error subtabs keep their selection across rebuilds.
 """
-from types import SimpleNamespace
 
 import numpy as np
 from ipywidgets import Dropdown
@@ -80,7 +79,7 @@ def _build(monkeypatch):
     return b, state
 
 
-# ── t1: the user's exact sequence — Generate Multi stays on Multi ───────────
+# ── the user's exact sequence — Generate Multi stays on Multi ───────────────
 
 def test_multi_generate_keeps_multi_subpanel(monkeypatch):
     b, state = _build(monkeypatch)
@@ -115,7 +114,7 @@ def test_num_circuits_change_keeps_multi_subpanel(monkeypatch):
     assert b._auto_lucj_tabs.selected_index == 1
 
 
-# ── t2: fresh reveal defaults to Single; rebuilds while ON preserve ─────────
+# ── fresh reveal defaults to Single; rebuilds while ON preserve ─────────────
 
 def test_fresh_reveal_single_then_preserve(monkeypatch):
     b, state = _build(monkeypatch)
@@ -141,7 +140,7 @@ def test_fresh_reveal_single_then_preserve(monkeypatch):
     assert b._auto_lucj_tabs.selected_index == 0
 
 
-# ── t3: same-class pins for the I/O and Error tabs ─────────────────────────
+# ── same-class pins for the I/O and Error tabs ─────────────────────────────
 
 def test_io_subtab_survives_rebuild(monkeypatch):
     b, state = _build(monkeypatch)
@@ -185,7 +184,7 @@ def _on_multi(b):
     return b._auto_lucj_tabs
 
 
-# ── W3 t1: the Tab widget instance is UNCHANGED after Generate (no rebuild) ──
+# ── the Tab widget instance is UNCHANGED after Generate (no rebuild) ─────────
 
 def test_multi_generate_no_rebuild(monkeypatch):
     b, state = _build(monkeypatch)
@@ -204,7 +203,7 @@ def test_multi_generate_no_rebuild(monkeypatch):
     assert 'circuits placed' in b.lbl_lucj_multi.value  # results rendered
 
 
-# ── W3 t2: the targeted widgets ARE refreshed (no rebuild ≠ no update) ───────
+# ── the targeted widgets ARE refreshed (no rebuild ≠ no update) ──────────────
 
 def test_multi_generate_targeted_widgets_refreshed(monkeypatch):
     b, state = _build(monkeypatch)
@@ -226,7 +225,7 @@ def test_multi_generate_targeted_widgets_refreshed(monkeypatch):
     assert len(b.manual_tabs.children) == 2
 
 
-# ── W3 t3: a checkbox toggle STILL rebuilds legitimately (X behavior intact) ─
+# ── a checkbox toggle STILL rebuilds legitimately ────────────────────────────
 
 def test_checkbox_toggle_still_rebuilds(monkeypatch):
     b, state = _build(monkeypatch)
@@ -238,24 +237,3 @@ def test_checkbox_toggle_still_rebuilds(monkeypatch):
     assert b._auto_lucj_tabs is not tab_before    # a real rebuild happened
     assert len(b._auto_lucj_tabs.children) == 1   # Multi subpanel dropped
 
-
-# ── W3 t4: the legacy multi Generate path gets the same no-rebuild treatment ─
-
-def test_legacy_multi_generate_no_rebuild(monkeypatch):
-    b, state = _build(monkeypatch)
-    monkeypatch.setattr(
-        "iqmapper.auto_lucj.get_multi_circuit_layouts",
-        lambda **k: [
-            {'circuit_idx': i, 'norb': 8, 'num_bridges': 0,
-             'all_candidates': [{'layout': [0, 1, 2, 3], 'alpha': [0, 1],
-                                 'beta': [2, 3], 'score': 0.03, 'rank': 1,
-                                 'layout_full': [0, 1, 2, 3, 4]}]}
-            for i in range(2)])
-    tab_before = _on_multi(b)
-
-    b.lucj_multi_norbs.value = '8, 8'
-    b.btn_lucj_multi.click()                     # legacy (non-sweep) multi
-
-    assert b._auto_lucj_tabs is tab_before        # no rebuild here either
-    assert b._auto_lucj_tabs.selected_index == 1
-    assert 'circuits placed' in b.lbl_lucj_multi.value

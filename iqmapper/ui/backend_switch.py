@@ -32,7 +32,6 @@ element list (`[False]`) used as a kernel-main-loop reentrancy guard,
 not a thread synchronisation primitive — `threading.Event`'s blocking
 semantics would be wrong here.
 """
-import contextlib
 import logging
 
 from ..html_safe import esc
@@ -149,9 +148,11 @@ def setup_backend_switch(ctx):
                 if refresh_qpu1_label_cell else None)
         if hook is None:
             return
-        with contextlib.suppress(Exception):
-            _log.debug("Refreshing QPU-1 toggle label after backend switch")
+        _log.debug("Refreshing QPU-1 toggle label after backend switch")
+        try:
             hook()
+        except Exception:
+            _log.debug("QPU-1 toggle label refresh failed", exc_info=True)
 
     # Optional: best-effort callable to re-render the Time/Delta panel so the
     # Error-tab header reflects the switched backend. Absent in callers/tests

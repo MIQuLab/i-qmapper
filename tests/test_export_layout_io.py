@@ -65,8 +65,8 @@ def test_import_json_size_cap(make_state, make_slot, monkeypatch):
 # malformed shape falls back to the documented midpoint behaviour.
 
 def test_partition_negative_lengths_summing_correctly_falls_back(make_state, make_slot):
-    # a=-1, b=4, o=0 sums to 3 == len(q_list): the old code accepted it
-    # and produced a negative-slice split with no error. Must midpoint.
+    # a=-1, b=4, o=0 sums to 3 == len(q_list) but is not a valid split
+    # (a negative slice). Must midpoint.
     st = _slots(make_state, make_slot)
     apply_layout_to_circuit(st, 0, [0, 1, 2], "lucj",
                             partition={"alpha_len": -1, "beta_len": 4, "other_len": 0})

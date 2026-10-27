@@ -1,10 +1,10 @@
 """LIVE-model regression for the QPU-2 empty-map bug.
 
-The one-click auto-connect used to hand the ENTIRE connect (build_mapper_ui +
-apply candidate + refresh_plot + mounting the FigureWidget) to a background
-worker. A plotly FigureWidget mutated off the kernel main thread sends its comm
-messages on a non-kernel thread and the browser silently drops them: the QPU-2
-map paints nothing, with no error and no exception — invisible to a suite whose
+The one-click auto-connect must not hand the connect (build_mapper_ui + apply
+candidate + refresh_plot + mounting the FigureWidget) to a background worker. A
+plotly FigureWidget mutated off the kernel main thread sends its comm messages
+on a non-kernel thread and the browser silently drops them: the QPU-2 map
+paints nothing, with no error and no exception — invisible to a suite whose
 `spawn_bg` runs inline.
 
 This test reproduces the LIVE threading model deterministically: the injected
@@ -22,7 +22,6 @@ import queue
 import threading
 from types import SimpleNamespace
 
-import pytest
 
 
 class _RecLabel:

@@ -5,7 +5,6 @@ than either engine's best. Around it: a layout found by both is listed once,
 every entry says where it came from, and with the guided half off the result
 is the exhaustive sweep's own.
 """
-import numpy as np
 import pytest
 import rustworkx
 

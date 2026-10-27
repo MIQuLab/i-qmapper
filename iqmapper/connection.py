@@ -245,7 +245,7 @@ def _make_connection_ui(on_connect_callback):
         [step2_lbl, txt_account, btn_load_account, status_w[2]],
         layout=_ROW_LAYOUT,
     )
-    # Passive status message under the row (no longer clickable). Indented
+    # Passive status message under the row (not clickable). Indented
     # to align under the text input column.
     lbl_account_status = widgets.HTML(
         "", layout=widgets.Layout(margin='0 0 0 168px'),

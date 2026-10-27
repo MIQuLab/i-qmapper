@@ -1,5 +1,4 @@
 """Unified Import/Export tab (two subpanels) + collapsible JSON preview."""
-from types import SimpleNamespace
 
 import numpy as np
 from ipywidgets import Accordion, Tab
@@ -49,7 +48,7 @@ def _find(root, cls):
     return next((w for w in _walk(root) if isinstance(w, cls)), None)
 
 
-# ── t3: unified Import/Export tab — both subpanels, both paths intact ───────
+# ── unified Import/Export tab — both subpanels, both paths intact ───────────
 
 def test_unified_io_tab(monkeypatch):
     b, state = _build(monkeypatch)
@@ -83,7 +82,7 @@ def test_old_nav_tabs_removed(monkeypatch):
     assert 'export' not in vals and 'auto' not in vals      # merged away
 
 
-# ── t4: JSON preview collapsed by default; expand refreshes + persists ──────
+# ── JSON preview collapsed by default; expand refreshes + persists ──────────
 
 def test_json_preview_collapsible(monkeypatch):
     b, state = _build(monkeypatch)

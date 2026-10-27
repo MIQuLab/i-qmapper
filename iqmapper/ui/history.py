@@ -18,12 +18,6 @@ from .status import status_html
 
 _log = logging.getLogger(__name__)
 
-# Per-frame display time in the exported GIF (seconds). 0.5s ≈ 2 fps —
-# readable date overlay without a 30-day history running a full minute.
-# imageio applies this to *every* frame; no per-frame variation here.
-GIF_FRAME_DURATION_S = 0.5
-
-
 def setup_history_callbacks(ctx):
     """Wire history/GIF callbacks. Returns dict of helper functions."""
 
@@ -43,9 +37,8 @@ def setup_history_callbacks(ctx):
     hist_slider_box = ctx.hist_slider_box
     btn_export_gif = ctx.btn_export_gif
     fname_img = ctx.fname_img
-    # Time-lapse export controls (new in v6+). Optional on ctx for backward
-    # compat: if absent, fall back to the legacy fname_img-based name and
-    # GIF format with the constant frame duration.
+    # Time-lapse export controls, optional on ctx: if absent, the export
+    # falls back to the fname_img-based name, GIF format and 2 fps.
     fname_timelapse = getattr(ctx, 'fname_timelapse', None)
     dd_timelapse_format = getattr(ctx, 'dd_timelapse_format', None)
     slider_timelapse_fps = getattr(ctx, 'slider_timelapse_fps', None)

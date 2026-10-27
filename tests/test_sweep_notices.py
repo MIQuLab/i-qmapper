@@ -101,7 +101,7 @@ def _capture_handlers():
             if isinstance(h, _ScanNoticeCapture)]
 
 
-# ── t1: local sweep warning → notices rendered, nothing hits the root ───────
+# ── local sweep warning → notices rendered, nothing hits the root ───────────
 
 def test_local_sweep_notice_captured_not_leaked(monkeypatch):
     b = _build(monkeypatch)
@@ -131,7 +131,7 @@ def test_local_sweep_notice_captured_not_leaked(monkeypatch):
         root.removeHandler(spy)
 
 
-# ── t2: duplicate messages deduplicate with ×count ──────────────────────────
+# ── duplicate messages deduplicate with ×count ──────────────────────────────
 
 def test_local_sweep_dedup_count(monkeypatch):
     b = _build(monkeypatch)
@@ -154,10 +154,10 @@ def test_local_sweep_dedup_count(monkeypatch):
     assert '>3</span>' in notices                     # badge = 3 total records
 
 
-# ── t3 is the existing scan suite (unchanged) — see test_scan_notices.py ────
+# ── the scan path is covered in test_scan_notices.py ────────────────────────
 
 
-# ── t4: restoration on error — BOTH paths (try/finally proof) ───────────────
+# ── restoration on error — BOTH paths (try/finally proof) ───────────────────
 
 def test_local_sweep_restores_on_error(monkeypatch):
     b = _build(monkeypatch)

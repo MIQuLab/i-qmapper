@@ -7,7 +7,6 @@ sieve's semantics, its agreement with the sweep's own score, and that it
 actually widens the sample.
 """
 import random
-from types import SimpleNamespace
 
 import pytest
 import rustworkx

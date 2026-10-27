@@ -36,7 +36,7 @@ def _duplicates(result):
             for k, es in result['strata'].items()}
 
 
-# ── B1: no repeated layout in a stratum ─────────────────────────────
+# ── no repeated layout in a stratum ─────────────────────────────────
 
 def _fez():
     backend = fake_provider.FakeFez()
@@ -92,7 +92,7 @@ def test_distinct_layouts_keeps_the_first_copy():
     assert gs._distinct_layouts([a, a_again, b]) == [a, b]
 
 
-# ── B2: the joint planner's complete plans ──────────────────────────
+# ── the joint planner's complete plans ──────────────────────────────
 
 PLAN_KEYS = {'chosen', 'total', 'circuits', 'total_product',
              'total_lqs_circuit', 'placed_qubits', 'buffer_qubits_used',
