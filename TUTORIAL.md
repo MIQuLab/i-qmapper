@@ -11,7 +11,7 @@ Contents:
 [4. Score and compare](#4-score-and-compare) ·
 [5. Calibration history](#5-calibration-history) ·
 [6. Stability check](#6-stability-check) ·
-[7. Several circuits and several processors](#7-several-circuits-and-several-processors) ·
+[7. Intra- and inter-QPU parallelisation](#7-intra--and-inter-qpu-parallelisation) ·
 [8. Benchmark the device](#8-benchmark-the-device) ·
 [9. Import, export and sessions](#9-import-export-and-sessions) ·
 [10. Where your data lives](#10-where-your-data-lives)
@@ -116,25 +116,24 @@ the automatic search.
 
 <p align="center"><img src="docs/img/stability-report.png" width="720" alt="Stability report over a 14-day window"></p>
 
-## 7. Several circuits and several processors
+## 7. Intra- and inter-QPU parallelisation
 
-With **4. Multi-Programming** enabled, the Auto-LUCJ panel gains a **Multi**
-tab:
+Several circuits can share one processor (intra-QPU), and the same circuit or
+set of circuits can be compared across processors (inter-QPU).
 
-- Enter the orbital counts of the circuits, e.g. `8, 8, 6`, and a **Buffer**
-  of idle qubits to keep between them, then **Generate Multi-Circuit**. The
-  circuits are planned together; the **Plans** dropdown lists the best
-  complete plans and places all circuits of the selected one.
-- **Scan batch on all QPUs** plans the same circuits on every accessible
-  backend with that backend's own calibration and ranks the results;
-  **Open on QPU 2** connects the selected backend as a second processor and
-  places the plan on it.
+**Intra-QPU.** With **4. Multi-Programming** enabled, the Auto-LUCJ panel gains
+a **Multi** tab. Enter the orbital counts of the circuits, e.g. `8, 8, 6`, and
+a **Buffer** of idle qubits to keep between them, then **Generate
+Multi-Circuit**. The circuits are planned together; the **Plans** dropdown
+lists the best complete plans and places all circuits of the selected one.
 
-The single-circuit equivalent, **Scan all QPUs**, is in the **Single** tab.
+**Inter-QPU.** **Scan all QPUs** (Single tab) and **Scan batch on all QPUs**
+(Multi tab) run the same search on every accessible backend, each scored with
+its own calibration, and rank the results. **Open on QPU 2** connects the
+selected backend as a second processor and places the chosen layout or plan on
+it, so the two devices can be compared side by side.
 Details of the planner and the scans are in the
 [user guide](docs/user-guide.md#multi-circuit-planner).
-
-<p align="center"><img src="docs/img/multi-circuit.png" width="720" alt="Two circuits placed jointly on one processor"></p>
 
 ## 8. Benchmark the device
 
@@ -164,8 +163,6 @@ crosstalk. See [benchmark.md](docs/benchmark.md).
 
 Nothing runs automatically: no benchmark starts on connect, on a timer or
 during a scan.
-
-<p align="center"><img src="docs/img/benchmark.png" width="420" alt="Benchmark section: targets, level, cost estimate and run"></p>
 
 ## 9. Import, export and sessions
 
