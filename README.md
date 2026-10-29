@@ -85,7 +85,7 @@ A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
 | `iqmapper/ui/` | The Jupyter interface (ipywidgets panels) |
 | `iqmapper/export/` | Layout quality score, layout import/export, code generation, PNG export |
 | `tests/` | Offline test suite; no IBM account required |
-| `docs/` | User guide, benchmarking and development documentation |
+| `docs/` | Reference page and images |
 | `TUTORIAL.md` | Step-by-step walkthrough |
 | `CHANGELOG.md` | Release history |
 
@@ -100,9 +100,8 @@ not supported and are not searched.
 ## Documentation
 
 - [Tutorial](TUTORIAL.md) — from launch to an exported layout.
-- [User guide](https://github.com/MIQuLab/i-qmapper/blob/main/docs/user-guide.md) — settings, search options, messages, and the definition of the quality score.
-- [Benchmarking](https://github.com/MIQuLab/i-qmapper/blob/main/docs/benchmark.md) — levels, cost, and how measured values are reconciled with the reported calibration.
-- [Development](https://github.com/MIQuLab/i-qmapper/blob/main/docs/development.md) — architecture, data locations, tests, and adding a vendor.
+- [Reference](https://github.com/MIQuLab/i-qmapper/blob/main/docs/reference.md) — settings, search options, messages, the quality score, and on-device benchmarking.
+- [Code overview](CODE_OVERVIEW.md) — architecture and modules.
 - [Changelog](CHANGELOG.md)
 
 ## Citing

@@ -79,7 +79,7 @@ cover every placement action.
   each placed circuit: a product of readout and two-qubit gate fidelities over
   exactly the qubits and couplers the circuit uses, with the qubit and coupler
   counts beside it. The definition is in the
-  [user guide](docs/user-guide.md#lqs).
+  [reference](docs/reference.md#lqs).
 - **Rankings** (Error tab, Analysis) order qubits and couplers by error.
 
 The score is intended for comparing layouts on the same processor; differences
@@ -133,7 +133,7 @@ its own calibration, and rank the results. **Open on QPU 2** connects the
 selected backend as a second processor and places the chosen layout or plan on
 it, so the two devices can be compared side by side.
 Details of the planner and the scans are in the
-[user guide](docs/user-guide.md#multi-circuit-planner).
+[reference](docs/reference.md#multi-circuit-planner).
 
 ## 8. Benchmark the device
 
@@ -159,7 +159,7 @@ list use the measured values for the elements that were measured; all other
 elements keep their reported values. A consistency line compares the
 measurement with the reported calibration; a systematic offset is handled in
 relative mode, and **Calibration check** distinguishes an estimator offset from
-crosstalk. See [benchmark.md](docs/benchmark.md).
+crosstalk. See [Benchmarking](docs/reference.md#benchmarking) in the reference.
 
 Nothing runs automatically: no benchmark starts on connect, on a timer or
 during a scan.
@@ -180,8 +180,8 @@ From the **I/O** section:
   backend context) in one file, to resume later or to share. Style presets can
   be saved and reused independently of sessions.
 
-Messages in the interface that end with `· Guide: <entry>` refer to the entry of
-that name in the [user guide](docs/user-guide.md).
+Messages in the interface that end with `· Reference: <entry>` refer to the entry
+of that name in the [reference](docs/reference.md).
 
 ## 10. Where your data lives
 
