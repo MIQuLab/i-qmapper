@@ -277,7 +277,7 @@ def test_diverse_enumeration_checkbox_defaults_on(monkeypatch):
         'the checkbox is not in the Advanced accordion'
     tip = b.chk_diverse_cap.tooltip
     assert 'distinct candidates' in tip, tip
-    assert 'README: Diverse enumeration' in tip, tip
+    assert 'Reference: Diverse enumeration' in tip, tip
     assert len(tip) <= 90, f'tooltip is {len(tip)} chars'
 
 

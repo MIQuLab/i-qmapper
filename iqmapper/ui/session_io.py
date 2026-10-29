@@ -251,7 +251,7 @@ def setup_session_io(ctx):
                     f"border:1px solid #ffc107;margin:4px 0;'>"
                     f"⚠️ <b>Offline session: no backend connected.</b> "
                     f"Live data needs a connection "
-                    f"· README: Offline mode<br>"
+                    f"· Reference: Offline mode<br>"
                     f"To reconnect: select <b>'{esc(backend_name or 'your backend')}'</b> "
                     f"from the Backend dropdown above.</div>"
                 )

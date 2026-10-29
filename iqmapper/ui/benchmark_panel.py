@@ -653,7 +653,7 @@ def setup_benchmark_panel(ctx):
             parts.append(
                 f"{_join_names(order)} differ by a constant factor "
                 f"({factors}) and are shown on IBM's scale "
-                f"\u00b7 README: Relative mode")
+                f"\u00b7 Reference: Relative mode")
 
         missing_q = max(0, epoch.planned_count[0] - epoch.measured_count[0])
         missing_e = max(0, epoch.planned_count[1] - epoch.measured_count[1])

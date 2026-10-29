@@ -76,10 +76,12 @@ based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   hybrid threshold for each orbital count (`--tol` sets how far guided may
   trail and still count).
 - Shorter UI messages: status lines, notices and tooltips say what happened
-  in one short sentence, and each is explained in the README section
-  "Understanding the messages".
+  in one short sentence, and each is explained on the reference page
+  (`docs/reference.md`).
 
 ### Changed
+- Documentation reorganised: short README, tutorial, and a reference page
+  under docs/.
 - Log messages no longer print under the notebook cell. They go to a
   rotating log file in the user log directory, each distinct message once
   per session; the bridge-count fallback and the search-cap statistics no

@@ -1,7 +1,7 @@
 """The message diet, enforced.
 
 The interface says what happened and what to do, in one short sentence; the
-README explains why. Without a guard that erodes: an audit found 31 strings of
+reference page (docs/reference.md) explains why. Without a guard that erodes: an audit found 31 strings of
 110-377 characters, tooltips that were paragraphs and notices quoting
 `state.edges_list`. These tests walk the real built UI and the module source,
 so the limits hold as the code changes rather than only on the day they were
@@ -167,21 +167,24 @@ def test_no_user_facing_string_is_a_paragraph():
         STATUS_MAX, '\n  '.join(offenders))
 
 
-# ── README anchors ──────────────────────────────────────────────────
+# ── reference anchors ───────────────────────────────────────────────
 
-def _readme_anchors():
+REFERENCE = 'docs/reference.md'
+
+
+def _reference_anchors():
     headings = set()
-    with open('README.md', encoding='utf-8') as fh:
+    with open(REFERENCE, encoding='utf-8') as fh:
         for line in fh:
             if line.startswith('#'):
                 headings.add(line.lstrip('#').strip())
     return headings
 
 
-def test_every_readme_pointer_has_a_matching_heading():
-    """A dangling `· README: X` is worse than no pointer at all."""
-    anchors = _readme_anchors()
-    pointer = re.compile(r'README:\s*([^\'"<·]+)')
+def test_every_reference_pointer_has_a_matching_heading():
+    """A dangling `· Reference: X` is worse than no pointer at all."""
+    anchors = _reference_anchors()
+    pointer = re.compile(r'Reference:\s*([^\'"<·]+)')
     missing = []
     for path in SOURCES:
         for lineno, raw in _string_constants(path):
@@ -190,16 +193,22 @@ def test_every_readme_pointer_has_a_matching_heading():
                 if name and name not in anchors:
                     missing.append(f'{path}:{lineno} -> {name!r}')
     assert not missing, (
-        'README pointers with no matching heading:\n  '
+        'Reference pointers with no matching heading:\n  '
         + '\n  '.join(missing)
         + f'\nheadings present: {sorted(anchors)}')
 
 
-def test_the_understanding_section_covers_every_anchor_used():
-    anchors = _readme_anchors()
-    assert 'Understanding the messages' in anchors
+def test_no_ui_string_still_points_at_the_readme():
+    stale = [f'{path}:{lineno}' for path in SOURCES
+             for lineno, raw in _string_constants(path) if 'README:' in raw]
+    assert not stale, stale
+
+
+def test_the_reference_page_covers_every_entry_used():
+    anchors = _reference_anchors()
     for name in ('Search cap', 'Diverse enumeration', 'Search engine',
                  'Prefer diverse regions', 'Quality floor', 'Levels',
                  'Targets', 'Relative mode', 'Calibration check',
-                 'Delta references', 'Offline mode', 'LQS'):
-        assert name in anchors, f'README is missing the {name!r} entry'
+                 'Delta references', 'Offline mode', 'LQS',
+                 'Multi-circuit planner'):
+        assert name in anchors, f'{REFERENCE} is missing the {name!r} entry'

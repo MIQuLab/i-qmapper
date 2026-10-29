@@ -25,17 +25,19 @@ from iqmapper import run
 run()
 ```
 
-The sidebar opens. In section **1. Hardware**:
+The connection panel opens:
 
 1. **Vendor** — IBM Quantum (the provider shipped today).
-2. **Account** — every credential saved with `QiskitRuntimeService.save_account`
-   is listed; the default credential is used unless a named one is selected.
-3. **Load account** — connects through the credential and lists the backends
-   the instance can access.
-4. **Backend** — select a device and the ansatz mode (general-purpose or
-   LUCJ), then **Connect & Launch**.
+2. **Account name** — blank uses the default credential; a name selects a
+   credential saved with `QiskitRuntimeService.save_account(name=...)`.
+3. **Load Account** — connects through the credential and lists the backends
+   the instance can access. It runs once by itself with the default
+   credential when the panel opens.
+4. **Backend** — select a device and the **Ansatz** (LUCJ / Chemistry or
+   General Ansatz), then **Connect & Launch**.
 
-The device map appears. A 14-day calibration history loads in the background;
+The device map and the sidebar appear; section **1. Hardware** switches to
+another backend later. A 14-day calibration history loads in the background;
 the Stability section shows a note until it is complete, and everything else is
 available immediately.
 
@@ -52,8 +54,8 @@ The main view is the device topology coloured by a calibration property.
 - **Hover** a qubit or coupler for its calibrated values. A missing value reads
   "no data".
 - **Colour bars** show the scale with the device median marked.
-- With the default palette, light means low error and dark means high error;
-  the palette can be changed in **3. Colors**.
+- With the default palette, deep blue means low error and near-white means
+  high error; the palette can be changed in **3. Colors**.
 
 <p align="center"><img src="docs/img/heatmap-hover.png" width="720" alt="Calibration map with a qubit's values shown on hover"></p>
 
@@ -107,7 +109,8 @@ It shows at a glance what has drifted since the layout was chosen.
 
 In the **Stability check** card, enable the check and select a window of 7, 14
 or 30 days. For the qubits and couplers of the placed layout, the cached
-history is analysed and each element is flagged as stable or volatile. If the
+history is analysed and the unstable qubits and gates are listed, each with
+its maximum, median and minimum over the window and its worst day. If the
 selected window is longer than the fetched history, the header says so; more
 days can be fetched from the Multi-day mode of the Calibration section.
 
@@ -123,9 +126,10 @@ set of circuits can be compared across processors (inter-QPU).
 
 **Intra-QPU.** With **4. Multi-Programming** enabled, the Auto-LUCJ panel gains
 a **Multi** tab. Enter the orbital counts of the circuits, e.g. `8, 8, 6`, and
-a **Buffer** of idle qubits to keep between them, then **Generate
-Multi-Circuit**. The circuits are planned together; the **Plans** dropdown
-lists the best complete plans and places all circuits of the selected one.
+**Buffer qubits**, the number of idle qubits to keep between them, then
+**Generate Multi-Circuit**. The circuits are planned together; the **Plans**
+dropdown lists the best complete plans and places all circuits of the selected
+one.
 
 **Inter-QPU.** **Scan all QPUs** (Single tab) and **Scan batch on all QPUs**
 (Multi tab) run the same search on every accessible backend, each scored with

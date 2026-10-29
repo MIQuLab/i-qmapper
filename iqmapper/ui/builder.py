@@ -1317,7 +1317,7 @@ class MapperUIBuilder:
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
             tooltip='Max embeddings enumerated per search; the notices say '
-                    'when it truncates · README: Search cap')
+                    'when it truncates · Reference: Search cap')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
@@ -1381,8 +1381,8 @@ class MapperUIBuilder:
             description='Level:',
             layout=Layout(width='280px'),
             style={'description_width': '110px'},
-            tooltip='1 readout only · 2 + two-qubit gates on targets · '
-                    '3 whole chip (~4 min) · README: Levels')
+            tooltip='1 readout · 2 + two-qubit gates on targets · '
+                    '3 whole chip (~4 min) · Reference: Levels')
         self.lbl_bench_summary = HTML("")
         self.chk_bench_ack = Checkbox(
             value=False,
@@ -1395,7 +1395,7 @@ class MapperUIBuilder:
             description='🔬 Calibration check',
             button_style='info', layout=W, disabled=True,
             tooltip='Measures 6 edges twice: crosstalk or estimator bias'
-                    ' · README: Calibration check')
+                    ' · Reference: Calibration check')
         self.lbl_bench_calcheck = HTML("")
         self.lbl_bench_reuse = HTML("")
         self.btn_bench_reuse = Button(
@@ -1411,8 +1411,8 @@ class MapperUIBuilder:
             value=False,
             description='Apply absolute values',
             layout=_own(),
-            tooltip="Use measured values as-is even when they are far "
-                    "from IBM's scale · README: Relative mode")
+            tooltip="Use measured values as-is even when far "
+                    "from IBM's scale · Reference: Relative mode")
         self.lbl_bench_consistency = HTML("")
         self.lbl_bench_details = HTML("")
         _map_btn_layout = Layout(width='220px', margin='4px 0px')
@@ -1458,7 +1458,7 @@ class MapperUIBuilder:
             description='Diverse enumeration',
             layout=_diverse_layout,
             tooltip='Counts only distinct candidates toward the search '
-                    'cap · README: Diverse enumeration')
+                    'cap · Reference: Diverse enumeration')
 
         # ── Search (Advanced) ────────────────────────────────────
         # Every search runs the exhaustive engine; this adds the guided one
@@ -1469,7 +1469,7 @@ class MapperUIBuilder:
             layout=Layout(width=W.width, margin=W.margin,
                           min_width=W.min_width),
             tooltip='also run the guided search and keep the best of both '
-                    '· README: Search engine')
+                    '· Reference: Search engine')
         # Own Layout: display is toggled at runtime (Guided search on only).
         _guided_layout = Layout(width=W.width, margin=W.margin,
                                 min_width=W.min_width)
@@ -1601,28 +1601,28 @@ class MapperUIBuilder:
             layout=Layout(width=W.width, margin=W.margin,
                           min_width=W.min_width),
             tooltip='place circuits one by one instead of planning them '
-                    'together · README: Multi-circuit planner')
+                    'together · Reference: Multi-circuit planner')
         self.int_plans_kept = BoundedIntText(
             value=3, min=1, max=50,
             description='Plans kept:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
             tooltip='partial plans kept after each circuit '
-                    '· README: Multi-circuit planner')
+                    '· Reference: Multi-circuit planner')
         self.int_cands_per_circuit = BoundedIntText(
             value=3, min=1, max=50,
             description='Candidates per circuit:',
             layout=Layout(width='220px'),
             style={'description_width': '150px'},
             tooltip='layouts each plan tries for the next circuit '
-                    '· README: Multi-circuit planner')
+                    '· Reference: Multi-circuit planner')
         self.ft_boundary_penalty = BoundedFloatText(
             value=0.0, min=0.0, max=0.95, step=0.05,
             description='Boundary penalty:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'},
             tooltip='cost per coupler shared by two circuits; matters only '
-                    'at buffer 0 · README: Multi-circuit planner')
+                    'at buffer 0 · Reference: Multi-circuit planner')
         self.joint_params_box = VBox(
             [self.int_plans_kept, self.int_cands_per_circuit,
              self.ft_boundary_penalty],

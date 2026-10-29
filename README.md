@@ -49,7 +49,8 @@ from iqmapper import run
 run()
 ```
 
-1. In the sidebar, select the account and the backend, then **Connect & Launch**.
+1. In the connection panel, **Load Account** (leave the account name blank for
+   the default credential), select the backend, then **Connect & Launch**.
 2. The map shows the processor with the selected calibration property as a
    colour scale; hover a qubit or coupler for its values.
 3. Choose the LUCJ mode and the number of spatial orbitals, then **Generate LUCJ

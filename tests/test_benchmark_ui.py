@@ -1642,7 +1642,7 @@ def test_copy_names_in_band_and_rescaled_properties():
     assert 'T2 and CZ error differ by a constant factor' in line, line
     assert '(×0.2, ×2.1)' in line, line
     assert "shown on IBM's scale" in line
-    assert 'README: Relative mode' in line
+    assert 'Reference: Relative mode' in line
     for jargon in ('estimator mismatch', 'RELATIVE', 'systematic offset',
                    '⚠'):
         assert jargon not in line, f'{jargon!r} leaked into the sentence'

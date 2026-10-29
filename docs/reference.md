@@ -167,7 +167,8 @@ step-by-step change as the slider moves; the first position has no comparison.
 For each qubit, the readout and gate errors are evaluated over the selected
 window (7, 14 or 30 days). Qubits whose values vary strongly across the window
 are flagged, and the stability filter can exclude them from the automatic
-search. The report lists, per qubit, the median and the spread over the window.
+search. For each unstable qubit or coupler the report shows the maximum, median
+and minimum over the window and the worst day.
 
 ## Offline mode
 

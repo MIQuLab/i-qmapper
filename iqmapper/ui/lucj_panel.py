@@ -372,7 +372,7 @@ def setup_lucj_callbacks(ctx):
     # internal heuristic used only when circuit scoring is unavailable.
     dd_lucj_layout.tooltip = (
         'LQS = circuit-level fidelity; "(template)" = fallback '
-        'heuristic \u00b7 README: LQS')
+        'heuristic \u00b7 Reference: LQS')
     dd_lucj_layout.observe(_on_lucj_layout_select, names='value')
 
     # ── Dropdown re-seed helper (observer-safe) ──────────────────

@@ -69,7 +69,7 @@ def test_guided_search_is_one_checkbox_on_by_default(monkeypatch):
     b = _build(monkeypatch)
     chk = b.chk_guided_search
     assert chk.value is True and chk.description == 'Guided search'
-    assert 'README: Search engine' in chk.tooltip and len(chk.tooltip) <= 90
+    assert 'Reference: Search engine' in chk.tooltip and len(chk.tooltip) <= 90
     assert any(w is chk for w in _descendants(b.lucj_advanced_acc))
 
 

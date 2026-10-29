@@ -1214,8 +1214,8 @@ def _auto_ref_hint(state) -> str:
     mode = state.delta_ref_mode
     if mode == 'first':
         return ("Reference = <b>first</b> calibration of the sequence "
-                "(cumulative drift) \u00b7 README: Delta references")
+                "(cumulative drift) \u00b7 Reference: Delta references")
     if mode == 'previous':
         return ("Reference = <b>previous</b> calibration in the sequence "
-                "(step-by-step change) \u00b7 README: Delta references")
+                "(step-by-step change) \u00b7 Reference: Delta references")
     return ""
