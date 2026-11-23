@@ -8,7 +8,8 @@ abstract: >-
 authors:
   - family-names: "Bazayeva"
     given-names: "Milana"
-version: 0.1.0.dev0
+version: 0.1.0
+date-released: 2026-11-23
 license: Apache-2.0
 repository-code: "https://github.com/MIQuLab/i-qmapper"
 preferred-citation:

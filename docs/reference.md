@@ -61,9 +61,9 @@ the layout list ends with its origin: `· E` exhaustive, `· G` guided, `· E+G`
 both.
 
 **Guided search** (Advanced, on by default) enables the guided engine. With it
-off, the search uses the exhaustive engine alone, as in version 0.0.5; **Beam
-width** and **Refine top** tune the guided engine and are shown only while it is
-on. The multi-processor scan and the stability filter use the exhaustive engine
+off, the search uses the exhaustive engine alone, as in the previous release;
+**Beam width** and **Refine top** tune the guided engine and are shown only
+while it is on. The multi-processor scan and the stability filter use the exhaustive engine
 only.
 
 ### Search results
@@ -131,8 +131,8 @@ each one multiplies the plan score by `1 − Boundary penalty`, so a non-zero
 penalty makes the planner prefer plans without them when such plans exist.
 
 **Fast: one circuit at a time** (Advanced, off by default) skips joint planning
-and places the circuits sequentially with the exhaustive engine, as in
-version 0.0.5.
+and places the circuits sequentially with the exhaustive engine, as in the
+previous release.
 
 ## Scanning other processors
 
