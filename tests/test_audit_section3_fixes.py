@@ -1,4 +1,4 @@
-"""Regression tests for the audit §3 fixes: connectivity dedup, 8-char hex, sci format."""
+"""Connectivity dedup, 8-char hex colours, scientific number format."""
 from types import SimpleNamespace
 
 import numpy as np

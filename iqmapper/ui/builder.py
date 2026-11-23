@@ -16,7 +16,8 @@ from types import SimpleNamespace as _NS
 import numpy as np
 from ipywidgets import (
     Output, VBox, HBox, RadioButtons, Label, ColorPicker,
-    IntSlider, FloatSlider, BoundedIntText, Button, Layout, Checkbox, Tab, HTML, Dropdown,
+    IntSlider, FloatSlider, BoundedIntText, BoundedFloatText, Button, Layout,
+    Checkbox, Tab, HTML, Dropdown,
     Textarea, Text, ToggleButtons, Accordion, DatePicker, FileUpload,
     IntProgress,
 )
@@ -85,6 +86,9 @@ class MapperUIBuilder:
         #   mutator contract — do not "fix" it.
         self._loading_device = False
         self._switching_backend = [False]
+        # Backend whose per-chip search defaults are applied; a reload of the
+        # same backend (date / hour change) keeps the user's choices.
+        self._defaults_backend = None
 
     def build(self, return_widgets=False):
         """Run the full UI construction pipeline.
@@ -94,6 +98,13 @@ class MapperUIBuilder:
         reach the Fig Width/Height sliders directly instead of walking the
         tree by description). ``self.widgets_ref`` is always populated.
         """
+        # Capture the kernel main loop + main-thread identity HERE — build()
+        # runs on the main thread inside the running loop (live cell execution),
+        # which is the only place asyncio.get_running_loop() succeeds. Workers
+        # then schedule their paint onto THIS captured loop instead of resolving
+        # (and inline-running) on themselves. Idempotent; no-op headless.
+        from ..async_util import init_main_loop
+        init_main_loop()
         ui_hbox, _ = self._run_pipeline()
         self.ui_hbox = ui_hbox
         if return_widgets:
@@ -266,9 +277,6 @@ class MapperUIBuilder:
             refresh=self._refresh, get_export=self._get_export,
             out=self.out,
             refresh_qpu1_label=self._refresh_qpu1_label,
-            # Deferred: self._time_api is bound further down (the time panel
-            # is built after this wiring), but a switch can only fire once
-            # construction has finished.
             refresh_time_panel=lambda: self._time_api.rebuild(),
         ))
 
@@ -299,26 +307,117 @@ class MapperUIBuilder:
 
         # ── Auto-LUCJ callbacks (extracted to ui.lucj_panel.py) ──────
         from .lucj_panel import setup_lucj_callbacks
+        from ..async_util import default_spawn_bg, marshal_to_main
+        # Shared cell: ui.inter_qpu populates [0] with its handoff hook
+        # (reveal QPU-2 + prefill dropdown + stage candidate). Same
+        # deferred-wiring pattern as the QPU-1 title-refresh cell.
+        self._inter_qpu_handoff = [None]
+        # Shared cell: ui.lucj_panel populates [0] with the candidate
+        # re-ranking hook, which ui.benchmark_panel calls after installing a
+        # measured epoch. Same deferred-wiring pattern as the handoff cell.
+        self._bench_rescore = [None]
+        # Shared cell: ui.inter_qpu publishes a read-only accessor for QPU 2's
+        # live state/figure here, so the benchmark panel — built before
+        # setup_inter_qpu runs — can reach QPU 2 once it connects.
+        self._qpu2_handles = [None]
         _lucj_ctx = _NS(
             state=state, out=self.out, W=W,
             lucj_norb_slider=self.lucj_norb_slider, lucj_ancilla_dd=self.lucj_ancilla_dd,
-            lucj_chk_score=self.lucj_chk_score, btn_lucj_run=self.btn_lucj_run,
-            lbl_lucj_status=self.lbl_lucj_status, dd_lucj_layout=self.dd_lucj_layout,
+            lucj_min_ancilla=self.lucj_min_ancilla, lucj_top_n=self.lucj_top_n,
+            lucj_search_cap=self.lucj_search_cap,
+            lucj_chk_score=self.lucj_chk_score, chk_deep_search=self.chk_deep_search,
+            chk_lucj_diverse=self.chk_lucj_diverse,
+            chk_diverse_cap=self.chk_diverse_cap,
+            chk_guided_search=self.chk_guided_search,
+            int_beam_width=self.int_beam_width,
+            int_refine_top=self.int_refine_top,
+            guided_params_box=self.bench_guided_box,
+            btn_lucj_run=self.btn_lucj_run,
+            lbl_lucj_status=self.lbl_lucj_status, lbl_lucj_trunc=self.lbl_lucj_trunc,
+            lbl_lucj_notices=self.lbl_lucj_notices,
+            dd_lucj_layout=self.dd_lucj_layout,
             lbl_lucj_detail=self.lbl_lucj_detail,
             lucj_multi_norbs=self.lucj_multi_norbs, lucj_buffer_slider=self.lucj_buffer_slider,
+            chk_fast_multi=self.chk_fast_multi,
+            int_plans_kept=self.int_plans_kept,
+            int_cands_per_circuit=self.int_cands_per_circuit,
+            ft_boundary_penalty=self.ft_boundary_penalty,
+            joint_params_box=self.joint_params_box,
             lucj_multi_ancillas=self.lucj_multi_ancillas,
-            btn_lucj_multi=self.btn_lucj_multi, lbl_lucj_multi=self.lbl_lucj_multi,
+            btn_lucj_multi_sweep=self.btn_lucj_multi_sweep,
+            btn_scan_batch=self.btn_scan_batch,
+            scan_batch_box=self.scan_batch_box,
+            lbl_lucj_multi=self.lbl_lucj_multi,
+            lbl_lucj_multi_notices=self.lbl_lucj_multi_notices,
             lucj_multi_detail_box=self.lucj_multi_detail_box,
             num_circuits=self.num_circuits, intra_qpu_mode=self.intra_qpu_mode, dd_mode=self.dd_mode,
+            set_num_circuits=self._set_num_circuits_silent,
             lucj_all_layouts=self._lucj_all_layouts,
-            lucj_multi_results=self._lucj_multi_results,
-            lucj_multi_norbs_list=self._lucj_multi_norbs,
-            lucj_multi_ancillas_list=self._lucj_multi_ancillas,
-            lucj_multi_dropdowns=self._lucj_multi_dropdowns,
+            rescore_cell=self._bench_rescore,
             refresh=self._refresh, get_export=self._get_export, update_view=lambda: self._update_view(),
             chk_line_only=self.chk_line_only,
+            # Multi-QPU scan.
+            btn_scan_qpus=self.btn_scan_qpus,
+            chk_scan_other_families=self.chk_scan_other_families,
+            btn_scan_clear=self.btn_scan_clear,
+            lbl_scan_progress=self.lbl_scan_progress,
+            scan_results_box=self.scan_results_box,
+            scan_spawn_bg=default_spawn_bg,
+            scan_marshal=marshal_to_main,
+            inter_qpu_handoff=self._inter_qpu_handoff,
+            # Stability filter.
+            chk_stability_filter=self.chk_stability_filter,
+            rb_stability_window=self.rb_stability_window_auto,
+            ft_stability_threshold=self.ft_stability_threshold,
+            ft_stability_floor=self.ft_stability_floor,
+            stability_ctrl_box=self.stability_ctrl_box,
+            lbl_lucj_stability=self.lbl_lucj_stability,
+            chk_scan_stability=self.chk_scan_stability,
         )
         setup_lucj_callbacks(_lucj_ctx)
+        self._refresh_stability_filter_availability()
+
+        # ── 📡 Benchmark section (ui.benchmark_panel) ────────────────
+        # After setup_lucj_callbacks, so the re-ranking hook cell is filled
+        # by the time the panel could call it. Opt-in only: nothing here
+        # runs unless the user clicks Run benchmark.
+        from .benchmark_panel import setup_benchmark_panel
+        _bench_ctx = _NS(
+            state=state,
+            dd_bench_target=self.dd_bench_target,
+            txt_bench_custom=self.txt_bench_custom,
+            tb_bench_qpu=self.tb_bench_qpu,
+            dd_bench_level=self.dd_bench_level,
+            lbl_bench_summary=self.lbl_bench_summary,
+            chk_bench_ack=self.chk_bench_ack,
+            btn_bench_run=self.btn_bench_run,
+            lbl_bench_status=self.lbl_bench_status,
+            chk_bench_absolute=self.chk_bench_absolute,
+            # Read-only from the panel except for the three writes the
+            # "show on map" link performs (enable the filter, set the gate
+            # max, select the 2Q property).
+            chk_err_threshold=self.chk_err_threshold,
+            txt_g_thr_max=self.txt_g_thr_max,
+            dd_gate_prop=self.dd_gate_prop,
+            lbl_bench_consistency=self.lbl_bench_consistency,
+            lbl_bench_details=self.lbl_bench_details,
+            acc_bench_details=self.acc_bench_details,
+            btn_bench_show_on_map=self.btn_bench_show_on_map,
+            lbl_bench_reuse=self.lbl_bench_reuse,
+            btn_bench_reuse=self.btn_bench_reuse,
+            btn_bench_reanalyze=self.btn_bench_reanalyze,
+            btn_bench_calcheck=self.btn_bench_calcheck,
+            lbl_bench_calcheck=self.lbl_bench_calcheck,
+            lbl_lucj_notices=self.lbl_lucj_notices,
+            lucj_all_layouts=self._lucj_all_layouts,
+            rescore_cell=self._bench_rescore,
+            refresh=self._refresh,
+            chk_inter_qpu=self.chk_inter_qpu,
+            qpu2_handles_cell=self._qpu2_handles,
+            bench_spawn_bg=default_spawn_bg,
+            bench_runner_factory=None,      # production: built at click time
+        )
+        self._bench_api = setup_benchmark_panel(_bench_ctx)
 
         # ── PNG save popup ───────────────────────────────────────────
         # ui.png_export builds the popup + sliders + checkbox and wires
@@ -332,9 +431,7 @@ class MapperUIBuilder:
             W=W,
             plot_mod=plot_mod, safe_path=_safe_path, user_save_path=_user_save_path, save_dir=self._save_dir, out=self.out,
             lbl_png_status=self.lbl_png_status,
-            # Live figure: its error-map colorbars get copied onto the
-            # export figure, which the static renderer doesn't draw.
-            fig=self.fig,
+            fig=self.fig,               # live figure — copy its visible colorbars into the PNG
         ))
 
 
@@ -363,10 +460,10 @@ class MapperUIBuilder:
         # Built at builder scope so the panel's slider state (intraday
         # timestamps, range) persists across nav / num_circuits / mode
         # changes — otherwise every _update_view rebuild would discard a
-        # fetched scan. The `api` handle (rebuild / status_text) is kept:
-        # the panel drives its own re-render via observers for in-panel
-        # changes, but a backend switch happens outside those observers,
-        # so backend_switch calls api.rebuild() to refresh the header.
+        # fetched scan. The returned `api` handle is KEPT (self._time_api):
+        # a backend switch resets the panel's time-state but never fires its
+        # own observers, so the switch wiring calls api.rebuild() to re-render
+        # the header + sub-panels for the new backend.
         self._time_panel, self._time_api = _build_time_panel(
             state=state,
             data_mod=data_mod,
@@ -518,6 +615,8 @@ class MapperUIBuilder:
                 qpu2_sidebar_box=_qpu2_sidebar_box,
                 qpu2_fig_box=_qpu2_fig_box,
                 full_ui=full_ui,
+                handoff_cell=self._inter_qpu_handoff,
+                qpu2_handles_cell=self._qpu2_handles,
             ))
 
         return full_ui, self.fig
@@ -795,9 +894,9 @@ class MapperUIBuilder:
         )
         self.nav_bar = ToggleButtons(
             options=[
-                ('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
+                ('✏️ Layout', 'manual'),
                 ('🤖 Auto', 'auto_lucj'),
-                ('📤 Export', 'export'), ('🔍 Error', 'error_inspect'),
+                ('📁 I/O', 'io'), ('🔍 Error', 'error_inspect'),
             ],
             value='manual', style={'button_width': '120px'},
         )
@@ -1159,21 +1258,17 @@ class MapperUIBuilder:
         (rank by error), btn_lucj_run, lbl_lucj_status.
 
         Inspect Layouts: dd_lucj_layout (ranked selector, disabled until
-        populated — also drives cascading re-optimization for
-        multi-circuit) + lbl_lucj_detail.
+        populated) + lbl_lucj_detail.
 
         Multi-Circuit: lucj_multi_norbs (Text '8, 8' default),
-        lucj_buffer_slider (0..5 buffer qubits), btn_lucj_multi,
+        lucj_buffer_slider (0..5 buffer qubits), btn_lucj_multi_sweep,
         lbl_lucj_multi, lucj_multi_detail_box (VBox populated per
         packed circuit).
 
-        Mutable backing stores on ``self.*`` (mutated by
+        Mutable backing store on ``self.*`` (mutated by
         ``setup_lucj_callbacks`` via ``.append()`` / ``.clear()`` —
         identity must remain stable across the builder's lifetime):
-        ``_lucj_all_layouts``, ``_lucj_multi_results``,
-        ``_lucj_multi_norbs`` (for cascading re-optimization on dropdown
-        change), ``_lucj_multi_dropdowns``
-        (``circuit_idx → (dropdown, label, candidates)``).
+        ``_lucj_all_layouts``.
 
         Click handlers + cascading observer in
         ``setup_lucj_callbacks``. ``_load_device_graph`` resets the
@@ -1187,20 +1282,287 @@ class MapperUIBuilder:
             description='Num Orbitals:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
+        # 'Auto' runs the stratified ancilla sweep (default). Picking an
+        # explicit 0..5 runs the legacy single-count search unchanged.
         self.lucj_ancilla_dd = Dropdown(
-            options=[('Auto (max ancillas)', -1), ('0 (no ancillas)', 0),
+            options=[('Auto (sweep all counts)', -1), ('0 (no ancillas)', 0),
                      ('1 ancilla', 1), ('2 ancillas', 2), ('3 ancillas', 3),
                      ('4 ancillas', 4), ('5 ancillas', 5)],
             value=-1, description='Ancilla:', layout=W,
-            style={'description_width': 'initial'})
+            style={'description_width': 'initial'},
+            tooltip='Fix the ancilla count (legacy single search); '
+                    'Auto runs the stratified sweep')
+        # Sweep-only floor. 0 = auto → engine default min(3, k_max). Only
+        # consulted when the Ancilla dropdown is on 'Auto'.
+        self.lucj_min_ancilla = BoundedIntText(
+            value=0, min=0, max=20,
+            description='Min ancillas:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='Sweep all counts from max down to this floor '
+                    '(0 = auto)')
+        # How many candidates to keep/show per ancilla count. Wired to the
+        # sweep's top_n through _sweep_kwargs_from_ui, so the scan inherits it.
+        self.lucj_top_n = BoundedIntText(
+            value=3, min=1, max=25,
+            description='Show top:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='candidates shown per ancilla count')
+        # Advanced: the VF2 mapping cap. Raise to trade time for
+        # exhaustiveness (default matches auto_lucj._MAX_RAW_VF2_MAPPINGS).
+        self.lucj_search_cap = BoundedIntText(
+            value=2000, min=100, max=20000, step=500,
+            description='Search cap:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='Max embeddings enumerated per search; the notices say '
+                    'when it truncates · Reference: Search cap')
         self.lucj_chk_score = Checkbox(
             value=True,
             description='Score layouts (pick lowest error)',
+            # Its OWN Layout, not the shared `W` instance: lucj_panel toggles
+            # .layout.display on this widget to hide it in sweep mode, and a
+            # shared Layout would hide every other widget built with W.
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width))
+        self.chk_deep_search = Checkbox(
+            value=True,
+            description='Deep search per ancilla count',
+            layout=W,
+            tooltip='adds a direct search per k — complete but slower; '
+                    'off = fast derivation from k_max only')
+        # Region diversity in the top-N slice. Default ON: it never costs
+        # quality (ancilla_sweep._select_with_diversity keeps the first
+        # ceil(top_n/2) slots as the absolute best) and it widens the choice.
+        self.chk_lucj_diverse = Checkbox(
+            value=True,
+            description='Prefer diverse regions',
+            layout=W,
+            tooltip='Second half of each list favors other chip regions; '
+                    'top half is always the best')
+        # ── 📡 Benchmark widgets (mounted as sidebar section 5) ───
+        # Never automatic: see iqmapper/benchmark.py. The target dropdown,
+        # level dropdown, cost line and acknowledgement all exist so the QPU
+        # cost is on screen before the button can be clicked.
+        #
+        # Benchmarking is a property of the BACKEND, not of the auto search,
+        # so this lives in the sidebar rather than in the Auto tab: it has to
+        # serve hand-placed layouts, every circuit slot, the whole QPU, and
+        # the inter-QPU second panel.
+        from .. import benchmark as _bench
+        # Its OWN Layout: benchmark_panel toggles .layout.display on this to
+        # hide the field unless Custom is selected, and the shared `W`
+        # instance would hide every widget built with W.
+        _own = lambda: Layout(width=W.width, margin=W.margin,
+                              min_width=W.min_width)
+        self.dd_bench_target = Dropdown(
+            options=[(_bench.TARGET_LABELS[_bench.TARGET_CURRENT],
+                      _bench.TARGET_CURRENT)],
+            value=_bench.TARGET_CURRENT,
+            description='Targets:',
+            layout=Layout(width='280px'),
+            style={'description_width': '110px'},
+            tooltip='What to measure: placed layouts, sweep candidates, '
+                    'the whole QPU, or a qubit list')
+        _custom_layout = _own()
+        _custom_layout.display = 'none'     # revealed only for Targets=Custom
+        self.txt_bench_custom = Text(
+            value='', description='Qubits:', placeholder='0, 1, 2, 5, 8',
+            layout=_custom_layout, style={'description_width': '110px'})
+        _qpu_layout = _own()
+        _qpu_layout.display = 'none'        # revealed only when QPU 2 is up
+        self.tb_bench_qpu = ToggleButtons(
+            options=[('QPU 1', 1), ('QPU 2', 2)], value=1,
+            layout=_qpu_layout)
+        self.dd_bench_level = Dropdown(
+            options=_bench.LEVEL_OPTIONS,
+            value=_bench.LEVEL_QUICK_READOUT,
+            description='Level:',
+            layout=Layout(width='280px'),
+            style={'description_width': '110px'},
+            tooltip='1 readout · 2 + two-qubit gates on targets · '
+                    '3 whole chip (~4 min) · Reference: Levels')
+        self.lbl_bench_summary = HTML("")
+        self.chk_bench_ack = Checkbox(
+            value=False,
+            description='I understand this uses QPU time',
+            layout=_own())
+        self.btn_bench_run = Button(
+            description='📡 Run benchmark',
+            button_style='warning', layout=W, disabled=True)
+        self.btn_bench_calcheck = Button(
+            description='🔬 Calibration check',
+            button_style='info', layout=W, disabled=True,
+            tooltip='Measures 6 edges twice: crosstalk or estimator bias'
+                    ' · Reference: Calibration check')
+        self.lbl_bench_calcheck = HTML("")
+        self.lbl_bench_reuse = HTML("")
+        self.btn_bench_reuse = Button(
+            description='Reuse', button_style='info', disabled=True,
+            layout=Layout(width='120px', margin='2px 0px'))
+        _reanalyze_layout = Layout(width='200px', margin='2px 0px')
+        _reanalyze_layout.display = 'none'   # only when a job record exists
+        self.btn_bench_reanalyze = Button(
+            description='Reanalyze last run', button_style='info',
+            disabled=True, layout=_reanalyze_layout,
+            tooltip='Re-analyses the last run\'s results; costs no QPU time')
+        self.chk_bench_absolute = Checkbox(
+            value=False,
+            description='Apply absolute values',
+            layout=_own(),
+            tooltip="Use measured values as-is even when far "
+                    "from IBM's scale · Reference: Relative mode")
+        self.lbl_bench_consistency = HTML("")
+        self.lbl_bench_details = HTML("")
+        _map_btn_layout = Layout(width='220px', margin='4px 0px')
+        _map_btn_layout.display = 'none'      # shown only when edges qualify
+        self.btn_bench_show_on_map = Button(
+            description='show on map', button_style='',
+            layout=_map_btn_layout,
+            tooltip="Filters the Error tab to edges more than 2x worse "
+                    "than IBM's median")
+        self.acc_bench_details = Accordion(
+            children=[VBox([self.lbl_bench_details,
+                            self.btn_bench_show_on_map])],
             layout=W)
+        self.acc_bench_details.set_title(0, 'Details')
+        self.acc_bench_details.selected_index = None   # collapsed by default
+        self.lbl_bench_status = HTML("")
+        self.bench_box = VBox([
+            HTML("<div style='font-size:14px;color:#6c757d;"
+                 "margin-bottom:4px;'>Re-measure the device now and re-rank "
+                 "on live numbers. Nothing runs until you click.</div>"),
+            self.tb_bench_qpu,
+            self.dd_bench_target,
+            self.txt_bench_custom,
+            self.dd_bench_level,
+            self.lbl_bench_summary,
+            self.chk_bench_ack,
+            self.chk_bench_absolute,
+            self.btn_bench_run,
+            self.btn_bench_calcheck,
+            self.lbl_bench_consistency,
+            self.acc_bench_details,
+            self.lbl_bench_calcheck,
+            HBox([self.lbl_bench_reuse, self.btn_bench_reuse,
+                  self.btn_bench_reanalyze],
+                 layout=Layout(align_items='center')),
+            self.lbl_bench_status,
+        ], layout=W)
+
+        _diverse_layout = Layout(width=W.width, margin=W.margin,
+                                 min_width=W.min_width)
+        self.chk_diverse_cap = Checkbox(
+            value=True,
+            description='Diverse enumeration',
+            layout=_diverse_layout,
+            tooltip='Counts only distinct candidates toward the search '
+                    'cap · Reference: Diverse enumeration')
+
+        # ── Search (Advanced) ────────────────────────────────────
+        # Every search runs the exhaustive engine; this adds the guided one
+        # and keeps the best of both. Off = exhaustive only.
+        self.chk_guided_search = Checkbox(
+            value=True,
+            description='Guided search',
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width),
+            tooltip='also run the guided search and keep the best of both '
+                    '· Reference: Search engine')
+        # Own Layout: display is toggled at runtime (Guided search on only).
+        _guided_layout = Layout(width=W.width, margin=W.margin,
+                                min_width=W.min_width)
+        self.bench_guided_box = VBox([], layout=_guided_layout)
+        self.int_beam_width = BoundedIntText(
+            value=200, min=10, max=5000, step=50,
+            description='Beam width:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='partial layouts kept at each growth step')
+        self.int_refine_top = BoundedIntText(
+            value=5, min=0, max=50,
+            description='Refine top:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='how many finalists per ancilla count get the 1-opt polish')
+        self.bench_guided_box.children = [self.int_beam_width,
+                                          self.int_refine_top]
+
+        # Expert knobs, collapsed out of the primary flow (ancilla dropdown
+        # -> Run). The defaults are right for nearly everyone, and the notices
+        # bar already reports when the cap truncated a search.
+        self.lucj_advanced_acc = Accordion(
+            children=[VBox([self.lucj_search_cap, self.chk_deep_search,
+                            self.chk_diverse_cap,
+                            self.chk_guided_search,
+                            self.bench_guided_box])],
+            layout=W)
+        self.lucj_advanced_acc.set_title(0, '⚙️ Advanced')
+        self.lucj_advanced_acc.selected_index = None   # collapsed on open
         self.btn_lucj_run = Button(
             description='🤖 Generate LUCJ Layout',
             button_style='success', layout=W)
         self.lbl_lucj_status = HTML("")
+        # Sweep truncation banner (VF2 cap hit); empty/hidden otherwise.
+        self.lbl_lucj_trunc = HTML("")
+        # Captured WARNING+ from the local sweep (loud notices bar); empty when
+        # the sweep emitted nothing.
+        self.lbl_lucj_notices = HTML("")
+
+        # ── Stability filter (opt-in) ────────────────────────────
+        self.chk_stability_filter = Checkbox(
+            value=False, description='🛡 Stability filter', layout=W,
+            tooltip='Exclude volatile qubits (from calibration history) '
+                    'before the sweep')
+        self.rb_stability_window_auto = RadioButtons(
+            options=[('7 days', 7), ('14 days', 14), ('30 days', 30)],
+            value=14, description='Window:', layout=W,
+            style={'description_width': '70px'})
+        self.ft_stability_threshold = BoundedFloatText(
+            value=0.5, min=0.0, max=100.0, step=0.1,
+            description='Threshold:', layout=Layout(width='230px'),
+            style={'description_width': '90px'},
+            tooltip='Volatility score = max/median − 1; higher threshold = '
+                    'more tolerant (fewer qubits excluded)')
+        # Quality floor: always-on factory guard — exclude qubits whose CURRENT
+        # readout error is a device outlier (> σ above the mean), from EVERY
+        # search path (single / multi / scan), independent of the volatility
+        # filter. Defined here but mounted in the always-visible Auto section.
+        self.ft_stability_floor = BoundedFloatText(
+            value=3.0, min=0.0, max=20.0, step=0.5,
+            description='Quality floor:', layout=Layout(width='230px'),
+            style={'description_width': '110px'},
+            tooltip='Excludes qubits whose readout error is more than N '
+                    'sigma above the device mean (0 = off)')
+        # Window + threshold row, revealed only when the volatility filter is on.
+        self.stability_ctrl_box = VBox(
+            [self.rb_stability_window_auto, self.ft_stability_threshold])
+        self.stability_ctrl_box.layout.display = 'none'
+        self.lbl_lucj_stability = HTML("")
+        # Scan sub-option: filter each scanned backend with CACHED history only.
+        self.chk_scan_stability = Checkbox(
+            value=False,
+            description='apply stability filter (cached history only)',
+            layout=W,
+            tooltip='Filter each scanned backend using its CACHED history '
+                    'only — no remote history fetch in this version')
+        self.btn_scan_clear = Button(
+            description='✕ Clear results', button_style='',
+            layout=Layout(width='130px'),
+            tooltip='Dismiss the scan results table, dropdowns and notices')
+
+        # ── Multi-QPU scan cluster ───────────────────────────────
+        self.btn_scan_qpus = Button(
+            description='🌐 Scan all QPUs', button_style='info', layout=W,
+            tooltip='Run the ancilla sweep on every compatible account '
+                    'backend (same norb / min-ancillas as above)')
+        self.chk_scan_other_families = Checkbox(
+            value=False, description='include other families', layout=W,
+            tooltip='Scan every topology family, not just the current one '
+                    '(cross-family zigzag comparison is apples-to-oranges)')
+        self.lbl_scan_progress = HTML("")
+        self.scan_results_box = VBox([])
 
         # ── Inspect Layouts cluster ──────────────────────────────
         self.dd_lucj_layout = Dropdown(
@@ -1210,35 +1572,85 @@ class MapperUIBuilder:
 
         # Mutable container for all computed single-circuit layouts.
         self._lucj_all_layouts = []
-        self._lucj_multi_results = []
-        self._lucj_multi_norbs = []
-        self._lucj_multi_ancillas = []
-        self._lucj_multi_dropdowns = {}
 
         # ── Multi-Circuit (intra-QPU multi-programming) cluster ──
         self.lucj_multi_norbs = Text(
             value='8, 8', description='norb per circuit:',
             placeholder='e.g. 8, 8 or 10, 10, 6',
             layout=W, style={'description_width': 'initial'})
-        # Per-circuit ancilla (bridge) counts, parallel to norb. Blank →
-        # the single Ancilla dropdown applies to every circuit (legacy);
-        # otherwise one value per circuit (-1 = auto for that circuit).
+        # Per-circuit MIN ancillas (bridge floor) for the sweep, parallel to
+        # norb. Blank → auto per circuit; otherwise one value per circuit.
         self.lucj_multi_ancillas = Text(
-            value='', description='ancilla per circuit:',
-            placeholder='blank = use Ancilla above; or e.g. 2, 2  (-1 = auto)',
-            layout=W, style={'description_width': 'initial'})
+            value='', description='min ancillas per circuit:',
+            placeholder='blank = auto; or e.g. 2, 2',
+            layout=W, style={'description_width': 'initial'},
+            tooltip='min ancillas per circuit (blank = auto)')
         # Buffer qubits: tiny range 0-5, numeric input is more direct.
         self.lucj_buffer_slider = BoundedIntText(
             value=1, min=0, max=5,
             description='Buffer qubits:',
             layout=Layout(width='220px'),
             style={'description_width': '110px'})
-        self.btn_lucj_multi = Button(
-            description='🤖 Generate Multi-Circuit',
-            button_style='success', layout=W)
+        # ── Multi-circuit planner ─────────────────────────────────
+        # Circuits are planned jointly by default; "Fast" places them one at a
+        # time (the greedy multi_sweep, unchanged). Each widget owns its
+        # Layout: the joint-only box is toggled at runtime.
+        self.chk_fast_multi = Checkbox(
+            value=False,
+            description='Fast: one circuit at a time',
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width),
+            tooltip='place circuits one by one instead of planning them '
+                    'together · Reference: Multi-circuit planner')
+        self.int_plans_kept = BoundedIntText(
+            value=3, min=1, max=50,
+            description='Plans kept:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='partial plans kept after each circuit '
+                    '· Reference: Multi-circuit planner')
+        self.int_cands_per_circuit = BoundedIntText(
+            value=3, min=1, max=50,
+            description='Candidates per circuit:',
+            layout=Layout(width='220px'),
+            style={'description_width': '150px'},
+            tooltip='layouts each plan tries for the next circuit '
+                    '· Reference: Multi-circuit planner')
+        self.ft_boundary_penalty = BoundedFloatText(
+            value=0.0, min=0.0, max=0.95, step=0.05,
+            description='Boundary penalty:',
+            layout=Layout(width='220px'),
+            style={'description_width': '110px'},
+            tooltip='cost per coupler shared by two circuits; matters only '
+                    'at buffer 0 · Reference: Multi-circuit planner')
+        self.joint_params_box = VBox(
+            [self.int_plans_kept, self.int_cands_per_circuit,
+             self.ft_boundary_penalty],
+            layout=Layout())
+        self.multi_advanced_acc = Accordion(
+            children=[VBox([self.chk_fast_multi, self.joint_params_box])],
+            layout=Layout(width=W.width, margin=W.margin,
+                          min_width=W.min_width))
+        self.multi_advanced_acc.set_title(0, '⚙️ Advanced')
+        self.multi_advanced_acc.selected_index = None  # collapsed on open
+        # The multi-circuit generate action: best placement per circuit with
+        # a per-circuit override dropdown.
+        self.btn_lucj_multi_sweep = Button(
+            description='🧺 Generate Multi-Circuit',
+            button_style='info', layout=W)
+        # Batch scan: run the whole multi-circuit batch on every compatible QPU.
+        self.btn_scan_batch = Button(
+            description='🌐 Scan batch on all QPUs',
+            button_style='info', layout=W,
+            tooltip='Place the full multi-circuit batch on every eligible '
+                    'backend and rank by batch fidelity')
+        self.scan_batch_box = VBox([])
         self.lbl_lucj_multi = HTML("")
+        # Captured WARNING+ from the multi-circuit sweep + replan (loud notices
+        # bar); empty when nothing was emitted.
+        self.lbl_lucj_multi_notices = HTML("")
         # Populated dynamically with per-circuit dropdowns when the
-        # user clicks btn_lucj_multi.
+        # user clicks btn_lucj_multi_sweep.
         self.lucj_multi_detail_box = VBox()
 
     # Roles offered by the legend panel — must match plot._LEGEND_ROLE_ORDER.
@@ -1318,8 +1730,7 @@ class MapperUIBuilder:
         rows = [self.legend_rows[r] for r in self._LEGEND_ROLES]
         controls = VBox([self.chk_legend_enabled, *rows])
         # Collapse into an Accordion so the controls don't clutter the
-        # sidebar by default. Accordion provides its own header so the
-        # inline "🏷️ Legend" HTML title is no longer needed.
+        # sidebar by default. The Accordion header is the section title.
         accordion = Accordion(children=[controls])
         accordion.set_title(0, '🏷️ Legend')
         accordion.selected_index = None   # collapsed on open
@@ -1508,6 +1919,9 @@ class MapperUIBuilder:
             description='📤 Export PNG (HQ)',
             button_style='primary', layout=W)
         self.json_preview = HTML("")
+        # JSON preview starts collapsed; the open/closed choice persists for
+        # the session (the Export subpanel is rebuilt on every nav switch).
+        self._json_preview_open = False
 
         # Shared "Save folder" for every export (PNG / JSON / session /
         # style / GIF/MP4). Plain Text field — user types a path
@@ -1553,18 +1967,18 @@ class MapperUIBuilder:
         ])
 
     def _build_auto_view(self):
-        """Build the 'Load' nav tab view (General Ansatz mode): four
-        load-from-outside sections — layout-file upload, paste auto-map,
+        """Build the 'Load'/Import nav tab view (General Ansatz mode): four
+        load-from-outside sections — paste auto-map, layout-file upload,
         session load, style preset load. In LUCJ mode the same nav slot
         selects ``_build_auto_lucj_view`` via
         ``nav_bar.value == 'auto_lucj'``.
         """
         return VBox([
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>📂 Load layout file</div>"),
-            self.btn_unified_upload,
-            HTML("<hr style='margin:4px 0;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>✏️ Paste qubit list</div>"),
             self.txt_auto, self.btn_auto,
+            HTML("<hr style='margin:4px 0;'>"),
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>📂 Load layout file</div>"),
+            self.btn_unified_upload,
             HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>💾 Load Session</div>"),
             self.btn_load_session,
@@ -1573,6 +1987,41 @@ class MapperUIBuilder:
             HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>🎨 Load Style Preset</div>"),
             self.btn_load_style,
         ])
+
+    def _refresh_stability_filter_availability(self):
+        """Enable the 🛡 Stability filter only when calibration history is
+        loaded; otherwise disable it with a hint. Re-evaluated each time the
+        Auto view is (re)built, so it flips on after history is fetched."""
+        state = self.state
+        available = bool(getattr(state, 'cal_history', None)
+                         and getattr(state, 'cal_history_dates', None))
+        self.chk_stability_filter.disabled = not available
+        if available:
+            self.chk_stability_filter.tooltip = (
+                'Exclude volatile qubits (from calibration history) before '
+                'the sweep')
+        else:
+            self.chk_stability_filter.tooltip = (
+                'Fetch calibration history first (Stability Check / Multi-day)')
+
+    @staticmethod
+    def _restore_tab_index(prev, tabs):
+        """Carry a Tab's ``selected_index`` across a from-scratch rebuild.
+
+        Every structural refresh (num_circuits / dd_mode / intra_qpu_mode
+        observers, ``_toggle_intra_qpu``, an explicit ``update_view`` from the
+        multi Generate flow) funnels through the ``_build_*_view`` methods,
+        each of which mints a FRESH ``Tab`` whose ``selected_index`` defaults to
+        0 — bouncing the user off whatever subpanel they were on (e.g. Multi →
+        Single mid-Generate). Restoring the previous index at this single choke
+        point fixes every current and future trigger. Clamped to the new child
+        count so a shrink (e.g. intra_qpu OFF drops the Multi subpanel) can't
+        point past the end. First build (prev is None) keeps the default 0."""
+        prev_idx = getattr(prev, 'selected_index', None)
+        n = len(tabs.children)
+        if prev_idx is not None and n:
+            tabs.selected_index = min(prev_idx, n - 1)
+        return tabs
 
     def _build_auto_lucj_view(self):
         """Build the 'Auto' nav tab view (LUCJ chemistry mode).
@@ -1587,44 +2036,113 @@ class MapperUIBuilder:
         ``lucj_multi_ancillas`` to override it per sub-circuit (blank
         falls back to the dropdown).
         """
-        return VBox([
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:4px 0;'>"
-                 "🤖 Auto-LUCJ Layout Engine</div>"),
-            HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔬 Single</div>"),
+        self._refresh_stability_filter_availability()
+        prev_tabs = getattr(self, '_auto_lucj_tabs', None)
+        name = esc(str(getattr(self.state, 'active_backend_name', '')
+                       or 'current backend'))
+        # Subpanel 1 — "Single" (single-circuit): everything except the
+        # Multi-Circuit section (single-circuit controls + the local results +
+        # the scan block). Mirrors the Error tab's Tab-based subpanel switcher.
+        single_panel = VBox([
             self.lucj_norb_slider,
             self.lucj_ancilla_dd,
+            self.lucj_min_ancilla,
+            self.lucj_top_n,
             self.lucj_chk_score,
+            self.chk_lucj_diverse,
+            self.ft_stability_floor,
+            self.chk_stability_filter,
+            self.stability_ctrl_box,
+            self.lbl_lucj_stability,
             self.btn_lucj_run,
+            self.lbl_lucj_trunc,
             self.lbl_lucj_status,
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "📋 Inspect Layouts</div>"),
+            self.lbl_lucj_notices,
+            self.lucj_advanced_acc,
+            HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
+            HTML(f"<div style='font-size:14px;font-weight:bold;color:#1a5276;"
+                 f"margin:3px 0;'>📍 This backend ({name})</div>"),
             self.dd_lucj_layout,
             self.lbl_lucj_detail,
-            HTML("<hr style='margin:8px 0; border-color:#2980B9;'>"),
-            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;margin:3px 0;'>"
-                 "🔗 Multi</div>"),
+            HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
+            HBox([
+                HTML("<div style='font-size:14px;font-weight:bold;"
+                     "color:#1a5276;margin:3px 8px 3px 0;'>🌐 Scan All "
+                     "QPUs (other backends)</div>"),
+                self.btn_scan_clear,
+            ], layout=Layout(align_items='center')),
+            self.btn_scan_qpus,
+            self.chk_scan_other_families,
+            self.chk_scan_stability,
+            self.lbl_scan_progress,
+            self.scan_results_box,
+        ], layout=Layout(padding='6px'))
+        # Subpanel 2 — "Multi" (multi-circuit): revealed only while Multi-
+        # Programming (intra-QPU) is enabled; the enable checkbox rebuilds it.
+        multi_panel = VBox([
             self.lucj_multi_norbs,
             self.lucj_multi_ancillas,
             self.lucj_buffer_slider,
-            self.btn_lucj_multi,
+            self.multi_advanced_acc,
+            self.btn_lucj_multi_sweep,
+            self.btn_scan_batch,
             self.lbl_lucj_multi,
+            self.lbl_lucj_multi_notices,
             self.lucj_multi_detail_box,
+            self.scan_batch_box,
+        ], layout=Layout(padding='6px'))
+        self._auto_single_panel = single_panel
+        self._auto_multi_panel = multi_panel
+        if self.intra_qpu_mode.value:
+            tabs = Tab(children=[single_panel, multi_panel])
+            tabs.set_title(0, '🔬 Single')
+            tabs.set_title(1, '🔗 Multi')
+        else:
+            tabs = Tab(children=[single_panel])
+            tabs.set_title(0, '🔬 Single')
+        # Keep the user on the subpanel they were viewing across rebuilds.
+        self._auto_lucj_tabs = self._restore_tab_index(prev_tabs, tabs)
+        return VBox([
+            HTML("<div style='font-size:14px;font-weight:bold;color:#1a5276;"
+                 "margin:4px 0;'>🤖 Auto-LUCJ Layout Engine</div>"),
+            HTML("<hr style='margin:6px 0; border-color:#dee2e6;'>"),
+            tabs,
         ], layout=Layout(padding='6px'))
 
+    def _on_json_preview_toggle(self, change):
+        """Persist the JSON-preview open/closed choice; refresh on expand."""
+        self._json_preview_open = change['new'] is not None
+        if self._json_preview_open:
+            self._get_export()
+
+    def _build_import_export_view(self):
+        """The unified '📁 I/O' nav tab: an Import subpanel (the former '📂 Load'
+        view) first, then an Export subpanel, switched via a Tab — the same
+        pattern as the Error / Auto tabs. Opens on Import by default."""
+        prev_tabs = getattr(self, '_io_tabs', None)
+        io_tabs = Tab(children=[self._build_auto_view(),
+                                self._build_export_view()])
+        io_tabs.set_title(0, '📥 Import')
+        io_tabs.set_title(1, '📤 Export')
+        # Same class of bug as the Auto tab: a refresh while the user is on a
+        # non-default subpanel would otherwise snap back to index 0.
+        self._io_tabs = self._restore_tab_index(prev_tabs, io_tabs)
+        return io_tabs
+
     def _build_export_view(self):
-        """Build the 'Export' nav tab view. Aggregates every export/save
-        control: live JSON preview, Export Layout (JSON), Export PNG
-        (popup wired by ``setup_png_export``), Export Session, Export
-        Style Preset, Export Time-Lapse.
+        """Build the Export subpanel: JSON preview (collapsible), Export Layout
+        (JSON), Export PNG, Export Session, Export Style Preset, Export
+        Time-Lapse.
         """
+        preview = Accordion(children=[self.json_preview])
+        preview.set_title(0, 'JSON preview')
+        preview.selected_index = 0 if self._json_preview_open else None
+        preview.observe(self._on_json_preview_toggle, names='selected_index')
         return VBox([
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📁 Save folder (applies to every export below)</div>"),
             self.save_folder,
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
-            HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📋 JSON Preview</div>"),
-            self.json_preview,
+            preview,
             HTML("<hr style='margin:8px 0; border-color:#dee2e6;'>"),
             HTML("<div style='font-size:15px;font-weight:bold;color:#1a5276;margin:4px 0;'>📤 Export Layout</div>"),
             self.export_format,
@@ -1659,9 +2177,9 @@ class MapperUIBuilder:
         Returns a ``Tab`` widget with two sub-tabs:
 
           * **Calibration** — Property & Scale row, Threshold
-            Filter, and the Calibration section anchored on
-            the hoisted ``self._time_panel`` (whose slider state
-            survives nav / num_circuits / mode changes).
+            Filter, and the Calibration section anchored on the hoisted
+            ``self._time_panel`` (whose slider state survives nav /
+            num_circuits / mode changes).
           * **Analysis** — collapsible Qubit Inspector accordion,
             Ranking accordion, Qubit + Gate Trend rows, Stable
             Qubits + Stable Gates rows.
@@ -1741,7 +2259,45 @@ class MapperUIBuilder:
         _err_tabs = Tab(children=[_err_tab_map, _err_tab_analysis])
         _err_tabs.set_title(0, 'Calibration')
         _err_tabs.set_title(1, 'Analysis')
+        # Preserve the Calibration/Analysis subtab across rebuilds (same class
+        # of bug as the Auto/I/O tabs).
+        self._err_tabs = self._restore_tab_index(
+            getattr(self, '_err_tabs', None), _err_tabs)
         return _err_tabs
+
+    #: Property dropdowns re-listed from the loaded calibration, with the
+    #: value each falls back to: (attribute, qubit or gate list, default).
+    _PROP_DROPDOWNS = (
+        ('dd_qubit_prop', 'qubit', 'readout_error'),
+        ('dd_rank_prop', 'qubit', 'readout_error'),
+        ('dd_trend_prop', 'qubit', 'readout_error'),
+        ('dd_stable_prop', 'qubit', 'readout_error'),
+        ('dd_gate_prop', 'gate', 'cz_error'),
+        ('dd_grank_prop', 'gate', 'cz_error'),
+        ('dd_gtrend_prop', 'gate', 'cz_error'),
+        ('dd_gstable_prop', 'gate', 'cz_error'),
+    )
+
+    def _sync_prop_dropdowns(self):
+        """List only the properties the loaded calibration has values for
+        (heatmap, rankings, trends, stable finder). Runs on every refresh,
+        so a new backend, snapshot or session is reflected at once; a
+        dropdown that already matches is left untouched."""
+        from .prop_options import available_options, sync_dropdown
+        lists = {
+            'qubit': available_options(
+                QUBIT_PROP_OPTIONS, getattr(self.state, 'qubit_props_data', None)),
+            'gate': available_options(
+                GATE_PROP_OPTIONS, getattr(self.state, 'gate_props_data', None)),
+        }
+        self._syncing_props = True
+        try:
+            for attr, kind, default in self._PROP_DROPDOWNS:
+                dd = getattr(self, attr, None)
+                if dd is not None:
+                    sync_dropdown(dd, lists[kind], default)
+        finally:
+            self._syncing_props = False
 
     def _refresh(self, *args):
         """Central refresh — plot + counters + LQS banner + warnings.
@@ -1763,6 +2319,9 @@ class MapperUIBuilder:
           7. props-warning banner (red, only when set)
           8. QPU 1 header label (inter-QPU mode only)
         """
+        if getattr(self, '_syncing_props', False):
+            return                     # a dropdown being re-listed below
+        self._sync_prop_dropdowns()
         plot_mod.refresh_plot(self.fig, self.state, self.widgets_ref)
         self._update_all_counters()
         self._update_undo_btns()
@@ -1770,8 +2329,8 @@ class MapperUIBuilder:
         try:
             self._ext_fns["update_fidelity"]()
         except Exception:
-            # Was a silent debug log — bumped to WARNING because it used
-            # to hide real bugs in estimate_circuit_fidelity.
+            # Logged with the traceback: a failure here is a real bug in
+            # estimate_circuit_fidelity.
             _log.exception("update_fidelity failed during _refresh")
         if self.state.calibration_data_label:
             self.lbl_calibration_date.value = (
@@ -2069,7 +2628,7 @@ class MapperUIBuilder:
         """
         try:
             self.state.push_undo()
-            # parse_auto_text now returns (count, autodetect_stats). The stats
+            # parse_auto_text returns (count, autodetect_stats). The stats
             # let us tell the user whether alpha/beta were topologically
             # auto-detected or fell back to midpoint split.
             count, stats = export_mod.parse_auto_text(
@@ -2296,6 +2855,7 @@ class MapperUIBuilder:
                 prefetched_props=self.state.initial_props)
             self.state.x_coord, self.state.y_coord, self.state.edges_list = result[0], result[1], result[2]
             self.state.qubit_ids, self.state.readout_errors, self.state.gate_errors = result[3], result[4], result[5]
+            self._apply_backend_defaults()
 
             self.state.clear_all_layouts()
 
@@ -2306,11 +2866,10 @@ class MapperUIBuilder:
             self.dd_lucj_layout.options = []
             self.dd_lucj_layout.disabled = True
             self.lbl_lucj_status.value = ""
+            self.lbl_lucj_notices.value = ""
             self.lbl_lucj_detail.value = ""
-            self._lucj_multi_results.clear()
-            self._lucj_multi_norbs.clear()
-            self._lucj_multi_dropdowns.clear()
             self.lbl_lucj_multi.value = ""
+            self.lbl_lucj_multi_notices.value = ""
             self.lucj_multi_detail_box.children = ()
 
             # {} (not None) for delta props — plot.py readers guard on
@@ -2350,6 +2909,21 @@ class MapperUIBuilder:
         finally:
             self._loading_device = False
 
+    def _apply_backend_defaults(self):
+        """Set the per-chip search defaults once per connected backend.
+
+        Diverse enumeration is ON for heavy-hex chips and OFF for the
+        square-lattice Nighthawk, where the exhaustive search finds so many
+        layouts that the sieve costs minutes for about 1% LQS. A manual
+        toggle holds until another backend is connected.
+        """
+        name = self.state.active_backend_name
+        if name == self._defaults_backend:
+            return
+        self._defaults_backend = name
+        chip = str(self.state.active_chip or '').lower()
+        self.chk_diverse_cap.value = not chip.startswith('nighthawk')
+
     def _update_view(self, change=None):
         """Switch the visible content panel based on ``self.nav_bar.value``.
 
@@ -2385,12 +2959,12 @@ class MapperUIBuilder:
         # Update nav bar: hide Auto-LUCJ in general mode
         is_lucj = self.dd_mode.value == 'lucj'
         if is_lucj:
-            new_opts = [('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
-                        ('🤖 Auto', 'auto_lucj'),
-                        ('📤 Export', 'export'), ('🔍 Error', 'error_inspect')]
+            new_opts = [('✏️ Layout', 'manual'), ('🤖 Auto', 'auto_lucj'),
+                        ('📁 I/O', 'io'),
+                        ('🔍 Error', 'error_inspect')]
         else:
-            new_opts = [('✏️ Layout', 'manual'), ('📂 Load', 'auto'),
-                        ('📤 Export', 'export'), ('🔍 Error', 'error_inspect')]
+            new_opts = [('✏️ Layout', 'manual'), ('📁 I/O', 'io'),
+                        ('🔍 Error', 'error_inspect')]
         current_vals = [v for _, v in self.nav_bar.options]
         new_vals = [v for _, v in new_opts]
         if current_vals != new_vals:
@@ -2410,7 +2984,7 @@ class MapperUIBuilder:
         # dd_mode changes arrive with a non-nav owner, and _toggle_intra_qpu
         # / bootstrap call with change=None — all of those still rebuild so
         # the manual view is correct the next time it opens. A bare nav to
-        # auto/export/error used to reallocate every per-circuit tab VBox for
+        # auto/export/error would reallocate every per-circuit tab VBox for
         # a view that doesn't display them (flicker + wasted work); skip it.
         _nav_only = change is not None and getattr(change, 'owner', None) is self.nav_bar
         if mode == 'manual' or not _nav_only:
@@ -2423,14 +2997,13 @@ class MapperUIBuilder:
             self._ext_fns["update_grank"]()
         if mode == 'manual':
             self.content_box.children = [self._build_manual_view()]
-        elif mode == 'auto':
-            self.content_box.children = [self._build_auto_view()]
         elif mode == 'auto_lucj':
             self.content_box.children = [self._build_auto_lucj_view()]
-        elif mode == 'export':
+        elif mode == 'io':
+            # Unified Import / Export tab (Export + former Load subpanels).
             self._get_export()
             self._ext_fns["update_fidelity"]()
-            self.content_box.children = [self._build_export_view()]
+            self.content_box.children = [self._build_import_export_view()]
         elif mode == 'error_inspect':
             self.content_box.children = [self._build_error_view()]
 
@@ -2509,6 +3082,31 @@ class MapperUIBuilder:
         except Exception:
             _log.exception(
                 "update_fidelity failed after history load")
+
+    def _set_num_circuits_silent(self, n):
+        """Set ``num_circuits`` WITHOUT the full ``_update_view`` rebuild its
+        observer would fire — used when a multi-circuit generate or apply
+        changes the count as a RESULT of its own action.
+
+        The visible Multi subpanel is already updated in place (its summary and
+        per-circuit override dropdowns are persistent widgets refreshed by the
+        caller), so rebuilding ``content_box`` would only repaint an identical
+        panel and make it flicker. A count change genuinely needs just the
+        OFF-SCREEN refresh: the per-circuit manual UI + the ancilla-tool
+        options — exactly what ``_build_dynamic_ui`` does (it never touches
+        ``content_box``). The nav options don't depend on ``num_circuits`` (only
+        on ``dd_mode``), so they need no refresh here.
+
+        The unobserve→set→observe idiom (same as ``_update_view``'s nav-bar
+        reseed) silences only THIS assignment; the ``_restore_tab_index`` helper
+        still guards every legitimate full rebuild (checkbox toggles, nav
+        switches)."""
+        self.num_circuits.unobserve(self._update_view, 'value')
+        try:
+            self.num_circuits.value = n
+        finally:
+            self.num_circuits.observe(self._update_view, 'value')
+        self._build_dynamic_ui()
 
     def _toggle_intra_qpu(self, change):
         """Observer for ``intra_qpu_mode`` — enable/disable num_circuits + refresh view."""
@@ -2921,8 +3519,8 @@ class MapperUIBuilder:
 
         def on_click(b):
             # Set current_fill BEFORE the picker value — the picker's
-            # observer guard then sees new == current_fill and no-ops,
-            # avoiding the old double-rebuild. Borders flip in place.
+            # observer guard then sees new == current_fill and no-ops, so
+            # nothing is rebuilt twice. Borders flip in place.
             self.state.layouts_data[idx]['current_fill'] = color
             self.state.layouts_data[idx]['cp_fill_advanced'].value = color
             self._sync_manual_swatch_borders(idx)
@@ -3214,11 +3812,20 @@ class MapperUIBuilder:
                  self.chk_inter_qpu,
                  self.dd_backend_qpu2, self.btn_connect_qpu2, self.lbl_qpu2_status]
             )),
+            # 5th section: benchmarking. A property of the backend, so it
+            # belongs beside Hardware rather than inside the Auto search.
+            VBox([
+                HTML("<div style='font-size:15px;font-weight:bold;"
+                     "color:#1a5276;margin:4px 0;'>📡 Real-time benchmarking"
+                     "</div>"),
+                self.bench_box,
+            ]),
         ])
         acc_settings.set_title(0, '1. Hardware')
         acc_settings.set_title(1, '2. Display')
         acc_settings.set_title(2, '3. Colors')
         acc_settings.set_title(3, '4. Multi-Programming')
+        acc_settings.set_title(4, '5. Benchmark')
 
         sidebar_title = HTML(
             f"<h3 style='margin:0 0 6px 0; color:#2C3E50;'>🎛️ QPU Map Editor</h3>"

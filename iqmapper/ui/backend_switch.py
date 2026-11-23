@@ -24,12 +24,6 @@ also handled here for symmetry.
 Public API:
   setup_backend_switch(ctx) -> on_backend_switch_handler
 
-Optional ctx keys (absent → the corresponding refresh is skipped):
-  refresh_qpu1_label — single-element cell holding ui.inter_qpu's hook.
-  refresh_time_panel — zero-arg callable re-rendering the time/delta panel
-      so its "Showing:" header names the new backend. Called on the success
-      path (after the graph reload) and again on the rollback path.
-
 The handler is returned so callers (e.g. tests) can invoke it
 explicitly. `ctx.switching_backend` is shared with
 `_load_device_graph` — both routines need to see the same flag for
@@ -38,7 +32,6 @@ element list (`[False]`) used as a kernel-main-loop reentrancy guard,
 not a thread synchronisation primitive — `threading.Event`'s blocking
 semantics would be wrong here.
 """
-import contextlib
 import logging
 
 from ..html_safe import esc
@@ -94,8 +87,8 @@ def _classify_switch_error(exc: BaseException, backend_name: str) -> str:
         return (f"Backend '{backend_name}' is no longer available "
                 f"(may have been retired or hidden by IBM).")
     if 'auth' in msg or '401' in msg or '403' in msg or 'token' in msg:
-        return ("Authentication failed (token may have expired). "
-                "Re-save your QiskitRuntimeService account and restart the kernel.")
+        return ("Authentication failed — re-save your IBM Quantum "
+                "account and restart the kernel.")
     if 'timeout' in msg or 'timed out' in msg or 'connection' in msg:
         return f"Network error reaching IBM Quantum: {exc}"
     return f"Switch failed: {exc}"
@@ -120,6 +113,12 @@ def setup_backend_switch(ctx):
       out                   — Output widget (used for traceback dump
                               when the switch fails)
 
+    Optional ctx fields (absent in minimal callers/tests → treated as no-op):
+      refresh_qpu1_label    — [None] cell holding ui.inter_qpu's QPU-1 label
+                              refresh hook
+      refresh_time_panel    — callable that re-renders the Time/Delta panel
+                              (Error-tab header) for the switched backend
+
     Returns the on_backend_switch handler in case the caller needs it
     for testing or programmatic invocation.
     """
@@ -137,26 +136,6 @@ def setup_backend_switch(ctx):
     # [None] until inter-QPU is wired). Absent entirely in callers/tests that
     # don't build the inter-QPU panel — treat as "no hook".
     refresh_qpu1_label_cell = getattr(ctx, 'refresh_qpu1_label', None)
-    # Optional: zero-arg callable that re-renders the time/delta panel so its
-    # "Showing:" header stops naming the previous backend. Absent in callers
-    # and tests that don't build the time panel — treat as "no hook".
-    refresh_time_panel_hook = getattr(ctx, 'refresh_time_panel', None)
-
-    def _refresh_time_panel():
-        """Best-effort re-render of the time/delta panel after a switch.
-
-        The panel's header caches the backend name it was last built with, so
-        without this it keeps showing the OLD backend after a switch. A header
-        refresh must NEVER break a backend switch, so failures are logged and
-        swallowed. No-op when no hook was supplied.
-        """
-        if refresh_time_panel_hook is None:
-            return
-        try:
-            _log.debug("Rebuilding time/delta panel after backend switch")
-            refresh_time_panel_hook()
-        except Exception:
-            _log.exception("Time panel refresh after backend switch failed")
 
     def _refresh_qpu1_label():
         """Best-effort refresh of the QPU-1 switcher label after a switch.
@@ -169,9 +148,26 @@ def setup_backend_switch(ctx):
                 if refresh_qpu1_label_cell else None)
         if hook is None:
             return
-        with contextlib.suppress(Exception):
-            _log.debug("Refreshing QPU-1 toggle label after backend switch")
+        _log.debug("Refreshing QPU-1 toggle label after backend switch")
+        try:
             hook()
+        except Exception:
+            _log.debug("QPU-1 toggle label refresh failed", exc_info=True)
+
+    # Optional: best-effort callable to re-render the Time/Delta panel so the
+    # Error-tab header reflects the switched backend. Absent in callers/tests
+    # that don't build the panel — treat as "no hook".
+    refresh_time_panel = getattr(ctx, 'refresh_time_panel', None)
+
+    def _refresh_time_panel():
+        """Re-render the Time/Delta panel (Error-tab header + sub-panels) after
+        a switch. A hook failure must NEVER break or roll back a switch."""
+        if refresh_time_panel is None:
+            return
+        try:
+            refresh_time_panel()
+        except Exception:
+            _log.exception("Time-panel refresh after backend switch failed")
 
     def _on_backend_switch(change):
         new_name = change['new']
@@ -265,11 +261,6 @@ def setup_backend_switch(ctx):
             # reject this call.
             load_device_graph(force=True)
 
-            # The graph reload has just reset the time state for the new
-            # backend; re-render the time/delta panel so its "Showing:"
-            # header names the new backend instead of the previous one.
-            _refresh_time_panel()
-
             # ── Layout preservation ──────────────────────────────────
             layout_msg = ""
             if saved_layouts is not None:
@@ -318,6 +309,11 @@ def setup_backend_switch(ctx):
                 f"border:1px solid #abebc6;margin:3px 0;'>"
                 f"{msg}</div>"
             )
+            # State + device graph now reflect the new backend (the
+            # time-state reset ran inside load_device_graph); re-render the
+            # Time/Delta panel so the Error-tab header stops showing the old
+            # backend.
+            _refresh_time_panel()
         except Exception as e:
             _log.exception("Backend switch failed")
             # Roll state back to the previous backend (the graph for the new
@@ -333,8 +329,9 @@ def setup_backend_switch(ctx):
                 # State rolled back to the old backend name — refresh the
                 # switcher label to match, undoing any success-path relabel.
                 _refresh_qpu1_label()
-                # Same for the time/delta panel header, which may already
-                # have been rebuilt with the new name before the failure.
+                # …and re-render the Time/Delta panel against the rolled-back
+                # state (correct-by-construction: it renders whatever state
+                # says, which is now the old backend again).
                 _refresh_time_panel()
             hint = _classify_switch_error(e, new_name)
             lbl_switch_status.value = (

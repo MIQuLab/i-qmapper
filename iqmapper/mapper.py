@@ -21,6 +21,8 @@ def launch_mapper(config):
     """
     from IPython.display import display, clear_output
     from .constants import load_custom_colors, resolve_coords
+    from .log_setup import install_file_log
+    install_file_log()
 
     backend = config.get('backend')
     vendor  = config.get('vendor', '')

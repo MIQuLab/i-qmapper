@@ -336,13 +336,36 @@ def _make_backend_cmap_pygraph(backend) -> PyGraph:
 _MAX_RAW_VF2_MAPPINGS = 2000
 
 
-def _collect_vf2_mappings(graph, subgraph, cap=_MAX_RAW_VF2_MAPPINGS):
+def _collect_vf2_mappings(graph, subgraph, cap=_MAX_RAW_VF2_MAPPINGS, *,
+                          reservoir=None):
     """Collect at most `cap` isomorphic mappings from rustworkx.vf2_mapping.
 
     Returns the materialized list. Logs a warning when the cap was hit
     so we can tell the user (or future maintainers) that scoring may
     have missed better-ranked layouts beyond the cap.
+
+    With `reservoir` (an `iqmapper.reservoir.DiverseReservoir`) the cap
+    counts DISTINCT candidates instead of raw mappings: near-duplicates are
+    offered, rejected and do not consume a slot. VF2 yields in graph
+    traversal order, so a plain cap keeps one clustered corner of the chip;
+    see reservoir.py for the measurement. `reservoir=None` is the historical
+    path, byte-for-byte unchanged.
     """
+    if reservoir is not None:
+        for m in rustworkx.vf2_mapping(graph, subgraph, subgraph=True):
+            reservoir.offer(m)
+            # Stop on the OFFER budget, not on being full: the reservoir
+            # fills before it sieves, so halting at `len >= cap` would make
+            # it see nothing past the first `cap` mappings and behave
+            # exactly like the plain cap it replaces.
+            if reservoir.exhausted:
+                _log.debug(
+                    "VF2 cap reached: kept %d diverse mappings, skipped %d "
+                    "near-duplicates", len(reservoir),
+                    reservoir.stats['skipped_similar'])
+                break
+        return reservoir.mappings
+
     mappings = []
     truncated = False
     for m in rustworkx.vf2_mapping(graph, subgraph, subgraph=True):
@@ -777,7 +800,7 @@ def get_multi_circuit_layouts(
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# JOINT RE-OPTIMIZATION (F3)
+# JOINT RE-OPTIMIZATION
 # ═══════════════════════════════════════════════════════════════════════
 
 def reoptimize_after_change(

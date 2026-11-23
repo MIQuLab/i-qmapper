@@ -1,6 +1,6 @@
 """Unit tests for iqmapper.stability.analyze_property_stability.
 
-The seven cases covered:
+Covers seven cases:
   1. Error kind, happy path (stable series)
   2. Time kind, happy path (stable series)
   3. NaN handling (NaN samples are skipped)

@@ -108,9 +108,8 @@ class PowerPointColorPicker:
             layout=_TOGGLE_BTN_LAYOUT, icon='plus',
         )
 
-        # Explicit reference to the header preview swatch. The old code
-        # mutated this widget via `self.widget.children[0].children[1]`,
-        # which broke silently if the VBox/HBox order ever changed.
+        # Explicit reference to the header preview swatch, so it does not
+        # depend on the VBox/HBox child order.
         self._swatch_preview = HTML(_preview_swatch_html(self.current_color))
 
         self.widget = VBox([
@@ -229,12 +228,9 @@ class PowerPointColorPicker:
             return
         self.current_color = hex_color
         self.advanced_picker.value = hex_color
-        # Direct reference — was previously self.widget.children[0].children[1].
         self._swatch_preview.value = _preview_swatch_html(hex_color)
-        # Selection change flips at most two borders — no full rebuild. The
-        # old refresh_swatches() here tore down/recreated every Button and,
-        # with the previously-shared swatch Layout, cascaded a re-render
-        # across all swatches: the visible "salto" on neighbouring boxes.
+        # Selection change flips at most two borders — no full rebuild, so
+        # neighbouring swatches do not re-render or jump.
         self._sync_swatch_borders()
         if self.on_change_callback:
             self.on_change_callback(hex_color)

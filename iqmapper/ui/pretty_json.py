@@ -229,9 +229,8 @@ def pretty_json_html(data):
             i += 1
 
     body = ''.join(out)
-    # Bumped from 12px → 14px on user feedback: at 12px on a 720px sidebar
-    # the JSON tree was effectively unreadable without zooming in. 14px
-    # matches the rest of the sidebar body text.
+    # 14px matches the rest of the sidebar body text; smaller is hard to
+    # read on a 720px sidebar.
     result = (
         "<div style='font-family:ui-monospace,SFMono-Regular,Menlo,"
         "Consolas,monospace;font-size:14px;line-height:1.5;"

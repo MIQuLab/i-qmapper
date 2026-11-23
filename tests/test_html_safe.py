@@ -1,9 +1,8 @@
 """
 tests/test_html_safe.py — Unit tests for iqmapper.html_safe.esc().
 
-Closes the audit gap (AUDIT_REPORT § html_safe.py): the escape helper
-was previously untested even though it's the single defence against
-XSS via user-influenced strings in ipywidgets.HTML widgets (loaded
+The escape helper is the single defence against XSS via
+user-influenced strings in ipywidgets.HTML widgets (loaded
 session JSON, calibration label strings, exception messages, ...).
 """
 
@@ -14,7 +13,7 @@ class TestEscBasic:
     """Core escape behaviour: every HTML-significant character is replaced."""
 
     def test_script_tag(self):
-        # The headline case the audit report calls out explicitly.
+        # The headline case.
         assert esc("<script>") == "&lt;script&gt;"
 
     def test_full_script_injection(self):

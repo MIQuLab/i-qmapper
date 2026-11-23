@@ -319,18 +319,20 @@ def refresh_plot(fig, state, widgets_ref):
                 if not both_other:
                     s_u, s_v = global_style[u], global_style[v]
                     # Highlight only same-group edges (α-α, β-β, …) or
-                    # ancilla-adjacent edges; α/β boundary stays grey.
-                    # Same-group check compares (circuit, role) tuples
-                    # — NOT fill colour (see qubit_group_key comment above).
-                    if state.qubit_ids[u] in all_ancillas:
+                    # ancilla-adjacent edges inside one circuit; α/β
+                    # boundary and edges between circuits stay grey.
+                    # Group checks compare (circuit, role) tuples — NOT
+                    # fill colour (see qubit_group_key comment above).
+                    gk_u = qubit_group_key.get(u)
+                    gk_v = qubit_group_key.get(v)
+                    same_circuit = (gk_u is not None and gk_v is not None
+                                    and gk_u[0] == gk_v[0])
+                    if same_circuit and state.qubit_ids[u] in all_ancillas:
                         match_col = s_u['line']
-                    elif state.qubit_ids[v] in all_ancillas:
+                    elif same_circuit and state.qubit_ids[v] in all_ancillas:
                         match_col = s_v['line']
-                    else:
-                        gk_u = qubit_group_key.get(u)
-                        gk_v = qubit_group_key.get(v)
-                        if gk_u is not None and gk_u == gk_v:
-                            match_col = s_u['line']
+                    elif gk_u is not None and gk_u == gk_v:
+                        match_col = s_u['line']
             edge_colors.append(match_col if match_col else w.pp_gate_col.value)
             edge_widths.append(hl_w if match_col else base_w)
 
@@ -543,13 +545,30 @@ def refresh_plot(fig, state, widgets_ref):
         # place on the first refresh. (We used .uid first, but
         # FigureWidget regenerates .uid; .meta is preserved.)
         q_trace = _trace_by_meta(fig, _META_QUBITS)
-        if q_trace is not None:
+        # Node markers must never diverge from the state being painted. The
+        # per-node text / color / line arrays are all sized to n_q; if we wrote
+        # them while leaving q_trace.x/y at a STALE length, the markers would
+        # keep old positions but receive empty color/text → invisible nodes,
+        # edges still drawn ("edges but no nodes"). So (a) rewrite x/y from the
+        # SAME state (state.x_coord/y_coord) in the same update, and (b) if the
+        # state carries no qubits (or coords don't cover them), refuse to empty
+        # a populated trace — leave it intact and warn loudly instead.
+        coords_ok = (n_q > 0
+                     and len(state.x_coord) >= n_q and len(state.y_coord) >= n_q)
+        if q_trace is not None and coords_ok:
+            q_trace.x = tuple(float(state.x_coord[i]) for i in range(n_q))
+            q_trace.y = tuple(float(state.y_coord[i]) for i in range(n_q))
             q_trace.mode = 'markers+text' if w.show_numbers.value else 'markers'
             q_trace.hoverinfo = 'text' if is_err else 'none'
             q_trace.text = tuple(str(state.qubit_ids[i]) for i in range(n_q)) if w.show_numbers.value else tuple('' for _ in range(n_q))
             q_trace.hovertext = tuple(h_text)
             q_trace.marker.update(color=list(colors), size=int(w.size_slider.value), line=dict(color=list(l_colors), width=list(l_widths)))
             q_trace.update(textfont=dict(color=list(text_colors), size=int(w.font_size_slider.value)))
+        elif q_trace is not None:
+            _log.warning(
+                "refresh_plot: %d qubit_ids vs %d/%d coords — leaving the "
+                "existing qubit trace intact (edges-but-no-nodes guard).",
+                n_q, len(state.x_coord), len(state.y_coord))
 
         fig.layout.paper_bgcolor = 'white'; fig.layout.plot_bgcolor = 'white'; fig.layout.font.color = 'black'
         _update_colorbars(fig, state, q_arr, g_arr, q_prop_key, g_prop_key, q_label, g_label, is_err, _is_delta)
@@ -1004,15 +1023,16 @@ def build_static_figure(state, opts, margin=40, crop_to_selection=False, annotat
                 both_other = (state.qubit_ids[u] in all_others and state.qubit_ids[v] in all_others)
                 if not both_other:
                     s_u, s_v = global_style[u], global_style[v]
-                    if state.qubit_ids[u] in all_ancillas:
+                    gk_u = qubit_group_key.get(u)
+                    gk_v = qubit_group_key.get(v)
+                    same_circuit = (gk_u is not None and gk_v is not None
+                                    and gk_u[0] == gk_v[0])
+                    if same_circuit and state.qubit_ids[u] in all_ancillas:
                         match_col = s_u['line']
-                    elif state.qubit_ids[v] in all_ancillas:
+                    elif same_circuit and state.qubit_ids[v] in all_ancillas:
                         match_col = s_v['line']
-                    else:
-                        gk_u = qubit_group_key.get(u)
-                        gk_v = qubit_group_key.get(v)
-                        if gk_u is not None and gk_u == gk_v:
-                            match_col = s_u['line']
+                    elif gk_u is not None and gk_u == gk_v:
+                        match_col = s_u['line']
 
             if match_col:
                 edge_shapes.append(dict(type='line', x0=x0, y0=y0, x1=x1, y1=y1,

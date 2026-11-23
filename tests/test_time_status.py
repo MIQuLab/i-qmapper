@@ -13,9 +13,6 @@ the writers we control. These tests lock in both:
     pointing to the LAST available entry (documented "show the latest we
     have" semantic);
   * happy-path output must be byte-identical to before the guards.
-
-The reader under test is ``describe_current_view``; earlier notes called it
-``describe_current_time`` (same signature, same branches).
 """
 from types import SimpleNamespace
 

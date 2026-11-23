@@ -89,6 +89,80 @@ _SQ_GATE_ERROR_MAP = {
 }
 _TWO_Q_ERROR_GATES = {'cz_error': 'cz', 'rzz_error': 'rzz'}
 
+#: What `properties()` must declare for each qubit key: a qubit parameter
+#: name, or a tuple of gate names (any one is enough).
+_QUBIT_KEY_SOURCE = {
+    'readout_error': 'readout_error', 't1': 'T1', 't2': 'T2',
+    'prob_meas0_prep1': 'prob_meas0_prep1',
+    'prob_meas1_prep0': 'prob_meas1_prep0',
+    'readout_length': 'readout_length',
+    'id_error': ('id',), 'rx_error': ('rx',), 'sx_error': ('sx',),
+    'rz_error': ('rz',), 'x_error': ('x',),
+    'sq_gate_length': ('sx', 'x', 'id'),
+    'measure_error': ('measure',), 'measure_2_error': ('measure_2',),
+}
+#: Gate names each gate key needs (any one is enough).
+_GATE_KEY_SOURCE = {
+    'cz_error': ('cz',), 'rzz_error': ('rzz',), 'gate_length': ('cz', 'rzz'),
+}
+
+
+def declared_keys(props):
+    """(qubit keys, gate keys) the backend's `properties()` declares, or None
+    when `props` does not expose its gate and qubit lists (then every key is
+    fetched)."""
+    try:
+        gates = {g.gate for g in props.gates}
+        params = {p.name for q in props.qubits for p in q}
+    except Exception:
+        return None
+
+    def _has(source):
+        if isinstance(source, tuple):
+            return any(g in gates for g in source)
+        return source in params
+
+    qubit = {k for k, src in _QUBIT_KEY_SOURCE.items() if _has(src)}
+    gate = {k for k, src in _GATE_KEY_SOURCE.items() if _has(src)}
+    return qubit, gate
+
+
+def extract_props(props, n_qubits, edges):
+    """Every qubit and gate key as an array (qubit keys over `n_qubits`, gate
+    keys over `edges`).
+
+    Keys the backend does not declare are NaN without being asked for, so a
+    backend without (say) RZZ gates costs no calls and no messages. A
+    declared key with missing values logs one line for the whole key, e.g.
+    "t2: 1 of 156 qubits without a value". Every key is always present, so
+    caches, history and sessions keep the same key set on every backend.
+    """
+    declared = declared_keys(props)
+    q_keys, g_keys = declared if declared is not None else (None, None)
+    qp, gp = {}, {}
+    for _, pk in QUBIT_PROP_OPTIONS:
+        if q_keys is not None and pk not in q_keys:
+            qp[pk] = np.full(n_qubits, np.nan)
+            continue
+        qp[pk] = np.array([fetch_qubit_prop(props, i, pk)
+                           for i in range(n_qubits)], dtype=float)
+        _log_holes(pk, qp[pk], 'qubits')
+    for _, pk in GATE_PROP_OPTIONS:
+        if g_keys is not None and pk not in g_keys:
+            gp[pk] = np.full(len(edges), np.nan)
+            continue
+        gp[pk] = np.array([fetch_gate_prop(props, e, pk) for e in edges],
+                          dtype=float)
+        _log_holes(pk, gp[pk], 'edges')
+    return qp, gp
+
+
+def _log_holes(key, arr, unit):
+    missing = int(np.isnan(arr).sum()) if len(arr) else 0
+    if missing:
+        _log.warning("%s: %d of %d %s without a value", key, missing,
+                     len(arr), unit)
+
 
 # ── Property fetchers ────────────────────────────────────────────────
 
@@ -130,7 +204,9 @@ def fetch_qubit_prop(props, qubit_idx, prop_key):
             except Exception:
                 return np.nan
     except Exception as exc:
-        _log.warning("fetch_qubit_prop failed: qubit=%d prop='%s' — %s", qubit_idx, prop_key, exc)
+        # One line per key is logged by extract_props, not one per qubit.
+        _log.debug("fetch_qubit_prop: qubit=%d prop='%s' — %s",
+                   qubit_idx, prop_key, exc)
     return np.nan
 
 
@@ -147,7 +223,9 @@ def fetch_gate_prop(props, edge, prop_key):
                     continue
             return np.nan
     except Exception as exc:
-        _log.warning("fetch_gate_prop failed: edge=%s prop='%s' — %s", edge, prop_key, exc)
+        # One line per key is logged by extract_props, not one per edge.
+        _log.debug("fetch_gate_prop: edge=%s prop='%s' — %s",
+                   edge, prop_key, exc)
     return np.nan
 
 
@@ -515,14 +593,8 @@ class _CachedPropsPlaceholder:
 
 def _extract_and_cache(state, props, coords, edges, backend_name):
     """Extract all properties from a real props object, save to cache."""
-    state.qubit_props_data = {
-        pk: np.array([fetch_qubit_prop(props, i, pk) for i in range(len(coords))])
-        for _, pk in QUBIT_PROP_OPTIONS
-    }
-    state.gate_props_data = {
-        pk: np.array([fetch_gate_prop(props, e, pk) for e in edges])
-        for _, pk in GATE_PROP_OPTIONS
-    }
+    state.qubit_props_data, state.gate_props_data = extract_props(
+        props, len(coords), edges)
     last_upd = _extract_last_update(props)
     if last_upd and backend_name:
         _save_calibration(backend_name, last_upd,
@@ -599,10 +671,7 @@ def get_props_for_datetime(state, backend, cal_datetime):
     # Extract and cache
     n_q = len(state.qubit_ids) if state.qubit_ids else 0
     edges = state.edges_list or []
-    qp = {pk: np.array([fetch_qubit_prop(props, i, pk) for i in range(n_q)])
-          for _, pk in QUBIT_PROP_OPTIONS}
-    gp = {pk: np.array([fetch_gate_prop(props, e, pk) for e in edges])
-          for _, pk in GATE_PROP_OPTIONS}
+    qp, gp = extract_props(props, n_q, edges)
     if last_upd:
         _save_calibration(backend_name, last_upd, qp, gp)
     return _CachedPropsPlaceholder(last_upd or 'unknown'), qp, gp
@@ -743,10 +812,7 @@ def scan_day_calibrations(state, backend, scan_date, progress_callback=None):
         cached = _load_calibration(backend_name, last_upd)
         if cached is None:
             try:
-                qp = {pk: np.array([fetch_qubit_prop(props, i, pk) for i in range(n_q)])
-                      for _, pk in QUBIT_PROP_OPTIONS}
-                gp = {pk: np.array([fetch_gate_prop(props, e, pk) for e in edges])
-                      for _, pk in GATE_PROP_OPTIONS}
+                qp, gp = extract_props(props, n_q, edges)
                 _save_calibration(backend_name, last_upd, qp, gp)
                 _log.info("Scanned & cached: %s @ %s", backend_name, last_upd)
             except Exception as exc:
@@ -946,10 +1012,7 @@ def fetch_calibration_history(state, start_date, end_date, progress_callback=Non
             if props is None:
                 return ds, None, None
             lu = _extract_last_update(props)
-            qp = {pk: np.array([fetch_qubit_prop(props, i, pk) for i in range(n_q)])
-                  for _, pk in QUBIT_PROP_OPTIONS}
-            gp = {pk: np.array([fetch_gate_prop(props, e, pk) for e in state.edges_list])
-                  for _, pk in GATE_PROP_OPTIONS}
+            qp, gp = extract_props(props, n_q, state.edges_list)
             if lu:
                 _save_calibration(bname, lu, qp, gp)
             return ds, qp, gp
@@ -999,8 +1062,8 @@ def auto_load_recent_history(state, days=14, min_cached_threshold=5):
           'cache' — cache had ≥ threshold; only cached entries loaded.
           'fetch' — cache had < threshold; fetch_calibration_history ran.
     """
-    # Don't touch state if the user has already populated cal_history
-    # via Multi-day mode before this auto-load fires.
+    # Don't touch state if the user has already populated cal_history via
+    # Multi-day mode before this auto-load fires.
     if state.cal_history_dates:
         return len(state.cal_history_dates), 'noop'
 

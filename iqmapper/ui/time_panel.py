@@ -1,8 +1,7 @@
 """
 ui.time_panel.py — Unified time/delta panel for the ERROR tab.
 
-Drop-in replacement for the Snapshot/Range/Delta widgets currently
-scattered in ui.py. Two clean orthogonal blocks:
+Two orthogonal blocks:
 
     Block 1 — CALIBRATION SOURCE (pick one)
         • Live       (current calibration)
@@ -17,49 +16,19 @@ scattered in ui.py. Two clean orthogonal blocks:
         • Previous in sequence    (slider's previous point — step-by-step)
 
 The panel is self-contained: it owns all widgets and callbacks, keeps
-state in `SessionState`, and calls back into your existing `data` and
+state in `SessionState`, and calls back into the `data` and
 `export` modules. No other UI code needs to know about it.
 
-────────────────────────────────────────────────────────────────────
-USAGE (in ui.py, inside build_mapper_ui, ERROR tab assembly):
-
-    from .time_panel import build_time_panel
-
-    time_panel, time_api = build_time_panel(
-        state=state,
-        data_mod=data_mod,          # your data.py
-        export_mod=export_mod,      # your export.py
-        refresh_plot=_refresh,      # your existing _refresh()
-        load_device_graph=_load_device_graph,
-        spawn_bg=None,              # optional background thread helper
-    )
-
-    _err_tab_map = VBox([
-        ...                         # property selector, threshold filter, etc.
-        time_panel,                 # <- single widget replaces 6+ blocks
-        ...                         # qubit info, calibration date label
-    ])
-
-Delete from ui.py: time_mode, dp_snapshot_date, txt_snapshot_hour,
-    dd_known_cals, btn_snapshot_load, btn_scan_day, lbl_snapshot_status,
-    chk_delta_ref, dp_ref_date, txt_ref_hour, dd_known_ref,
-    btn_ref_compute, btn_scan_ref_day, lbl_ref_status,
-    snapshot_panel, range_panel, ref_panel,
-    hist_start_date, hist_end_date, btn_fetch_hist, hist_progress,
-    hist_status, hist_slider_box.
-
-ui_calibration.py: removed from the tree (its logic lives here now).
-────────────────────────────────────────────────────────────────────
+Built by ``MapperUIBuilder`` through ``build_time_panel`` and placed in
+the ERROR tab.
 
 Dependencies:
     - ipywidgets (already required by the app)
     - numpy (already required)
-    - your data.py must expose: get_props_for_datetime, scan_day_calibrations,
+    - data.py must expose: get_props_for_datetime, scan_day_calibrations,
       fetch_calibration_history, apply_history_snapshot,
-      list_known_calibrations, _extract_last_update
-    - your export.py must expose: compute_error_delta
-    - your cache.py (SQLite, new) is used if present; otherwise the
-      older _load_calibration function from data.py is used as fallback
+      list_known_calibrations, _extract_last_update, _load_calibration
+    - export.py must expose: compute_error_delta
 """
 from __future__ import annotations
 
@@ -204,8 +173,7 @@ def _format_hm_from_ts(ts: str, ref_date=None) -> str:
     (defensive — index entries are written by data.py and shouldn't ever
     be malformed, but we don't want a parse error to hide the option).
     """
-    # Late import keeps this module importable even when tested without
-    # the data module on the path (see _self_test below).
+    # Late import keeps this module importable without the data module.
     try:
         from ..data import utc_str_to_local_label
         return utc_str_to_local_label(ts, ref_date=ref_date)
@@ -214,36 +182,22 @@ def _format_hm_from_ts(ts: str, ref_date=None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Legacy stub — kept as no-op for backward compat
-# ─────────────────────────────────────────────────────────────────────
-# Time/delta state fields (time_mode, delta_enabled, ref_qubit_props, ...)
-# are now declared in SessionState.__init__ (state.py, session version 5+).
-# This function remains as a no-op so any external caller that still imports
-# install_state_defaults continues to work. The _STATE_DEFAULTS dict has been
-# removed since it's no longer the source of truth — see state.py instead.
-
-def install_state_defaults(state) -> None:
-    """No-op. Kept for backward compat — fields are now in SessionState.__init__."""
-    return None
-
-
-# ─────────────────────────────────────────────────────────────────────
-# Cache-loader shim (supports both new SQLite cache and old JSON cache)
+# Cache loader
 # ─────────────────────────────────────────────────────────────────────
 
 def _load_calibration_by_timestamp(backend_name: str, last_update: str,
                                    data_mod) -> Optional[Tuple[dict, dict]]:
     """Return (qubit_props, gate_props) for a specific (backend, timestamp)
-    via the legacy JSON cache in data_mod.
+    via the JSON cache in data_mod.
     Returns None if the timestamp is not cached."""
-    legacy_loader = getattr(data_mod, '_load_calibration', None)
-    if legacy_loader is not None:
+    loader = getattr(data_mod, '_load_calibration', None)
+    if loader is not None:
         try:
-            got = legacy_loader(backend_name, last_update)
+            got = loader(backend_name, last_update)
             if got is not None:
                 return got
         except Exception as exc:
-            _log.debug("Legacy cache load failed: %s", exc)
+            _log.debug("Cache load failed: %s", exc)
     return None
 
 
@@ -314,8 +268,22 @@ def resolve_reference_props(state, data_mod) -> Optional[Tuple[dict, dict]]:
 # ─────────────────────────────────────────────────────────────────────
 
 def describe_current_view(state) -> str:
-    """What is the panel showing right now?"""
+    """What is the panel showing right now?
+
+    A measured epoch (from `iqmapper.benchmark`) is installed through the same
+    channel as the live calibration — it replaces `qubit_props_data` /
+    `gate_props_data` without changing `time_mode`. So the header read "Live
+    calibration" while the map was in fact showing benchmark measurements,
+    which is exactly the confusion the calibration label exists to prevent.
+    A measured epoch therefore takes precedence in this description, and says
+    whether the values are absolute or rescaled.
+    """
     backend = state.active_backend_name or '?'
+    epoch = getattr(state, '_measured_epoch', None)
+    if epoch is not None and state.time_mode == 'live':
+        mode = 'relative' if getattr(epoch, 'relative', False) else 'absolute'
+        return (f"Measured {epoch.time_label()} (L{epoch.level}, {mode}) "
+                f"— {backend}")
     if state.time_mode == 'live':
         return f"Live calibration — {backend}"
     if state.time_mode == 'point':
@@ -383,7 +351,6 @@ class TimePanelBuilder:
     def __init__(self, state, data_mod, export_mod, refresh_plot,
                  load_device_graph, spawn_bg=None, on_gif_export=None,
                  on_history_loaded=None):
-        install_state_defaults(state)
         self.state = state
         self.data_mod = data_mod
         self.export_mod = export_mod
@@ -813,7 +780,7 @@ class TimePanelBuilder:
         # query the wrong day after the local→UTC conversion at load.
         if not change['new']:
             return
-        # `self.data_mod` can be a stub (see _self_test below) that omits the
+        # `self.data_mod` can be a stub that omits the
         # local-time helpers. Treat a missing helper the same as a parse
         # failure (return None) so the observer no-ops cleanly instead
         # of raising AttributeError up through the ipywidgets callback.
@@ -1015,10 +982,8 @@ class TimePanelBuilder:
 
         # ── 3. Per-mode sub-panels ──────────────────────────────────
 
-        # 3a — Live. Deliberately empty: the panel header already states
-        # "Showing: Live calibration — <backend>", so an info line here
-        # only repeated it. _show_sub toggles this box's display like any
-        # other sub-panel, which works fine with no children.
+        # 3a — Live: no sub-panel content needed; the header already states
+        # what is shown ("Showing: Live calibration — <backend>").
         self.sub_live = VBox([])
 
         # 3b — Snapshot
@@ -1183,11 +1148,6 @@ class _TimePanelAPI:
         b._refresh_delta_visibility()
         b._refresh_all()
 
-    def apply_delta(self):
-        b = self._b
-        b._apply_current_delta()
-        b._refresh_all()
-
     def status_text(self):
         return describe_current_view(self._b.state)
 
@@ -1233,7 +1193,6 @@ def build_time_panel(
 
         api_namespace exposes:
             .rebuild()      — re-render panel (after session load, etc.)
-            .apply_delta()  — re-compute state.delta_* from current config
             .status_text()  — text describing what's currently shown
     """
     return TimePanelBuilder(
@@ -1254,140 +1213,9 @@ def build_time_panel(
 def _auto_ref_hint(state) -> str:
     mode = state.delta_ref_mode
     if mode == 'first':
-        return ("Reference = <b>first</b> calibration of the current sequence. "
-                "Works when View is <i>Intraday</i> or <i>Multi-day</i>. "
-                "Use this to see cumulative drift from a starting point.")
+        return ("Reference = <b>first</b> calibration of the sequence "
+                "(cumulative drift) \u00b7 Reference: Delta references")
     if mode == 'previous':
-        return ("Reference = <b>previous</b> calibration in the sequence. "
-                "The delta updates as you move the slider, showing step-by-step "
-                "change. At the first position there is no delta.")
+        return ("Reference = <b>previous</b> calibration in the sequence "
+                "(step-by-step change) \u00b7 Reference: Delta references")
     return ""
-
-
-# ═════════════════════════════════════════════════════════════════════
-# Self-test: run without a real backend to verify widget construction
-# ═════════════════════════════════════════════════════════════════════
-
-def _self_test():
-    """Construct the panel with dummy stubs, verify no exceptions.
-    Run with: python -m iqmapper.ui.time_panel"""
-    import types
-
-    class _StubState:
-        def __init__(self):
-            self.active_backend = None
-            self.active_backend_name = 'ibm_stub'
-            self.qubit_props_data = {}
-            self.gate_props_data = {}
-            self.calibration_data_label = None
-            self.cal_history = {}
-            self.cal_history_dates = []
-            self.delta_mode = False
-            self.delta_qubit_props = {}
-            self.delta_gate_props = {}
-            self.delta_date_a = None
-            self.delta_date_b = None
-            # Time-navigation + delta-reference fields. These live on
-            # SessionState now (see state.py); the stub mirrors them so
-            # the self-test does not depend on the real SessionState class.
-            self.time_mode            = 'live'
-            self.delta_enabled        = False
-            self.delta_ref_mode       = 'specific'
-            self.point_timestamp      = None
-            self.intraday_date        = None
-            self.intraday_timestamps  = []
-            self.intraday_index       = 0
-            self.range_start          = None
-            self.range_end            = None
-            self.range_index          = 0
-            self.ref_timestamp        = None
-            self.ref_qubit_props      = None
-            self.ref_gate_props       = None
-            self._live_qubit_props    = None
-            self._live_gate_props     = None
-            self._live_cal_label      = None
-
-    data_stub = types.SimpleNamespace(
-        list_known_calibrations=lambda bn, d: [],
-        scan_day_calibrations=lambda s, b, d, progress_callback=None: [],
-        get_props_for_datetime=lambda s, b, t: (None, {}, {}),
-        fetch_calibration_history=lambda s, a, b, progress_callback=None: 0,
-        apply_history_snapshot=lambda s, ds: True,
-        _extract_last_update=lambda p: None,
-        _load_calibration=lambda bn, lu: None,
-    )
-    export_stub = types.SimpleNamespace(
-        compute_error_delta=lambda a, b, c, d: ({}, {}),
-    )
-
-    state = _StubState()
-    panel, api = build_time_panel(
-        state=state,
-        data_mod=data_stub,
-        export_mod=export_stub,
-        refresh_plot=lambda: None,
-        load_device_graph=lambda: None,
-        spawn_bg=lambda fn, on_done=None, on_error=None: (
-            on_done(fn()) if on_done else fn()
-        ),
-    )
-    assert panel is not None
-    assert api.status_text() == 'Live calibration — ibm_stub'
-    # Exercise each mode
-    for mode in ('live', 'point', 'intraday', 'range'):
-        state.time_mode = mode
-        api.rebuild()
-    # Exercise delta toggles
-    state.delta_enabled = True
-    for ref in ('specific', 'first', 'previous'):
-        state.delta_ref_mode = ref
-        api.rebuild()
-    print("✓ Self-test passed — panel constructs in all 12 non-trivial states.")
-
-    # ── Handler firing ───────────────────────────────────────────────
-    # rebuild() above never invokes the button/observer callbacks, so a
-    # bare-name call inside a handler (e.g. `_scan_day(...)` instead of
-    # `self._scan_day(...)` after the closure->method refactor) would slip
-    # through every gate. Build a fresh panel, populate the inputs so the
-    # scan/fetch/load handlers reach their worker calls, then fire every
-    # handler and re-raise ONLY NameError (stub-data early-returns and other
-    # guard exceptions are expected and harmless here).
-    from datetime import date as _date
-    tb = TimePanelBuilder(
-        _StubState(), data_stub, export_stub,
-        refresh_plot=lambda: None, load_device_graph=lambda: None,
-        spawn_bg=lambda fn, on_done=None, on_error=None: (
-            on_done(fn()) if on_done else fn()),
-    )
-    tb.build()
-    _past = _date(2020, 1, 1)
-    for attr, val in (('dp_point', _past), ('tx_point_hour', '12:00'),
-                      ('dp_intra', _past), ('dp_ref', _past),
-                      ('tx_ref_hour', '12:00'),
-                      ('dp_range_from', _past), ('dp_range_to', _date(2020, 1, 2))):
-        w = getattr(tb, attr, None)
-        if w is not None:
-            # Test-harness sweep: some widgets refuse the seed value
-            # (traitlets TraitError, TypeError, ValueError, …).
-            # Best-effort — log and keep sweeping the remaining attrs.
-            try:
-                w.value = val
-            except Exception:
-                _log.debug("test-harness seed failed for %s=%r", attr, val, exc_info=True)
-    for name in sorted(n for n in dir(tb) if n.startswith('_on_')):
-        fn = getattr(tb, name)
-        for arg in (None, {'new': None, 'old': None, 'name': 'value', 'owner': None}):
-            try:
-                fn(arg)
-                break
-            except NameError:
-                raise            # the bug class this guard exists to catch
-            except TypeError:
-                continue          # wrong arg shape (observer vs click) -> retry
-            except Exception:
-                break             # guard/stub-data early-return -> fine
-    print("✓ Handler self-test passed — all _on_* handlers callable, no bare-name calls.")
-
-
-if __name__ == '__main__':
-    _self_test()

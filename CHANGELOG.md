@@ -3,6 +3,126 @@
 All notable changes to this project are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+## [0.1.0] - 2026-11-23
+
+### Added
+- Opt-in real-time benchmarking (`iqmapper.benchmark`, extra
+  `pip install "i-qmapper[benchmark]"`): three levels that re-measure the
+  candidate qubits and edges with `qiskit-experiments` and feed the result
+  back as a "measured" calibration epoch, so the heatmap, LQS, re-ranking and
+  export all read fresh numbers. Never automatic, never inside the multi-QPU
+  scan, and the QPU cost estimate is shown before the run can be started.
+  Lives in the sidebar as "5. Benchmark" with selectable targets (current
+  layouts / sweep candidates / whole QPU / a custom qubit list) and, in
+  inter-QPU mode, a QPU 1 | QPU 2 selector. The experiment plan is composite
+  (one `ParallelExperiment` per kind, edge-coloured layers for two-qubit RB),
+  so a full-chip Level 3 stays small enough for IBM to accept, and is split
+  across jobs when it would exceed IBM's per-job shot limit. A rejected or
+  errored job now reports IBM's own message with the job ids, and a run that
+  measured nothing is reported as a failure instead of being applied and
+  labelled "measured". Measured values are checked against the reported
+  calibration after every run; a systematic offset (median ratio outside
+  0.5x–2x)
+  is treated as an estimator mismatch and the epoch is applied in relative
+  mode, preserving per-element ratios so outlying couplers still stand out.
+  Two-qubit RB now subtracts the measured single-qubit error rates, and a
+  calibration-check mode separates estimator bias from crosstalk.
+- Stratified ancilla sweep (the default, exhaustive engine): one VF2 solve at
+  the maximum ancilla count feeding a bridge-subtraction cascade down to the
+  minimum, plus a direct search per ancilla count ("Deep search per ancilla
+  count", on by default), a shuffled search order so a capped search samples
+  the whole chip, and region-diversity selection ("Prefer diverse regions").
+- Diverse enumeration (on by default): layouts that are near-copies of one
+  already kept no longer use up the search cap, so a capped search spreads
+  across the chip instead of filling up with variations of the first region
+  it finds.
+- Guided search: a calibration-led beam search that grows layouts on the
+  best-calibrated qubits, then polishes the finalists with small local moves
+  (swap a bridge or chain-end qubit, shift a chain by one) kept only when they
+  raise the circuit-level LQS. Every Auto search now runs it alongside the
+  exhaustive search and keeps the best of both for each ancilla count, so the
+  best layout is never worse than either engine alone. Each layout in the list
+  shows its source (`· E`, `· G`, `· E+G`). One checkbox in Advanced, "Guided search" (on by default), turns it off to search as 0.0.5
+  did. The multi-QPU scan and the stability filter still use the exhaustive
+  search.
+- Opt-in stability filter that excludes qubits volatile across the cached
+  calibration history, and an always-on quality floor (3σ by default, 0 turns
+  it off) that removes outlier qubits from every search.
+- Multi-circuit sweep: places several circuits one after another; picking a
+  different layout for one circuit re-plans the circuits after it.
+- Multi-QPU scan across the available backends, with one-click inter-QPU
+  handoff that reopens the chosen layout on the second QPU. Backends whose
+  chip the map cannot open (anything but 156-qubit Heron and 120-qubit
+  Nighthawk) are listed last as "not supported", never searched or opened.
+- Epoch-consistent scoring: fidelity and ranking read a single pinned
+  calibration epoch, so comparisons within a sweep stay commensurable.
+- Hybrid search engine (`engine_select.hybrid_sweep`, used by the engine
+  comparison harness, not offered in the UI): guided search for ancilla counts
+  up to a threshold, where the exhaustive search hits its cap and only ranks a
+  sample, and the exhaustive search above it.
+- Joint multi-circuit placement (the default; "Fast: one circuit at a time"
+  in the Multi tab's Advanced places them one by one as 0.0.5 did): keeps
+  several placement plans at once instead of placing each circuit greedily,
+  so the first circuit no longer takes a region the next one needed. Never
+  worse than one-by-one placement, searches each circuit with the combined
+  search, and reports couplers shared by two circuits at buffer 0 (with an
+  optional penalty to avoid them).
+- Engine comparison harness (`python -m iqmapper.evaluation`): replays the
+  search engines over the cached calibrations, offline, and ranks with the
+  app's real circuit-level LQS rebuilt for every calibration (`--scorer lqs`,
+  the default; `proxy` uses the product score). It takes the coupling map
+  from a saved session (`--session PATH`, or found in the working folder),
+  can add a hybrid-engine column (`--hybrid-k`), and prints the suggested
+  hybrid threshold for each orbital count (`--tol` sets how far guided may
+  trail and still count).
+- Shorter UI messages: status lines, notices and tooltips say what happened
+  in one short sentence, and each is explained on the reference page
+  (`docs/reference.md`).
+
+### Changed
+- Documentation reorganised: short README, tutorial, and a reference page
+  under docs/.
+- Log messages no longer print under the notebook cell. They go to a
+  rotating log file in the user log directory, each distinct message once
+  per session; the bridge-count fallback and the search-cap statistics no
+  longer appear in the notices panel.
+- The Auto-LUCJ result line is one short line, `✅ 12 layouts found · scored
+  on live · 20:41`; the layout list already shows k, LQS and source.
+- Multi-circuit results open with a Plans menu of the best complete plans
+  (picking one places every circuit), and each circuit's alternatives list
+  only layouts that leave room for the circuits after it.
+- Multi-circuit placement is joint by default (3 plans kept, 3 candidates per
+  circuit); "Fast: one circuit at a time" replaces the "Optimize placement
+  jointly" checkbox. The batch scan keeps one-by-one placement on every QPU
+  and ranks backends that fit the whole batch first.
+
+### Fixed
+- LQS counted every two-qubit gate twice on backends that list each coupler
+  in both directions (CZ devices such as Heron), so their scores were too low
+  and could not be compared with ECR devices such as Eagle, which list one
+  direction. Each coupler now counts once, in the Layout-Quality box, the
+  sweep ranking and the multi-QPU scan alike.
+- The guided search could return layouts in which two qubits were joined by
+  a coupler the ansatz does not use (for example the two ends of a chain that
+  wraps round a hexagon). The LQS counted that coupler as a gate, so such a
+  layout was scored, and could be ranked, on a gate the circuit never runs.
+  Guided layouts now contain only the ansatz's own couplers, as exhaustive
+  ones already did.
+- With "Auto-Color Gates" on, an ancilla coloured its edges towards qubits of
+  other circuits too, so a coupler between two circuits looked like a gate
+  of one of them. An ancilla now colours only edges to qubits of its own
+  circuit, on the map and in the PNG export.
+- Backends that report fewer calibration properties than Heron (Nighthawk
+  reports no RZZ or RX gates, Heron no MEASURE error) logged one "not found"
+  message per qubit or coupler on every load, and the property menus offered
+  properties the backend does not have, which painted the whole map black.
+  Only the properties the backend declares are fetched now; the menus list
+  only properties with values; a property with gaps logs one line ("t2: 1 of
+  156 qubits without a value"); a missing value reads "no data" instead of
+  "NAN" or "N/A".
+
 ## [0.0.5] — 2026-08
 
 First public-ready release.

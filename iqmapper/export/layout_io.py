@@ -511,7 +511,7 @@ def _extract_layout_from_qpy(file_bytes):
 # parser — that's well outside the scope of this tool. We strip the two
 # QASM comment flavours (//... line comments and /*...*/ block comments)
 # before the qubit-count regex runs, so a register declaration sitting
-# behind a `// qreg q[64];` line comment no longer counts.
+# behind a `// qreg q[64];` line comment does not count.
 _QASM_LINE_COMMENT_RE = re.compile(r'//[^\n]*')
 _QASM_BLOCK_COMMENT_RE = re.compile(r'/\*.*?\*/', re.DOTALL)
 _QASM2_QREG_RE = re.compile(r'\bqreg\s+\w+\s*\[\s*(\d+)\s*\]\s*;')

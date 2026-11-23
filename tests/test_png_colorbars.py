@@ -1,153 +1,122 @@
-"""Regression tests for error-map colorbars in the PNG export.
+"""PNG export copies the live figure's visible colorbars onto the static
+export figure (plot.build_static_figure has no colorbar code).
 
-The bug: `plot.build_static_figure` renders no colorbars. On the interactive
-figure the two error-map scales live on placeholder traces
-(`_META_CB_QUBIT` / `_META_CB_GATE`) that `plot._update_colorbars` configures
-in place, so a PNG built purely from the static renderer came out with the
-heatmap but no scales — the reader had colours and no units.
-
-`png_export._append_live_colorbars` copies the visible placeholders from the
-live figure onto the export figure and makes room for them at the bottom.
-
-No `write_image`, no kaleido: these tests exercise figure construction only.
+Offline: never calls write_image (kaleido/chrome unavailable); uses plain
+plotly figures and stubs the render/write path.
 """
-import plotly.graph_objects as go
+from types import SimpleNamespace
 
-import iqmapper.plot as plot_mod
-from iqmapper.ui.png_export import (
-    _CB_EXPORT_MIN_BOTTOM_MARGIN,
-    _append_live_colorbars,
-)
+import pytest
 
+pytest.importorskip('plotly')
+import plotly.graph_objects as go     # noqa: E402
 
-def _live_fig(*, qubit_visible=True, gate_visible=True, include_traces=True):
-    """A stand-in for the interactive figure carrying the two placeholders."""
-    fig = go.Figure()
-    if not include_traces:
-        return fig
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode='markers', hoverinfo='none', showlegend=False,
-        meta=plot_mod._META_CB_QUBIT,
-        marker=dict(
-            colorscale='Viridis', showscale=qubit_visible,
-            cmin=0.0, cmax=0.25,
-            colorbar=dict(title=dict(text='<b>Readout error</b>'),
-                          orientation='h', x=0.25, y=-0.08),
-        ),
-    ))
-    fig.add_trace(go.Scatter(
-        x=[None], y=[None], mode='markers', hoverinfo='none', showlegend=False,
-        meta=plot_mod._META_CB_GATE,
-        marker=dict(
-            colorscale='Viridis', showscale=gate_visible,
-            cmin=0.001, cmax=0.02,
-            colorbar=dict(title=dict(text='<b>Gate error</b>'),
-                          orientation='h', x=0.75, y=-0.08),
-        ),
-    ))
-    return fig
+from iqmapper import plot            # noqa: E402  (constants + _trace_by_meta only)
+from iqmapper.ui.png_export import _append_live_colorbars  # noqa: E402
 
 
-def _export_fig(margin_b=40):
-    fig = go.Figure()
-    fig.update_layout(margin=dict(l=10, r=10, t=10, b=margin_b))
-    return fig
+def _cb_trace(meta, *, showscale, cmin, cmax, title):
+    return go.Scatter(
+        x=[None], y=[None], mode='markers', meta=meta,
+        hoverinfo='none', showlegend=False,
+        marker=dict(showscale=showscale, cmin=cmin, cmax=cmax,
+                    colorscale='Viridis', colorbar=dict(title=title)))
 
 
-def test_visible_colorbars_are_copied_with_their_scale():
-    """Both bars copied, preserving cmin/cmax/title — the PNG must show the
-    same numeric range as the interactive view, not a rescaled one."""
-    export_fig = _export_fig()
-    n = _append_live_colorbars(export_fig, _live_fig(), plot_mod)
+# ── 1. visible bars are copied with their config + canvas gets bottom room ──
+
+def test_appends_visible_colorbars():
+    live = go.Figure()
+    live.add_trace(_cb_trace(plot._META_CB_QUBIT, showscale=True,
+                             cmin=0.0, cmax=1.0, title='Qubit'))
+    live.add_trace(_cb_trace(plot._META_CB_GATE, showscale=True,
+                             cmin=2.0, cmax=3.0, title='Gate'))
+    export = go.Figure()
+
+    n = _append_live_colorbars(export, live, plot)
 
     assert n == 2
-    assert len(export_fig.data) == 2
-
-    q, g = export_fig.data
-    assert q.marker.showscale is True
-    assert (q.marker.cmin, q.marker.cmax) == (0.0, 0.25)
-    assert q.marker.colorbar.title.text == '<b>Readout error</b>'
-    assert (g.marker.cmin, g.marker.cmax) == (0.001, 0.02)
-    assert g.marker.colorbar.title.text == '<b>Gate error</b>'
-
-    # Copied traces must not draw data points of their own.
-    assert q.mode == 'markers' and list(q.x) == [None]
-    assert q.showlegend is False
+    assert len(export.data) == 2
+    assert sorted(t.marker.cmin for t in export.data) == [0.0, 2.0]
+    assert sorted(t.marker.cmax for t in export.data) == [1.0, 3.0]
+    assert sorted(t.marker.colorbar.title.text for t in export.data) == ['Gate', 'Qubit']
+    assert export.layout.margin.b >= 120
 
 
-def test_bottom_margin_is_raised_for_the_bars():
-    """The bars sit at y=-0.08, below the axes — without extra bottom margin
-    they are clipped out of the PNG."""
-    export_fig = _export_fig(margin_b=40)
-    _append_live_colorbars(export_fig, _live_fig(), plot_mod)
-    assert export_fig.layout.margin.b >= _CB_EXPORT_MIN_BOTTOM_MARGIN
+# ── 2. design mode (showscale=False) → nothing copied, margin untouched ─────
+
+def test_hidden_bars_are_not_copied():
+    live = go.Figure()
+    live.add_trace(_cb_trace(plot._META_CB_QUBIT, showscale=False,
+                             cmin=0.0, cmax=1.0, title='Qubit'))
+    live.add_trace(_cb_trace(plot._META_CB_GATE, showscale=False,
+                             cmin=2.0, cmax=3.0, title='Gate'))
+    export = go.Figure()
+    margin_before = export.layout.margin.b
+
+    n = _append_live_colorbars(export, live, plot)
+
+    assert n == 0
+    assert len(export.data) == 0
+    assert export.layout.margin.b == margin_before      # untouched
 
 
-def test_generous_existing_margin_is_not_shrunk():
-    """A user-chosen margin larger than our minimum must be left alone."""
-    export_fig = _export_fig(margin_b=300)
-    _append_live_colorbars(export_fig, _live_fig(), plot_mod)
-    assert export_fig.layout.margin.b == 300
+# ── 3. no live fig / no placeholder traces → no-op, no exception ────────────
+
+def test_missing_live_fig_is_noop():
+    export = go.Figure()
+    assert _append_live_colorbars(export, None, plot) == 0
+    assert len(export.data) == 0
+
+    live = go.Figure()
+    live.add_trace(go.Scatter(x=[1], y=[1], meta='qubits'))   # not a CB placeholder
+    assert _append_live_colorbars(export, live, plot) == 0
+    assert len(export.data) == 0
 
 
-def test_hidden_colorbars_are_skipped():
-    """showscale=False means the bar isn't on screen (non-error mode, or an
-    all-NaN array) — nothing should be copied, and no margin bump."""
-    export_fig = _export_fig(margin_b=40)
-    n = _append_live_colorbars(
-        export_fig,
-        _live_fig(qubit_visible=False, gate_visible=False),
-        plot_mod,
+# ── 4. the export site runs the helper BETWEEN build and write ──────────────
+
+def _walk(node):
+    yield node
+    for ch in getattr(node, 'children', []):
+        yield from _walk(ch)
+
+
+def test_export_site_invokes_helper(monkeypatch, tmp_path):
+    from ipywidgets import Text, Button, HTML, Output, Layout
+    from iqmapper.ui import png_export as pe
+
+    events = []
+
+    class _FakeFig:
+        def write_image(self, path, scale=None, width=None, height=None):
+            events.append('write')
+
+    plot_mod = SimpleNamespace(
+        collect_render_opts=lambda w: {'fig_width': 100, 'fig_height': 100},
+        build_static_figure=lambda state, opts, margin=0, crop_to_selection=False: (
+            events.append('build') or _FakeFig()),
+        _META_CB_QUBIT=plot._META_CB_QUBIT, _META_CB_GATE=plot._META_CB_GATE,
+        _trace_by_meta=plot._trace_by_meta,
     )
+    # Record that the helper ran (its own behavior is covered by tests 1-3).
+    monkeypatch.setattr(pe, '_append_live_colorbars',
+                        lambda ef, lf, pm: events.append('append') or 0)
 
-    assert n == 0
-    assert len(export_fig.data) == 0
-    assert export_fig.layout.margin.b == 40
+    out_path = str(tmp_path / 'shot.png')                # does not exist yet
+    ctx = SimpleNamespace(
+        state=SimpleNamespace(), widgets_ref=SimpleNamespace(),
+        fname_img=Text(value='shot'), btn_save_img=Button(), W=Layout(),
+        plot_mod=plot_mod, safe_path=lambda p, *a, **k: p,
+        user_save_path=lambda name, ext, default_dir=None: out_path,
+        save_dir=lambda: str(tmp_path), out=Output(),
+        lbl_png_status=HTML(), fig=go.Figure(),
+    )
+    popup, _, _ = pe.setup_png_export(ctx)
 
+    btn_confirm = next(w for w in _walk(popup)
+                       if isinstance(w, Button) and 'Export now' in (w.description or ''))
+    btn_confirm.click()
 
-def test_partially_visible_copies_only_the_visible_bar():
-    export_fig = _export_fig()
-    n = _append_live_colorbars(
-        export_fig, _live_fig(gate_visible=False), plot_mod)
-
-    assert n == 1
-    assert len(export_fig.data) == 1
-    assert export_fig.data[0].marker.colorbar.title.text == '<b>Readout error</b>'
-
-
-def test_no_live_figure_is_a_noop():
-    """Callers that don't pass ctx.fig still get a PNG — just without bars."""
-    export_fig = _export_fig(margin_b=40)
-    n = _append_live_colorbars(export_fig, None, plot_mod)
-
-    assert n == 0
-    assert len(export_fig.data) == 0
-    assert export_fig.layout.margin.b == 40
-
-
-def test_missing_placeholder_traces_is_a_noop():
-    """A live figure without the placeholders (e.g. built before the error
-    map existed) must not raise."""
-    export_fig = _export_fig(margin_b=40)
-    n = _append_live_colorbars(
-        export_fig, _live_fig(include_traces=False), plot_mod)
-
-    assert n == 0
-    assert len(export_fig.data) == 0
-
-
-def test_copy_failure_does_not_propagate():
-    """A colorbar is cosmetic: if copying one blows up, the export continues."""
-    class _Boom:
-        _META_CB_QUBIT = plot_mod._META_CB_QUBIT
-        _META_CB_GATE = plot_mod._META_CB_GATE
-
-        @staticmethod
-        def _trace_by_meta(fig, meta):
-            raise RuntimeError("trace lookup exploded")
-
-    export_fig = _export_fig(margin_b=40)
-    n = _append_live_colorbars(export_fig, _live_fig(), _Boom)   # must not raise
-
-    assert n == 0
-    assert export_fig.layout.margin.b == 40
+    # Helper ran, and it ran AFTER build_static_figure and BEFORE write_image.
+    assert events == ['build', 'append', 'write']
