@@ -62,7 +62,7 @@ run()
    remained reliable over the last 7, 14 or 30 days.
 5. Export the layout as JSON, Qiskit code, PNG, or save the whole session.
 
-A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
+A step-by-step walkthrough is in the [tutorial](https://github.com/MIQuLab/i-qmapper/blob/main/TUTORIAL.md).
 
 ## Capabilities
 
@@ -90,7 +90,7 @@ A step-by-step walkthrough is in the [tutorial](TUTORIAL.md).
 | `TUTORIAL.md` | Step-by-step walkthrough |
 | `CHANGELOG.md` | Release history |
 
-A module-by-module description is in [CODE_OVERVIEW.md](CODE_OVERVIEW.md).
+A module-by-module description is in [CODE_OVERVIEW.md](https://github.com/MIQuLab/i-qmapper/blob/main/CODE_OVERVIEW.md).
 
 ## Supported processors
 
@@ -100,10 +100,10 @@ not supported and are not searched.
 
 ## Documentation
 
-- [Tutorial](TUTORIAL.md) — from launch to an exported layout.
+- [Tutorial](https://github.com/MIQuLab/i-qmapper/blob/main/TUTORIAL.md) — from launch to an exported layout.
 - [Reference](https://github.com/MIQuLab/i-qmapper/blob/main/docs/reference.md) — settings, search options, messages, the quality score, and on-device benchmarking.
-- [Code overview](CODE_OVERVIEW.md) — architecture and modules.
-- [Changelog](CHANGELOG.md)
+- [Code overview](https://github.com/MIQuLab/i-qmapper/blob/main/CODE_OVERVIEW.md) — architecture and modules.
+- [Changelog](https://github.com/MIQuLab/i-qmapper/blob/main/CHANGELOG.md)
 
 ## Citing
 
@@ -124,4 +124,4 @@ If you use I-QMapper in your research, please cite:
 
 ## License
 
-Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0; see [LICENSE](https://github.com/MIQuLab/i-qmapper/blob/main/LICENSE) and [NOTICE](https://github.com/MIQuLab/i-qmapper/blob/main/NOTICE).

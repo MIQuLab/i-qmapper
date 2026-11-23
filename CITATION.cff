@@ -1,11 +1,16 @@
 cff-version: 1.2.0
-message: "If you use I-QMapper in your research, please cite the I-QMapper paper (see preferred-citation)."
+message: "If you use I-QMapper, please cite the paper below (preferred-citation)."
 title: "I-QMapper"
+abstract: >-
+  Interactive, calibration-aware visualization and layout selection for
+  quantum-circuit ansaetze (LUCJ and general) on superconducting quantum
+  processors, driven by the device's reported calibration data.
 authors:
   - family-names: "Bazayeva"
     given-names: "Milana"
 version: 0.1.0.dev0
 license: Apache-2.0
+repository-code: "https://github.com/MIQuLab/i-qmapper"
 preferred-citation:
   type: article
   title: "I-QMapper: Error-Aware Layout Optimization and Device Diagnostics for NISQ Hardware"
@@ -13,92 +18,8 @@ preferred-citation:
     - family-names: "Bazayeva"
       given-names: "Milana"
     - family-names: "Merz"
-      given-names: "Kenneth"
+      given-names: "Kenneth M."
+      name-suffix: "Jr."
   year: 2026
   doi: "10.48550/arXiv.2606.27508"
   url: "https://arxiv.org/abs/2606.27508"
-abstract: >-
-  Interactive, noise-aware visualization and layout selection for
-  quantum-circuit ansaetze (LUCJ and general) on superconducting QPU
-  topologies, driven by real device calibration data.
-references:
-  - type: article
-    title: >-
-      Bridging physical intuition and hardware efficiency for correlated
-      electronic states: the local unitary cluster Jastrow ansatz for
-      electronic structure
-    authors:
-      - family-names: "Motta"
-        given-names: "Mario"
-      - family-names: "Sung"
-        given-names: "Kevin J."
-      - family-names: "Whaley"
-        given-names: "K. Birgitta"
-      - family-names: "Head-Gordon"
-        given-names: "Martin"
-      - family-names: "Shee"
-        given-names: "James"
-    journal: "Chemical Science"
-    volume: 14
-    start: 11213
-    end: 11227
-    year: 2023
-    doi: "10.1039/D3SC02516K"
-  - type: article
-    title: "Suppressing quantum circuit errors due to system variability"
-    authors:
-      - family-names: "Nation"
-        given-names: "Paul D."
-      - family-names: "Treinish"
-        given-names: "Matthew"
-    journal: "PRX Quantum"
-    volume: 4
-    start: 010327
-    year: 2023
-    doi: "10.1103/PRXQuantum.4.010327"
-  - type: article
-    title: "ffsim: Faster simulation of fermionic quantum circuits"
-    authors:
-      - family-names: "Sung"
-        given-names: "Kevin J."
-      - family-names: "Choi"
-        given-names: "Inho"
-      - family-names: "Amico"
-        given-names: "Mirko"
-      - family-names: "Andrews"
-        given-names: "Bartholomew"
-      - family-names: "Ayantuna"
-        given-names: "Esra"
-      - family-names: "Kawashima"
-        given-names: "Yukio"
-      - family-names: "Lin"
-        given-names: "Wan-Hsuan"
-      - family-names: "Omanovic"
-        given-names: "David"
-      - family-names: "Piccinelli"
-        given-names: "Samuele"
-      - family-names: "Robledo Moreno"
-        given-names: "Javier"
-      - family-names: "Ash Saki"
-        given-names: "Abdullah"
-      - family-names: "Shee"
-        given-names: "James"
-      - family-names: "Shin"
-        given-names: "Soyoung"
-      - family-names: "Tran"
-        given-names: "Minh C."
-      - family-names: "Ueda"
-        given-names: "Kento"
-      - family-names: "Zhang"
-        given-names: "Haimeng"
-      - family-names: "Motta"
-        given-names: "Mario"
-    year: 2026
-    doi: "10.48550/arXiv.2605.03123"
-    url: "https://arxiv.org/abs/2605.03123"
-  - type: software
-    title: "ffsim"
-    repository-code: "https://github.com/qiskit-community/ffsim"
-  - type: software
-    title: "mapomatic"
-    repository-code: "https://github.com/qiskit-community/mapomatic"
